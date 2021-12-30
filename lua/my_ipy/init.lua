@@ -7,6 +7,10 @@ local term_helper = require("my_ipy.term_ipy")
 
 local M = {term_instance=nil}
 local CELL_PATTERN = "^# %%+"
+local char_for_adding_line = "\x0F\x1b\x4f\x42"
+if vim.loop.os_uname().version:match('Windows') then
+    char_for_adding_line = "\x0F\x1B[B"
+end
 
 M.config = {
 	profile_name="vim",
@@ -82,7 +86,7 @@ end
 local function with_cr(...)
   local result = {}
   for _, str in ipairs({ ... }) do
-	table.insert(result, str .. "\x0F\x1b\x4f\x42")
+	table.insert(result, str .. char_for_adding_line)
   end
   return table.concat(result, "")
 end
@@ -211,7 +215,7 @@ M.run_cell = function()
 	local line_start = get_start_line_cell(idx_line_cursor)
 	local line_stop, has_next_cell = get_stop_line_cell(idx_line_cursor + 1)
 
-	M.send_lines(line_start, line_stop - 1)
+	M.send_lines(line_start - 1, line_stop - 1)
 
 	if has_next_cell then
 		local idx_line = math.min(line_stop + 1, api.nvim_buf_line_count(0))
