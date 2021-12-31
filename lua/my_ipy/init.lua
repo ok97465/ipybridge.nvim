@@ -7,9 +7,9 @@ local term_helper = require("my_ipy.term_ipy")
 
 local M = {term_instance=nil}
 local CELL_PATTERN = "^# %%+"
-local char_for_adding_line = "\x0F\x1b\x4f\x42"
+local char_arrow_down = "\x1b\x4f\x42"
 if vim.loop.os_uname().version:match('Windows') then
-    char_for_adding_line = "\x0F\x1B[B"
+    char_arrow_down = "\x1B[B"
 end
 
 M.config = {
@@ -85,8 +85,13 @@ end
 ---@return string
 local function with_cr(...)
   local result = {}
+
+  for idx=1, #{...} - 1 do
+	table.insert(result, "\x0F")  -- ^O for add multiline
+  end
+
   for _, str in ipairs({ ... }) do
-	table.insert(result, str .. char_for_adding_line)
+	table.insert(result, str .. char_arrow_down)
   end
   return table.concat(result, "")
 end
@@ -182,7 +187,7 @@ M.send_lines = function(line_start, line_stop)
 		M.open(true)
 	end
 
-	M.term_instance:send(lines:sub(1, -4) .. "\n\n")
+	M.term_instance:send(lines:sub(1, -#char_arrow_down) .. "\n\n")
 end
 
 M.run_lines = function()
