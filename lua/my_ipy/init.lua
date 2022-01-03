@@ -16,6 +16,7 @@ M.config = {
 	profile_name="vim",
 	startup_script = "import_in_console.py",
 	startup_cmd = "\"import numpy as np;"..
+    "import matplotlib.pyplot as plt;"..
     "from scipy.special import sindg, cosdg, tandg;"..
     "from matplotlib.pyplot import plot, subplots, figure, hist;"..
     "from numpy import ("..
