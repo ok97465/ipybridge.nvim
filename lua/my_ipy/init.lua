@@ -15,16 +15,17 @@ end
 M.config = {
 	profile_name="vim",
 	startup_script = "import_in_console.py",
-	startup_cmd = "\"import numpy as np\n"..
-    "from scipy.special import sindg, cosdg, tandg\n"..
-    "from numpy import (\n"..
-    "pi, deg2rad, rad2deg, unwrap, angle, zeros, array, ones, linspace, cumsum,\n"..
-    "diff, arange, interp, conj, exp, sqrt, vstack, hstack, dot, cross, newaxis)\n"..
-    "from numpy import cos, sin, tan, arcsin, arccos, arctan\n"..
-    "from numpy import amin, amax, argmin, argmax, mean\n"..
-    "from numpy.linalg import svd, norm\n"..
-    "from numpy.fft import fftshift, ifftshift, fft, ifft, fft2, ifft2\n"..
-    "from numpy.random import randn, standard_normal, randint, choice, uniform\n\"",
+	startup_cmd = "\"import numpy as np;"..
+    "from scipy.special import sindg, cosdg, tandg;"..
+    "from matplotlib.pyplot import plot, subplots, figure, hist;"..
+    "from numpy import ("..
+    "pi, deg2rad, rad2deg, unwrap, angle, zeros, array, ones, linspace, cumsum,"..
+    "diff, arange, interp, conj, exp, sqrt, vstack, hstack, dot, cross, newaxis);"..
+    "from numpy import cos, sin, tan, arcsin, arccos, arctan;"..
+    "from numpy import amin, amax, argmin, argmax, mean;"..
+    "from numpy.linalg import svd, norm;"..
+    "from numpy.fft import fftshift, ifftshift, fft, ifft, fft2, ifft2;"..
+    "from numpy.random import randn, standard_normal, randint, choice, uniform;\"",
 	sleep_ms_after_open = 1000
 }
 
