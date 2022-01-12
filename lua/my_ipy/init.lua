@@ -217,6 +217,14 @@ M.run_line = function()
 	end
 end
 
+M.run_cmd = function(cmd)
+	if not M.is_open() then
+		M.open(true)
+	end
+
+	M.term_instance:send(cmd .. "\n")
+end
+
 M.run_cell = function()
 	local idx_line_cursor = api.nvim_win_get_cursor(0)[1]
 	local line_start = get_start_line_cell(idx_line_cursor)
