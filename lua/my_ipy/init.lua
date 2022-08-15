@@ -5,51 +5,51 @@ local fn = vim.fn
 local Path = require("plenary.path")
 local term_helper = require("my_ipy.term_ipy")
 
-local M = {term_instance=nil}
+local M = { term_instance = nil }
 local CELL_PATTERN = "^# %%+"
 local char_arrow_down = "\x1b\x4f\x42"
 if vim.loop.os_uname().version:match('Windows') then
-    char_arrow_down = "\x1B[B"
+	char_arrow_down = "\x1B[B"
 end
 
 M.config = {
-	profile_name="vim",
+	profile_name = "vim",
 	startup_script = "import_in_console.py",
-	startup_cmd = "\"import numpy as np;"..
-    "import matplotlib.pyplot as plt;"..
-    "from scipy.special import sindg, cosdg, tandg;"..
-    "from matplotlib.pyplot import plot, subplots, figure, hist;"..
-    "from numpy import ("..
-    "pi, deg2rad, rad2deg, unwrap, angle, zeros, array, ones, linspace, cumsum,"..
-    "diff, arange, interp, conj, exp, sqrt, vstack, hstack, dot, cross, newaxis);"..
-    "from numpy import cos, sin, tan, arcsin, arccos, arctan;"..
-    "from numpy import amin, amax, argmin, argmax, mean;"..
-    "from numpy.linalg import svd, norm;"..
-    "from numpy.fft import fftshift, ifftshift, fft, ifft, fft2, ifft2;"..
-    "from numpy.random import randn, standard_normal, randint, choice, uniform;\"",
+	startup_cmd = "\"import numpy as np;" ..
+		"import matplotlib.pyplot as plt;" ..
+		"from scipy.special import sindg, cosdg, tandg;" ..
+		"from matplotlib.pyplot import plot, subplots, figure, hist;" ..
+		"from numpy import (" ..
+		"pi, deg2rad, rad2deg, unwrap, angle, zeros, array, ones, linspace, cumsum," ..
+		"diff, arange, interp, conj, exp, sqrt, vstack, hstack, dot, cross, newaxis);" ..
+		"from numpy import cos, sin, tan, arcsin, arccos, arctan;" ..
+		"from numpy import amin, amax, argmin, argmax, mean;" ..
+		"from numpy.linalg import svd, norm;" ..
+		"from numpy.fft import fftshift, ifftshift, fft, ifft, fft2, ifft2;" ..
+		"from numpy.random import randn, standard_normal, randint, choice, uniform;\"",
 	sleep_ms_after_open = 1000
 }
 
 local function isfile(name)
-   local f=io.open(name,"r")
-   if f~=nil then io.close(f) return true else return false end
+	local f = io.open(name, "r")
+	if f ~= nil then io.close(f) return true else return false end
 end
 
 local function sleep_ms(ms)
-    local start_sleep = os.clock()
-    local sec = ms / 1000
-    while os.clock() - start_sleep <= sec do
-    end
+	local start_sleep = os.clock()
+	local sec = ms / 1000
+	while os.clock() - start_sleep <= sec do
+	end
 end
 
 local function visual_selection_range()
-  local _, csrow, cscol, _ = unpack(vim.fn.getpos("'<"))
-  local _, cerow, cecol, _ = unpack(vim.fn.getpos("'>"))
-  if csrow < cerow or (csrow == cerow and cscol <= cecol) then
-    return csrow - 1, cscol - 1, cerow - 1, cecol
-  else
-    return cerow - 1, cecol - 1, csrow - 1, cscol
-  end
+	local _, csrow, cscol, _ = unpack(vim.fn.getpos("'<"))
+	local _, cerow, cecol, _ = unpack(vim.fn.getpos("'>"))
+	if csrow < cerow or (csrow == cerow and cscol <= cecol) then
+		return csrow - 1, cscol - 1, cerow - 1, cecol
+	else
+		return cerow - 1, cecol - 1, csrow - 1, cscol
+	end
 end
 
 local function get_start_line_cell(idx_seed)
@@ -86,30 +86,30 @@ end
 ---@vararg string
 ---@return string
 local function with_cr(...)
-  local result = {}
+	local result = {}
 
-  for idx=1, #{...} - 1 do
-	table.insert(result, "\x0F")  -- ^O for add multiline
-  end
+	for idx = 1, #{ ... } - 1 do
+		table.insert(result, "\x0F") -- ^O for add multiline
+	end
 
-  for _, str in ipairs({ ... }) do
-	table.insert(result, str .. char_arrow_down)
-  end
-  return table.concat(result, "")
+	for _, str in ipairs({ ... }) do
+		table.insert(result, str .. char_arrow_down)
+	end
+	return table.concat(result, "")
 end
 
 M.setup = function(config)
 	M.config = vim.tbl_deep_extend("force", M.config, config or {})
 end
 
-M.is_open = function ()
+M.is_open = function()
 	return M.term_instance and M.term_instance.job_id
 end
 
 M.open = function(go_back)
 	local cwd = fn.getcwd()
-    local path_startup_script = cwd .. Path.path.sep .. M.config.startup_script
-	local cmd_ipy= "ipython -i "
+	local path_startup_script = cwd .. Path.path.sep .. M.config.startup_script
+	local cmd_ipy = "ipython -i "
 	local profile = " --profile=" .. M.config.profile_name
 
 	if M.config.profile_name == nil then
@@ -126,6 +126,7 @@ M.open = function(go_back)
 
 	M.term_instance = term_helper.TermIpy:new(cmd_ipy, cwd)
 	sleep_ms(M.config.sleep_ms_after_open)
+	M.term_instance:send("plt.ion()\n")
 	M.term_instance:scroll_to_bottom()
 	if go_back == true then
 		vim.cmd("wincmd p")
@@ -189,7 +190,7 @@ M.send_lines = function(line_start, line_stop)
 		M.open(true)
 	end
 
-	M.term_instance:send(lines:sub(1, -#char_arrow_down) .. "\n\n")
+	M.term_instance:send(lines:sub(1, - #char_arrow_down) .. "\n\n")
 end
 
 M.run_lines = function()
@@ -213,7 +214,7 @@ M.run_line = function()
 
 	M.term_instance:send(line .. "\n")
 	if idx_line_cursor < n_lines then
-		api.nvim_win_set_cursor(0, {idx_line_cursor + 1, 0})
+		api.nvim_win_set_cursor(0, { idx_line_cursor + 1, 0 })
 	end
 end
 
@@ -234,7 +235,7 @@ M.run_cell = function()
 
 	if has_next_cell then
 		local idx_line = math.min(line_stop + 1, api.nvim_buf_line_count(0))
-		api.nvim_win_set_cursor(0, {idx_line, 0})
+		api.nvim_win_set_cursor(0, { idx_line, 0 })
 	end
 end
 
@@ -243,7 +244,7 @@ M.up_cell = function()
 	local line_start = get_start_line_cell(idx_line_cursor - 2)
 
 	local idx_line = math.min(line_start + 1, api.nvim_buf_line_count(0))
-	api.nvim_win_set_cursor(0, {idx_line, 0})
+	api.nvim_win_set_cursor(0, { idx_line, 0 })
 end
 
 M.down_cell = function()
@@ -252,7 +253,7 @@ M.down_cell = function()
 
 	if has_next_cell then
 		local idx_line = math.min(line_stop + 1, api.nvim_buf_line_count(0))
-		api.nvim_win_set_cursor(0, {idx_line, 0})
+		api.nvim_win_set_cursor(0, { idx_line, 0 })
 	end
 end
 
