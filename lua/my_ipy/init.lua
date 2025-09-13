@@ -11,7 +11,7 @@ local term_helper = require("my_ipy.term_ipy")
 local fs = vim.fs
 local uv = vim.uv
 
-local M = { term_instance = nil }
+local M = { term_instance = nil, _helpers_sent = false, _pending_preview = nil, _conn_file = nil, _kernel_job = nil, _helpers_path = nil }
 -- Cell markers must be exactly: start of line '#', one space, then at least '%%'.
 -- Examples matched: '# %%', '# %% Import'. Examples NOT matched: '  # %%', '#%%'.
 local CELL_PATTERN = [[^# %%\+]]
@@ -34,6 +34,16 @@ M.config = {
 		"from numpy.random import randn, standard_normal, randint, choice, uniform;\"",
 	sleep_ms_after_open = 1000,
 	set_default_keymaps = true,
+	viewer_max_rows = 30,
+	viewer_max_cols = 20,
+    use_zmq = true,
+    python_cmd = "python3",
+    -- Matplotlib backend/ion control for the interactive console.
+    -- Set to 'qt' | 'tk' | 'macosx' | 'inline' to use IPython magic,
+    -- or a Matplotlib backend name like 'QtAgg' | 'TkAgg' | 'MacOSX'.
+    matplotlib_backend = nil,
+    -- Whether to enable interactive mode (plt.ion()) on startup.
+    matplotlib_ion = true,
 }
 
 -- Fast file existence check using libuv.
@@ -99,6 +109,24 @@ local function paste_block(lines_tbl)
   return "\x1b[200~" .. table.concat(lines_tbl, "\n") .. "\n\x1b[201~\n"
 end
 
+-- Encode a Lua string to hex for safe transport via Python exec/compile.
+local function to_hex(s)
+  return (s:gsub(".", function(c) return string.format("%02x", string.byte(c)) end))
+end
+
+-- Send a Python exec(compile(...)) that decodes a hex-encoded block and executes it in globals().
+local function send_exec_block(py_src)
+  local hex = to_hex(py_src)
+  local stmt = string.format("exec(compile(bytes.fromhex('%s').decode('utf-8'), '<my_ipy>', 'exec'), globals(), globals())\n", hex)
+  return stmt
+end
+
+-- Build a short Python statement to exec a file's contents in globals().
+local function exec_file_stmt(path)
+  local safe = tostring(path):gsub("'", "\\'")
+  return string.format("exec(open('%s', 'r', encoding='utf-8').read(), globals(), globals())\n", safe)
+end
+
 M.setup = function(config)
     if config ~= nil then
         vim.validate({
@@ -107,6 +135,10 @@ M.setup = function(config)
             startup_cmd = { config.startup_cmd, 's', true },
             sleep_ms_after_open = { config.sleep_ms_after_open, 'n', true },
             set_default_keymaps = { config.set_default_keymaps, 'b', true },
+            viewer_max_rows = { config.viewer_max_rows, 'n', true },
+            viewer_max_cols = { config.viewer_max_cols, 'n', true },
+            use_zmq = { config.use_zmq, 'b', true },
+            python_cmd = { config.python_cmd, 's', true },
         })
     end
     M.config = vim.tbl_deep_extend("force", M.config, config or {})
@@ -139,6 +171,12 @@ M.apply_default_keymaps = function()
     -- Map <leader>iv globally: back to editor
     pcall(vim.keymap.set, 'n', '<leader>iv', M.goto_vi, { silent = true, desc = 'IPy: Back to editor' })
     pcall(vim.keymap.set, 't', '<leader>iv', function() M.goto_vi() end, { silent = true, desc = 'IPy: Back to editor' })
+    -- Provide global access to Variable Explorer even outside Python buffers
+    pcall(vim.keymap.set, 'n', '<leader>vx', function() require('my_ipy').var_explorer_open() end, { silent = true, desc = 'IPy: Variable explorer' })
+    pcall(vim.keymap.set, 'n', '<leader>vr', function() require('my_ipy').var_explorer_refresh() end, { silent = true, desc = 'IPy: Refresh variables' })
+    -- User commands for discoverability
+    pcall(api.nvim_create_user_command, 'MyIpyVars', function() require('my_ipy').var_explorer_open() end, {})
+    pcall(api.nvim_create_user_command, 'MyIpyVarsRefresh', function() require('my_ipy').var_explorer_refresh() end, {})
 end
 
 ---Apply buffer-local keymaps for Python files.
@@ -167,52 +205,334 @@ M.apply_buffer_keymaps = function(bufnr)
     set('n', '[c', M.up_cell,  'IPy: Prev cell')
     set('v', ']c', M.down_cell, 'IPy: Next cell (visual)')
     set('v', '[c', M.up_cell,  'IPy: Prev cell (visual)')
+    -- Variable explorer and refresh
+    set('n', '<leader>vx', function() M.var_explorer_open() end, 'IPy: Variable explorer')
+    set('n', '<leader>vr', function() M.var_explorer_refresh() end, 'IPy: Refresh variables')
 end
 
 ---Return whether the IPython terminal is currently open.
 ---@return boolean
 M.is_open = function()
-    return M.term_instance ~= nil and M.term_instance.job_id ~= nil
+    return M.term_instance ~= nil and type(M.term_instance.job_id) == 'number' and M.term_instance.job_id > 0
 end
 
 ---Open the IPython terminal split.
 ---@param go_back boolean|nil # if true, jump back to previous window after init
-M.open = function(go_back)
+M.open = function(go_back, cb)
     local cwd = fn.getcwd()
-    local path_startup_script = fs.joinpath(cwd, M.config.startup_script)
-	local cmd_ipy = "ipython -i "
-	local profile = " --profile=" .. M.config.profile_name
+    -- Ensure we have a kernel running and a connection file
+    M._ensure_kernel(function(ok, conn_file)
+        if not ok then
+            vim.notify('my_ipy: failed to start Jupyter kernel', vim.log.levels.ERROR)
+            if cb then cb(false) end
+            return
+        end
+        -- Open jupyter console attached to this kernel
+        local cmd_console = string.format("jupyter console --existing %s --simple-prompt", conn_file)
+        M.term_instance = term_helper.TermIpy:new(cmd_console, cwd)
+        -- Reset helper state and cached paths for new session
+        M._helpers_sent = false
+        if M._helpers_path then pcall(os.remove, M._helpers_path); M._helpers_path = nil end
+        M._zmq_ready = false
+        -- Start ZMQ backend for programmatic requests
+        M.ensure_zmq(function(ok2)
+            if not ok2 then
+                vim.schedule(function()
+                    vim.notify('my_ipy: failed to start ZMQ backend', vim.log.levels.WARN)
+                end)
+            end
+        end)
 
-	if M.config.profile_name == nil then
-		profile = ""
-	end
+        -- Terminal-buffer keymaps (terminal mode) for quick return to editor
+        pcall(function()
+            local buf = M.term_instance.buf_id
+            vim.keymap.set('t', '<leader>iv', function()
+                M.goto_vi()
+            end, { buffer = buf, silent = true, desc = 'IPy: Back to editor' })
+        end)
+        -- Defer initial setup to avoid blocking UI while the terminal spins up.
+        vim.defer_fn(function()
+            if not M.is_open() then return end
+            -- Enable interactive plotting and minimal numeric imports for convenience
+            local cwd = fn.getcwd()
+            local path_startup_script = fs.joinpath(cwd, M.config.startup_script)
+            -- Configure Matplotlib backend before importing pyplot
+            if M.config.matplotlib_backend and #tostring(M.config.matplotlib_backend) > 0 then
+              local b = tostring(M.config.matplotlib_backend)
+              if b == 'qt' or b == 'tk' or b == 'macosx' or b == 'inline' then
+                -- Use IPython magic via API to avoid literal % in sent code
+                local stmt = string.format("from IPython import get_ipython; ip=get_ipython();\nif ip is not None: ip.run_line_magic('matplotlib','%s')\n", b)
+                M.term_instance:send(stmt)
+              else
+                -- Fallback to Matplotlib backend name
+                local stmt = string.format("import matplotlib as _mpl; _mpl.use('%s')\n", b)
+                M.term_instance:send(stmt)
+              end
+            end
+            -- Optionally enable interactive mode
+            if M.config.matplotlib_ion ~= false then
+              M.term_instance:send("import matplotlib.pyplot as plt; plt.ion()\n")
+            end
+            if file_exists(path_startup_script) then
+              M.term_instance:send(exec_file_stmt(path_startup_script))
+            else
+              -- Common numerics so user snippets like `array([...])` work
+              M.term_instance:send("import numpy as np; from numpy import array\n")
+            end
+            M.term_instance:scroll_to_bottom()
+            if go_back == true then
+                vim.cmd("wincmd p")
+            end
+            if cb then cb(true) end
+        end, M.config.sleep_ms_after_open)
+    end)
+end
 
-	if file_exists(path_startup_script) then
-		cmd_ipy = cmd_ipy .. path_startup_script
-	else
-		cmd_ipy = cmd_ipy .. "-c " .. M.config.startup_cmd
-	end
+-- Build the Python helper code to be injected into IPython session.
+-- It defines JSON emit, variable listing, and preview for DataFrame/ndarray.
+local function _helpers_py_code()
+  return [[
+import json, inspect, types
+try:
+    import numpy as _np
+except Exception:
+    _np = None
+try:
+    import pandas as _pd
+except Exception:
+    _pd = None
 
-	cmd_ipy = cmd_ipy .. profile
+_S = "__MYIPY_JSON_START__"
+_E = "__MYIPY_JSON_END__"
+_HIDE_ON = "\x1b[8m"   # SGR conceal on
+_HIDE_OFF = "\x1b[0m"  # reset attributes
 
-	M.term_instance = term_helper.TermIpy:new(cmd_ipy, cwd)
+def _myipy_emit(tag, payload):
+    # Print sentinel-wrapped JSON, visually hidden in most terminals (SGR 8).
+    msg = json.dumps({"tag": tag, "data": payload}) if not isinstance(payload, Exception) else json.dumps({"tag": tag, "error": str(payload)})
+    try:
+        print(_HIDE_ON + _S + msg + _E + _HIDE_OFF, flush=True)
+    except Exception as e:
+        print(_HIDE_ON + _S + json.dumps({"tag": tag, "error": str(e)}) + _E + _HIDE_OFF, flush=True)
 
-	-- Terminal-buffer keymaps (terminal mode) for quick return to editor
-	pcall(function()
-		local buf = M.term_instance.buf_id
-		vim.keymap.set('t', '<leader>iv', function()
-			M.goto_vi()
-		end, { buffer = buf, silent = true, desc = 'IPy: Back to editor' })
-	end)
-	-- Defer initial setup to avoid blocking UI while the terminal spins up.
-	vim.defer_fn(function()
-		if not M.is_open() then return end
-		M.term_instance:send("plt.ion()\n")
-		M.term_instance:scroll_to_bottom()
-		if go_back == true then
-			vim.cmd("wincmd p")
-		end
-	end, M.config.sleep_ms_after_open)
+def _myipy_srepr(x, n=120):
+    try:
+        r = repr(x)
+        if len(r) > n:
+            r = r[:n] + "..."
+        return r
+    except Exception:
+        return "<unrepr>"
+
+def _myipy_shape(x):
+    try:
+        if _np is not None and isinstance(x, _np.ndarray):
+            return list(getattr(x, 'shape', []))
+        if _pd is not None and isinstance(x, _pd.DataFrame):
+            return [int(x.shape[0]), int(x.shape[1])]
+        if hasattr(x, '__len__') and not isinstance(x, (str, bytes, dict)):
+            return [len(x)]
+    except Exception:
+        pass
+    return None
+
+def _myipy_list_vars(max_repr=120, __path=None):
+    import builtins, types, sys
+    g = globals()
+    out = {}
+    for k, v in g.items():
+        if not isinstance(k, str):
+            continue
+        if k.startswith('_'):
+            continue
+        if k in ('In','Out','exit','quit','get_ipython'):
+            continue
+        t = type(v).__name__
+        # Skip modules/functions/classes to reduce noise
+        # Skip modules/functions/classes/callables (e.g., numpy ufunc)
+        if isinstance(v, (types.ModuleType, types.FunctionType, type)) or callable(v):
+            continue
+        shp = _myipy_shape(v)
+        br = _myipy_srepr(v, max_repr)
+        try:
+            dtype = None
+            if _np is not None and isinstance(v, _np.ndarray):
+                dtype = str(v.dtype)
+            elif _pd is not None and isinstance(v, _pd.DataFrame):
+                dtype = str(v.dtypes.to_dict())
+        except Exception:
+            dtype = None
+        out[k] = {"type": t, "shape": shp, "dtype": dtype, "repr": br}
+    if __path:
+        _myipy_write_json(__path, out)
+    else:
+        _myipy_emit("vars", out)
+    _myipy_purge_last_history()
+
+def _myipy_write_json(path, obj):
+    try:
+        import io, os
+        with io.open(path, 'w', encoding='utf-8') as f:
+            json.dump(obj, f, ensure_ascii=False)
+    except Exception as e:
+        # As a last resort, emit an error (hidden)
+        _myipy_emit('preview', { 'name': obj.get('name') if isinstance(obj, dict) else None, 'error': str(e) })
+
+def _myipy_get_conn_file(__path=None):
+    try:
+        ip = get_ipython()
+        cf = getattr(ip.kernel, 'connection_file', None)
+    except Exception as e:
+        cf = None
+    data = { 'connection_file': cf }
+    if __path:
+        _myipy_write_json(__path, data)
+    else:
+        _myipy_emit('conn', data)
+
+def _myipy_purge_last_history():
+    try:
+        ip = get_ipython()
+        hm = ip.history_manager
+        cur = hm.db.cursor() if hasattr(hm, 'db') else hm.get_db_cursor()
+        sess = hm.session_number
+        cur.execute("SELECT max(line) FROM input WHERE session=?", (sess,))
+        row = cur.fetchone()
+        maxline = row[0] if row else None
+        if maxline:
+            cur.execute("DELETE FROM input WHERE session=? AND line=?", (sess, maxline))
+            try:
+                hm.db.commit()
+            except Exception:
+                pass
+        try:
+            if getattr(hm, 'input_hist_parsed', None):
+                hm.input_hist_parsed.pop()
+        except Exception:
+            pass
+        try:
+            if getattr(hm, 'input_hist_raw', None):
+                hm.input_hist_raw.pop()
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+def _myipy_preview(name, max_rows=50, max_cols=20, __path=None):
+    g = globals()
+    if name not in g:
+        _myipy_emit("preview", {"name": name, "error": "Name not found"})
+        _myipy_purge_last_history()
+        return
+    obj = g[name]
+    try:
+        if _pd is not None and isinstance(obj, _pd.DataFrame):
+            df = obj.iloc[:max_rows, :max_cols]
+            data = {
+                "name": name,
+                "kind": "dataframe",
+                "shape": [int(df.shape[0]), int(df.shape[1])],
+                "columns": [str(c) for c in df.columns.to_list()],
+                "rows": [ [ None if _pd.isna(v) else (str(v) if not isinstance(v, (int,float,bool)) else v) for v in row ] for row in df.itertuples(index=False, name=None) ]
+            }
+            if __path:
+                _myipy_write_json(__path, data)
+            else:
+                _myipy_emit("preview", data)
+            _myipy_purge_last_history()
+            return
+    except Exception as e:
+        if __path:
+            _myipy_write_json(__path, {"name": name, "error": str(e)})
+        else:
+            _myipy_emit("preview", {"name": name, "error": str(e)})
+        _myipy_purge_last_history()
+        return
+    try:
+        if _np is not None and isinstance(obj, _np.ndarray):
+            arr = obj
+            info = {"name": name, "kind": "ndarray", "dtype": str(arr.dtype), "shape": list(arr.shape)}
+            if getattr(arr, 'ndim', 0) == 1:
+                info["values1d"] = arr[:max_rows].tolist()
+            elif getattr(arr, 'ndim', 0) == 2:
+                info["rows"] = arr[:max_rows, :max_cols].tolist()
+            else:
+                info["repr"] = _myipy_srepr(arr, 300)
+            if __path:
+                _myipy_write_json(__path, info)
+            else:
+                _myipy_emit("preview", info)
+            _myipy_purge_last_history()
+            return
+    except Exception as e:
+        if __path:
+            _myipy_write_json(__path, {"name": name, "error": str(e)})
+        else:
+            _myipy_emit("preview", {"name": name, "error": str(e)})
+        _myipy_purge_last_history()
+        return
+    # Generic fallback: show repr
+    data = {"name": name, "kind": "object", "repr": _myipy_srepr(obj, 300)}
+    if __path:
+        _myipy_write_json(__path, data)
+    else:
+        _myipy_emit("preview", data)
+    _myipy_purge_last_history()
+  ]]
+end
+
+function M._send_helpers_if_needed()
+  if M._helpers_sent then return end
+  if not M.is_open() then return end
+  local code = _helpers_py_code()
+  -- Write helpers to a temp file and exec it to avoid huge one-liners.
+  -- Keep the file until session close to avoid race with console reading.
+  if not M._helpers_path then
+    M._helpers_path = fn.tempname() .. '.myipy_helpers.py'
+    pcall(fn.writefile, vim.split(code, "\n", { plain = true }), M._helpers_path)
+  end
+  M.term_instance:send(exec_file_stmt(M._helpers_path))
+  M._helpers_sent = true
+end
+
+-- Ensure a standalone Jupyter kernel is running and return its connection file.
+function M._ensure_kernel(cb)
+  if M._kernel_job and M._conn_file and uv.fs_stat(M._conn_file) then
+    if cb then cb(true, M._conn_file) end
+    return
+  end
+  local cf = fn.tempname() .. '.json'
+  local cmd = { M.config.python_cmd or 'python3', '-m', 'ipykernel_launcher', '-f', cf }
+  local job = fn.jobstart(cmd, {
+    on_exit = function() M._kernel_job = nil end,
+  })
+  if job <= 0 then
+    if cb then cb(false) end
+    return
+  end
+  M._kernel_job = job
+  M._conn_file = cf
+  local timer = uv.new_timer()
+  local start = uv.now()
+  local function tick()
+    if (uv.now() - start) > 5000 then
+      pcall(timer.stop, timer); pcall(timer.close, timer)
+      if cb then cb(false) end
+      return
+    end
+    local st = uv.fs_stat(cf)
+    if st and st.type == 'file' and st.size and st.size > 0 then
+      pcall(timer.stop, timer); pcall(timer.close, timer)
+      if cb then cb(true, cf) end
+    end
+  end
+  timer:start(50, 100, vim.schedule_wrap(tick))
+end
+
+-- Request the kernel connection file path once and cache it.
+function M._ensure_conn_file(cb)
+  -- Delegate to kernel manager: we start the kernel ourselves and own the conn file.
+  M._ensure_kernel(cb)
 end
 
 ---Close the IPython terminal if running.
@@ -220,6 +540,17 @@ M.close = function()
 	if M.is_open() then
 		fn.jobstop(M.term_instance.job_id)
 	end
+    M._conn_file = nil
+    M._zmq_ready = false
+    pcall(function() require('my_ipy.zmq_client').stop() end)
+    if M._kernel_job then
+        pcall(fn.jobstop, M._kernel_job)
+        M._kernel_job = nil
+    end
+    if M._helpers_path then
+        pcall(os.remove, M._helpers_path)
+        M._helpers_path = nil
+    end
 end
 
 ---Toggle the IPython terminal split.
@@ -227,23 +558,33 @@ M.toggle = function()
 	if M.is_open() then
 		M.close()
 	else
-		M.open(false)
-		M.term_instance:startinsert()
+		M.open(false, function(ok)
+			if ok and M.term_instance then
+				M.term_instance:startinsert()
+			end
+		end)
 	end
 end
 
 ---Jump to the IPython terminal split and enter insert mode.
 M.goto_ipy = function()
-	if api.nvim_win_get_buf(0) == M.term_instance.buf_id then
+	if M.term_instance and api.nvim_win_get_buf(0) == M.term_instance.buf_id then
 		return
 	end
-	if not M.is_open() then
-		M.open(false)
+	local function focus()
+		if not M.term_instance then return end
+		M.term_instance:show()
+		api.nvim_set_current_win(M.term_instance.win_id)
+		M.term_instance:scroll_to_bottom()
+		M.term_instance:startinsert()
 	end
-	M.term_instance:show()
-	api.nvim_set_current_win(M.term_instance.win_id)
-	M.term_instance:scroll_to_bottom()
-	M.term_instance:startinsert()
+	if not M.is_open() then
+		M.open(false, function(ok)
+			if ok then focus() end
+		end)
+	else
+		focus()
+	end
 end
 
 ---Return focus from IPython split to previous window.
@@ -266,10 +607,15 @@ end
 ---Run the current file in IPython via %run.
 M.run_file = function()
 	local rel_path = fn.expand("%:r")
-	if not M.is_open() then
-		M.open(true)
+	local function after()
+		if not M.is_open() then return end
+		M.term_instance:send("%run " .. rel_path .. "\n")
 	end
-	M.term_instance:send("%run " .. rel_path .. "\n")
+	if not M.is_open() then
+		M.open(true, function(ok) if ok then after() end end)
+	else
+		after()
+	end
 end
 
 ---Send lines [line_start, line_stop) to IPython.
@@ -279,11 +625,19 @@ M.send_lines = function(line_start, line_stop)
 	local tb_lines = api.nvim_buf_get_lines(0, line_start, line_stop, false)
 	if not tb_lines or #tb_lines == 0 then return end
 
-	if not M.is_open() then
-		M.open(true)
-	end
+  local function do_send()
+    if not M.is_open() then return end
+    -- Execute multi-line selection robustly by shipping as hex-encoded Python and exec() it.
+    local block = table.concat(tb_lines, "\n") .. "\n"
+    local payload = send_exec_block(block)
+    M.term_instance:send(payload)
+  end
 
-	M.term_instance:send(paste_block(tb_lines))
+	if not M.is_open() then
+		M.open(true, function(ok) if ok then do_send() end end)
+	else
+		do_send()
+	end
 end
 
 ---Send the current visual selection (linewise) to IPython.
@@ -299,24 +653,141 @@ M.run_line = function()
 	local line = api.nvim_get_current_line()
 	local idx_line_cursor = api.nvim_win_get_cursor(0)[1]
 
-	if not M.is_open() then
-		M.open(true)
+	local function after()
+		if not M.is_open() then return end
+		M.term_instance:send(line .. "\n")
+		if idx_line_cursor < n_lines then
+			api.nvim_win_set_cursor(0, { idx_line_cursor + 1, 0 })
+		end
 	end
 
-	M.term_instance:send(line .. "\n")
-	if idx_line_cursor < n_lines then
-		api.nvim_win_set_cursor(0, { idx_line_cursor + 1, 0 })
+	if not M.is_open() then
+		M.open(true, function(ok) if ok then after() end end)
+	else
+		after()
 	end
 end
 
 ---Send an arbitrary command string to IPython.
 ---@param cmd string
 M.run_cmd = function(cmd)
-	if not M.is_open() then
-		M.open(true)
+	local function after()
+		if not M.is_open() then return end
+		M.term_instance:send(cmd .. "\n")
 	end
+	if not M.is_open() then
+		M.open(true, function(ok) if ok then after() end end)
+	else
+		after()
+	end
+end
 
-	M.term_instance:send(cmd .. "\n")
+-- Public: open the variable explorer window and refresh data.
+M.var_explorer_open = function()
+  require('my_ipy.var_explorer').open()
+  -- Trigger a vars request; request_vars() self-ensures ZMQ readiness.
+  -- Avoid redundant readiness checks here.
+  M.request_vars()
+end
+
+-- Public: refresh variable list.
+M.var_explorer_refresh = function()
+  -- Avoid repeated ensure calls; delegate to request_vars() which ensures ZMQ.
+  M.request_vars()
+end
+
+-- Internal: request variable list from kernel.
+function M.request_vars()
+  if M.config.use_zmq and M._zmq_ready then
+    local z = require('my_ipy.zmq_client')
+    local ok_req = z.request('vars', { max_repr = 120 }, function(msg)
+      if msg and msg.ok and msg.tag == 'vars' then
+        local ok, vx = pcall(require, 'my_ipy.var_explorer')
+        if ok and vx and vx.on_vars then vx.on_vars(msg.data or {}) end
+      else
+        vim.schedule(function()
+          vim.notify('my_ipy: ZMQ vars request failed', vim.log.levels.WARN)
+        end)
+      end
+    end)
+    if not ok_req then
+      vim.notify('my_ipy: ZMQ request send failed', vim.log.levels.WARN)
+    end
+    return
+  end
+  -- If ZMQ not ready, attempt to prepare once; do not fall back to typing helper calls.
+  M.ensure_zmq(function(ok)
+    if ok then
+      M.request_vars()
+    else
+      vim.notify('my_ipy: ZMQ backend not available; vars unavailable', vim.log.levels.WARN)
+    end
+  end)
+end
+
+-- Internal: request preview for a variable name from kernel.
+function M.request_preview(name)
+  if not name or #name == 0 then return end
+  if M.config.use_zmq and M._zmq_ready then
+    local z = require('my_ipy.zmq_client')
+    local ok_req = z.request('preview', { name = name, max_rows = M.config.viewer_max_rows, max_cols = M.config.viewer_max_cols }, function(msg)
+      if msg and msg.ok and msg.tag == 'preview' then
+        local ok, dv = pcall(require, 'my_ipy.data_viewer')
+        if ok and dv and dv.on_preview then dv.on_preview(msg.data or {}) end
+      else
+        vim.schedule(function()
+          vim.notify('my_ipy: ZMQ preview request failed', vim.log.levels.WARN)
+        end)
+      end
+    end)
+    if not ok_req then
+      vim.notify('my_ipy: ZMQ request send failed', vim.log.levels.WARN)
+    end
+    return
+  end
+  -- Ensure ZMQ then retry once; do not fall back to typing helper calls.
+  M.ensure_zmq(function(ok)
+    if ok then
+      M.request_preview(name)
+    else
+      vim.notify('my_ipy: ZMQ backend not available; preview unavailable', vim.log.levels.WARN)
+    end
+  end)
+end
+
+-- Ensure ZMQ client: fetch connection file and spawn backend.
+function M.ensure_zmq(cb)
+  if not M.config.use_zmq then if cb then cb(false) end; return end
+  if M._zmq_ready then if cb then cb(true) end; return end
+  M._ensure_conn_file(function(ok, conn_file)
+    if not ok or not conn_file then if cb then cb(false) end; return end
+    local z = require('my_ipy.zmq_client')
+    -- Resolve backend path relative to repo root: ../../ -> python/myipy_kernel_client.py
+    local this = debug.getinfo(1, 'S').source:sub(2)
+    local plugin_dir = fn.fnamemodify(this, ':h')           -- /repo/lua/my_ipy
+    local repo_root = fn.fnamemodify(plugin_dir, ':h:h')     -- /repo
+    local backend = repo_root .. '/python/myipy_kernel_client.py'
+    local ok_start = z.start(M.config.python_cmd, conn_file, backend)
+    if not ok_start then if cb then cb(false) end; return end
+    -- Probe readiness with a ping
+    local tried = 0
+    local function try_ping()
+      tried = tried + 1
+      if tried > 20 then if cb then cb(false) end; return end
+      local sent = z.request('ping', {}, function(msg)
+        if msg and msg.ok and msg.tag == 'pong' then
+          M._zmq_ready = true
+          if cb then cb(true) end
+        else
+          vim.defer_fn(try_ping, 100)
+        end
+      end)
+      if not sent then
+        vim.defer_fn(try_ping, 100)
+      end
+    end
+    try_ping()
+  end)
 end
 
 ---Run the current cell delimited by lines starting with "# %%".
