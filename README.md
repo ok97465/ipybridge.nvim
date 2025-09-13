@@ -1,10 +1,13 @@
 # my_ipy.nvim
 
-Minimal helper to run IPython in a terminal split and send code from the current buffer, tuned for Neovim 0.11+.
+Minimal helper to run IPython/Jupyter in a terminal split and send code from the current buffer, tuned for Neovim 0.11+.
 
 Requirements
 - Neovim 0.11 or newer
-- Python with IPython available on `PATH` (`ipython` command)
+- Python with Jupyter/IPython
+  - `jupyter` (for `jupyter console`)
+  - `ipykernel`, `jupyter_client`, `pyzmq` (for variable explorer / preview)
+  - `ipython` (for the console experience)
 
 Installation (lazy.nvim)
 - Example:
@@ -17,6 +20,19 @@ Installation (lazy.nvim)
         startup_script = "import_in_console.py", -- looked up in CWD
         sleep_ms_after_open = 1000,      -- defer init to allow IPython to start
         set_default_keymaps = true,      -- applies by default (can set false)
+
+        -- Matplotlib backend / ion
+        matplotlib_backend = nil,        -- 'qt'|'tk'|'macosx'|'inline' or 'QtAgg'|'TkAgg'|'MacOSX'
+        matplotlib_ion = true,           -- call plt.ion() on startup
+
+        -- Spyder-like runcell support
+        prefer_runcell_magic = false,    -- run cells via helper instead of raw text
+        runcell_save_before_run = true,  -- save buffer before runcell to use up-to-date file
+
+        -- Variable explorer / preview (ZMQ backend)
+        use_zmq = true,                  -- requires ipykernel + jupyter_client + pyzmq
+        viewer_max_rows = 30,
+        viewer_max_cols = 20,
       })
     end,
   }
@@ -25,9 +41,21 @@ Installation (lazy.nvim)
 Configuration
 - `profile_name` (string|nil): IPython profile passed as `--profile=<name>`. If `nil`, the flag is omitted.
 - `startup_script` (string): If this file exists under current working directory, `ipython -i <startup_script>` is used.
-- `startup_cmd` (string): Fallback command string sent to `ipython -c` when `startup_script` is missing.
+- `startup_cmd` (string): Deprecated/unused. If `startup_script` is missing, the plugin sends minimal numeric imports instead.
 - `sleep_ms_after_open` (number): Milliseconds to wait (non-blocking) before running initial setup such as `plt.ion()`.
 - `set_default_keymaps` (boolean, default: `true`): Apply buffer-local keymaps for Python files only.
+
+Additional options
+- `matplotlib_backend` (string|nil): `'qt'|'tk'|'macosx'|'inline'` via IPython magic, or backend name `'QtAgg'|'TkAgg'|'MacOSX'` via `matplotlib.use()`.
+- `matplotlib_ion` (boolean): If `true`, `plt.ion()` is called on startup (default `true`).
+- `prefer_runcell_magic` (boolean): If `true`, run cells via an IPython helper (`runcell(index, path)` / `%runcell`).
+- `runcell_save_before_run` (boolean): Save the buffer before runcell execution (default `true`).
+- `exec_cwd_mode` (string): Working directory behavior for `run_cell` / `run_file`.
+  - `'file'`: change directory to the current file's directory before executing
+  - `'pwd'`: change directory to Neovim's `getcwd()` (default)
+  - `'none'`: do not change directory
+- `use_zmq` (boolean): Enable ZMQ backend for variable explorer/preview (default `true`). Requires `ipykernel`, `jupyter_client`, `pyzmq`.
+- `viewer_max_rows` / `viewer_max_cols` (numbers): DataFrame/ndarray preview limits.
 
 Cell Syntax
 - Lines beginning with `# %%` (one or more `%`) mark cell boundaries.
@@ -49,11 +77,34 @@ API
 - `require('my_ipy').up_cell()` / `down_cell()` — Move to the previous/next cell.
 
 Notes
-- On open, the plugin launches `ipython -i` in a `botright vsplit` and sends `plt.ion()` after a short deferred delay.
-- If `startup_script` exists in the current working directory, it is used; otherwise `startup_cmd` is used with `ipython -c`.
+- On open, the plugin starts a Jupyter kernel and attaches a `jupyter console --existing` in a `botright vsplit`.
+- Matplotlib: if configured, the backend is set first (IPython magic or `matplotlib.use()`), then `plt.ion()` is called (configurable).
+- If `startup_script` exists in the current working directory, it is executed in the console; otherwise minimal numeric imports are sent.
 - Multi-line sending uses bracketed paste sequences (ESC[200~ ... ESC[201~) for reliable block input across terminals.
 - Cell detection uses a `# %%`-style marker and is implemented with `vim.regex` and `vim.iter` (Neovim 0.11+ APIs) for clarity and performance.
 - When `set_default_keymaps` is enabled, keymaps are also applied to already-open Python buffers at startup.
+
+Matplotlib Backend / GUI Windows
+- Set `matplotlib_backend = 'qt'|'tk'|'macosx'|'inline'` to use IPython magic, or `'QtAgg'|'TkAgg'|'MacOSX'` for `matplotlib.use()`.
+- `matplotlib_ion = true` enables interactive mode. For GUI windows instead of inline PNGs, use a GUI backend (e.g. `'qt'`).
+- Qt requires `PyQt5` or `PySide6`. Tk requires Tk support. macOS may require framework build Python.
+
+Spyder-like Runcell
+- Enable `prefer_runcell_magic = true` to execute cells via a helper registered in IPython.
+- The helper defines `runcell(index, path, cwd=None)` and a `%runcell` line magic. Cells are delimited by lines matching `^# %%+`.
+- The plugin computes the current cell index (0-based) and calls `runcell(index, <current file path>, <cwd according to exec_cwd_mode>)`.
+- If `runcell_save_before_run = true` (default), the buffer is saved first to ensure the helper runs the latest contents.
+- If the buffer is unsaved or the file path is missing, the plugin falls back to sending the cell text directly.
+
+Variable Explorer & Data Viewer (ZMQ)
+- Open the variable explorer and request current variables from the kernel over a lightweight ZMQ backend.
+- Requirements: `ipykernel`, `jupyter_client`, `pyzmq` (in the Python environment of the kernel).
+- Default keymaps:
+  - `<leader>vx` → open variable explorer
+  - `<leader>vr` → refresh variables
+- Explorer buffer shortcuts:
+  - `q` → close, `r` → refresh, `<CR>` → open preview for the selected variable
+- Preview window shows DataFrame/ndarray/object summaries; press `r` to refresh, `q` to close.
 
 Default Keymaps (Python buffers only)
 - Normal:
@@ -64,6 +115,8 @@ Default Keymaps (Python buffers only)
   - `<leader>r` → run current line
   - `F9` → run current line
   - `]c` / `[c` → next/prev cell
+  - `<leader>vx` → variable explorer (global command also available)
+  - `<leader>vr` → refresh variables
 - Visual:
   - `<leader>r` → run selection
   - `F9` → run selection
@@ -72,6 +125,10 @@ Default Keymaps (Python buffers only)
 Global
 - Normal/Terminal:
   - `<leader>iv` → back to editor (works anywhere; exits terminal and jumps back)
+
+User Commands
+- `:MyIpyVars` → open variable explorer
+- `:MyIpyVarsRefresh` → refresh variables
 
 Terminal Buffers
 - Terminal mode:
@@ -104,5 +161,6 @@ vim.api.nvim_create_autocmd('FileType', {
 
 Troubleshooting
 - Ensure `ipython` is installed and discoverable in your environment.
+- For variable explorer and preview, ensure `ipykernel`, `jupyter_client`, and `pyzmq` are installed in the kernel’s environment.
 - If the split opens but does not accept input, check your terminal integration or try a different shell.
 - Windows console sequences are handled, but some terminals may require different escape behavior.

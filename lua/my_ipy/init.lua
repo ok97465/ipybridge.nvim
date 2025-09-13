@@ -11,7 +11,7 @@ local term_helper = require("my_ipy.term_ipy")
 local fs = vim.fs
 local uv = vim.uv
 
-local M = { term_instance = nil, _helpers_sent = false, _pending_preview = nil, _conn_file = nil, _kernel_job = nil, _helpers_path = nil }
+local M = { term_instance = nil, _helpers_sent = false, _pending_preview = nil, _conn_file = nil, _kernel_job = nil, _helpers_path = nil, _runcell_sent = false, _runcell_path = nil, _last_cwd_sent = nil }
 -- Cell markers must be exactly: start of line '#', one space, then at least '%%'.
 -- Examples matched: '# %%', '# %% Import'. Examples NOT matched: '  # %%', '#%%'.
 local CELL_PATTERN = [[^# %%\+]]
@@ -44,6 +44,15 @@ M.config = {
     matplotlib_backend = nil,
     -- Whether to enable interactive mode (plt.ion()) on startup.
     matplotlib_ion = true,
+    -- Prefer Spyder-like runcell helper over sending raw lines
+    prefer_runcell_magic = false,
+    -- Save buffer before calling runcell to ensure the file content is current
+    runcell_save_before_run = true,
+    -- Working directory mode for executing run_cell/run_file: 'file' | 'pwd' | 'none'
+    --  - 'file': cd to the current file's directory before executing
+    --  - 'pwd' : cd to Neovim's current working directory before executing
+    --  - 'none': do not change directory
+    exec_cwd_mode = 'pwd',
 }
 
 -- Fast file existence check using libuv.
@@ -125,6 +134,26 @@ end
 local function exec_file_stmt(path)
   local safe = tostring(path):gsub("'", "\\'")
   return string.format("exec(open('%s', 'r', encoding='utf-8').read(), globals(), globals())\n", safe)
+end
+
+-- Quietly set IPython working directory according to config.
+local function set_exec_cwd_for(file_path)
+  if not M.is_open() then return end
+  local mode = M.config.exec_cwd_mode or 'pwd'
+  local dir = nil
+  if mode == 'file' and file_path and #file_path > 0 then
+    dir = fn.fnamemodify(file_path, ':p:h')
+  elseif mode == 'pwd' then
+    dir = fn.getcwd()
+  else
+    return
+  end
+  if not dir or #dir == 0 then return end
+  if M._last_cwd_sent == dir then return end
+  local safe = tostring(dir):gsub("'", "\\'")
+  -- Use IPython magic with quiet flag; avoid extra output
+  M.term_instance:send(string.format("%%cd -q '%s'\n", safe))
+  M._last_cwd_sent = dir
 end
 
 M.setup = function(config)
@@ -233,6 +262,9 @@ M.open = function(go_back, cb)
         -- Reset helper state and cached paths for new session
         M._helpers_sent = false
         if M._helpers_path then pcall(os.remove, M._helpers_path); M._helpers_path = nil end
+        M._runcell_sent = false
+        if M._runcell_path then pcall(os.remove, M._runcell_path); M._runcell_path = nil end
+        M._last_cwd_sent = nil
         M._zmq_ready = false
         -- Start ZMQ backend for programmatic requests
         M.ensure_zmq(function(ok2)
@@ -278,6 +310,10 @@ M.open = function(go_back, cb)
             else
               -- Common numerics so user snippets like `array([...])` work
               M.term_instance:send("import numpy as np; from numpy import array\n")
+            end
+            -- Optionally seed runcell helpers for Spyder-like behavior
+            if M.config.prefer_runcell_magic then
+              M._ensure_runcell_helpers()
             end
             M.term_instance:scroll_to_bottom()
             if go_back == true then
@@ -481,6 +517,113 @@ def _myipy_preview(name, max_rows=50, max_cols=20, __path=None):
   ]]
 end
 
+-- Define a Spyder-like runcell helper and register an IPython line magic.
+local function _runcell_py_code()
+  return [[
+import io, os, re, shlex, contextlib, sys, traceback
+from IPython.core.magic import register_line_magic
+
+_CELL_RE = re.compile(r'^# %%+')
+
+@contextlib.contextmanager
+def _mi_cwd(path):
+    if not path:
+        yield; return
+    try:
+        old = os.getcwd()
+    except Exception:
+        old = None
+    try:
+        os.chdir(path)
+        yield
+    finally:
+        if old is not None:
+            try:
+                os.chdir(old)
+            except Exception:
+                pass
+
+@contextlib.contextmanager
+def _mi_exec_env(filename):
+    g = globals()
+    prev_file = g.get('__file__', None)
+    added = False
+    try:
+        fdir = os.path.dirname(os.path.abspath(filename))
+        if fdir and fdir not in sys.path:
+            sys.path.insert(0, fdir)
+            added = True
+        g['__file__'] = filename
+        yield
+    finally:
+        if added:
+            try:
+                sys.path.remove(fdir)
+            except Exception:
+                pass
+        if prev_file is None:
+            g.pop('__file__', None)
+        else:
+            g['__file__'] = prev_file
+
+def runcell(index, filename, cwd=None):
+    try:
+        idx = int(index)
+    except Exception:
+        print('runcell: invalid index'); return
+    try:
+        with io.open(filename, 'r', encoding='utf-8') as f:
+            lines = f.read().splitlines()
+    except Exception as e:
+        print(f'runcell: cannot read {filename}: {e}'); return
+    # Compute cell starts using only explicit markers ('# %%'), index is 0-based over markers
+    starts = [i for i, ln in enumerate(lines) if _CELL_RE.match(ln)]
+    starts = sorted(set(starts))
+    if idx < 0 or idx >= len(starts):
+        print(f'runcell: index out of range: {idx}'); return
+    s = starts[idx]
+    # Next marker (or EOF)
+    e = (starts[idx + 1] - 1) if (idx + 1) < len(starts) else (len(lines) - 1)
+    code = '\n'.join(lines[s:e+1]) + '\n'
+    with _mi_cwd(cwd):
+        with _mi_exec_env(filename):
+            try:
+                exec(compile(code, filename, 'exec'), globals(), globals())
+            except SystemExit:
+                # Allow graceful exits without noisy tracebacks
+                pass
+            except Exception:
+                traceback.print_exc()
+
+@register_line_magic('runcell')
+def _runcell_magic(line):
+    try:
+        parts = shlex.split(line)
+    except Exception:
+        print('Usage: %runcell <index> <path> [cwd]'); return
+    if len(parts) < 2:
+        print('Usage: %runcell <index> <path> [cwd]'); return
+    try:
+        idx = int(parts[0])
+    except Exception:
+        print('runcell: invalid index'); return
+    cwd = parts[2] if len(parts) > 2 else None
+    runcell(idx, parts[1], cwd)
+  ]]
+end
+
+function M._ensure_runcell_helpers()
+  if M._runcell_sent then return end
+  if not M.is_open() then return end
+  local code = _runcell_py_code()
+  if not M._runcell_path then
+    M._runcell_path = fn.tempname() .. '.myipy_runcell.py'
+    pcall(fn.writefile, vim.split(code, "\n", { plain = true }), M._runcell_path)
+  end
+  M.term_instance:send(exec_file_stmt(M._runcell_path))
+  M._runcell_sent = true
+end
+
 function M._send_helpers_if_needed()
   if M._helpers_sent then return end
   if not M.is_open() then return end
@@ -551,6 +694,11 @@ M.close = function()
         pcall(os.remove, M._helpers_path)
         M._helpers_path = nil
     end
+    if M._runcell_path then
+        pcall(os.remove, M._runcell_path)
+        M._runcell_path = nil
+    end
+    M._last_cwd_sent = nil
 end
 
 ---Toggle the IPython terminal split.
@@ -606,10 +754,13 @@ end
 
 ---Run the current file in IPython via %run.
 M.run_file = function()
-	local rel_path = fn.expand("%:r")
+	local abs_path = fn.expand('%:p')
 	local function after()
 		if not M.is_open() then return end
-		M.term_instance:send("%run " .. rel_path .. "\n")
+		-- Adjust working directory as configured
+		set_exec_cwd_for(abs_path)
+		local safe = tostring(abs_path):gsub('"', '\\"')
+		M.term_instance:send(string.format("%%run \"%s\"\n", safe))
 	end
 	if not M.is_open() then
 		M.open(true, function(ok) if ok then after() end end)
@@ -795,8 +946,51 @@ M.run_cell = function()
 	local idx_line_cursor = api.nvim_win_get_cursor(0)[1]
 	local line_start = get_start_line_cell(idx_line_cursor)
 	local line_stop, has_next_cell = get_stop_line_cell(idx_line_cursor + 1)
+	local file_path = fn.expand('%:p')
 
-	-- Compute exclusive end correctly: include last line when no next cell exists.
+	-- Prefer IPython runcell helper when configured and viable.
+	if M.config.prefer_runcell_magic then
+		local path = fn.expand('%:p')
+		if path and #path > 0 then
+			-- Save buffer before run if requested
+			if vim.bo.modified and M.config.runcell_save_before_run ~= false then
+				pcall(vim.cmd, 'write')
+			end
+			if (not vim.bo.modified) and file_exists(path) then
+				-- Determine working directory to pass into runcell (no global %cd)
+				local cwd_arg = nil
+				local mode = M.config.exec_cwd_mode or 'pwd'
+				if mode == 'file' then
+					cwd_arg = fn.fnamemodify(path, ':p:h')
+				elseif mode == 'pwd' then
+					cwd_arg = fn.getcwd()
+				end
+				-- Count cell index by markers strictly matching '^# %%+'
+				local pre_lines = api.nvim_buf_get_lines(0, 0, math.max(line_start - 1, 0), false)
+				local idx = 0
+				for _, ln in ipairs(pre_lines) do
+					local s = CELL_RE:match_str(ln)
+					if s ~= nil then idx = idx + 1 end
+				end
+				M._ensure_runcell_helpers()
+				local safe = tostring(path):gsub("'", "\\'")
+				if cwd_arg and #cwd_arg > 0 then
+					local safecwd = tostring(cwd_arg):gsub("'", "\\'")
+					M.term_instance:send(string.format("runcell(%d, '%s', '%s')\n", idx, safe, safecwd))
+				else
+					M.term_instance:send(string.format("runcell(%d, '%s')\n", idx, safe))
+				end
+				if has_next_cell then
+					local idx_line = math.min(line_stop + 1, api.nvim_buf_line_count(0))
+					api.nvim_win_set_cursor(0, { idx_line, 0 })
+				end
+				return
+			end
+		end
+	end
+
+	-- Fallback: send cell text directly.
+	set_exec_cwd_for(file_path)
 	local end_excl = has_next_cell and (line_stop - 1) or line_stop
 	M.send_lines(line_start - 1, end_excl)
 
