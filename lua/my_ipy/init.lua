@@ -8,9 +8,14 @@ local vim = vim
 local api = vim.api
 local fn = vim.fn
 local term_helper = require("my_ipy.term_ipy")
+-- Refactored internal modules (utilities, keymaps, kernel manager)
+local utils = require("my_ipy.utils")
+local keymaps = require("my_ipy.keymaps")
+local kernel = require("my_ipy.kernel")
 local fs = vim.fs
 local uv = vim.uv
 
+-- Core state for the plugin. Comments are in English; see README for usage.
 local M = { term_instance = nil, _helpers_sent = false, _conn_file = nil, _kernel_job = nil, _helpers_path = nil, _runcell_sent = false, _runcell_path = nil, _last_cwd_sent = nil }
 -- Cell markers must be exactly: start of line '#', one space, then at least '%%'.
 -- Examples matched: '# %%', '# %% Import'. Examples NOT matched: '  # %%', '#%%'.
@@ -66,49 +71,6 @@ M.config = {
     
 }
 
--- Fast file existence check using libuv.
-local function file_exists(path)
-  return uv.fs_stat(path) and true or false
-end
-
--- Normalize a filesystem path for Python literals (portable across OS).
--- 1) Convert Windows backslashes to forward slashes
--- 2) Quote for single or double-quoted Python strings as needed
-local function _norm_path(p)
-  return tostring(p or ''):gsub('\\', '/')
-end
-
-local function _py_quote_single(p)
-  return _norm_path(p):gsub("'", "\\'")
-end
-
-local function _py_quote_double(p)
-  return _norm_path(p):gsub('"', '\\"')
-end
-
--- Return normalized 0-indexed (start_row, start_col, end_row, end_col) of visual selection.
--- Return a 0-indexed (start_row, end_row_exclusive) line range for visual selection.
--- Works reliably even when called directly from a visual-mode mapping by using getpos('v').
-local function selection_line_range()
-  local mode = fn.mode()
-  -- Visual modes: 'v' (charwise), 'V' (linewise), CTRL-V (blockwise).
-  -- Use string.char(22) to match blockwise visual without escape ambiguity.
-  if mode == 'v' or mode == 'V' or mode == string.char(22) then
-    local vpos = fn.getpos('v')
-    local cpos = fn.getpos('.')
-    local srow = vpos[2]
-    local erow = cpos[2]
-    if srow > erow then srow, erow = erow, srow end
-    return srow - 1, erow -- end is exclusive when passed to nvim_buf_get_lines
-  end
-  -- Fallback when not in visual: use the last visual marks ('<' and '>').
-  local srow = (api.nvim_buf_get_mark(0, '<') or { 0, 0 })[1]
-  local erow = (api.nvim_buf_get_mark(0, '>') or { 0, 0 })[1]
-  if srow == 0 or erow == 0 then return nil end
-  if srow > erow then srow, erow = erow, srow end
-  return srow - 1, erow
-end
-
 local function get_start_line_cell(idx_seed)
     local lines = api.nvim_buf_get_lines(0, 0, idx_seed, false)
     for idx, line in vim.iter(lines):enumerate():rev() do
@@ -136,33 +98,6 @@ local function get_stop_line_cell(idx_offset)
     return n_lines, false
 end
 
--- Build a bracketed-paste payload for multiple lines.
--- This is safer across terminals and shells than simulating keystrokes.
--- See: xterm bracketed paste mode (ESC [ 200 ~ ... ESC [ 201 ~)
-local function paste_block(lines_tbl)
-  if not lines_tbl or #lines_tbl == 0 then return "" end
-  return "\x1b[200~" .. table.concat(lines_tbl, "\n") .. "\n\x1b[201~\n"
-end
-
--- Encode a Lua string to hex for safe transport via Python exec/compile.
-local function to_hex(s)
-  return (s:gsub(".", function(c) return string.format("%02x", string.byte(c)) end))
-end
-
--- Send a Python exec(compile(...)) that decodes a hex-encoded block and executes it in globals().
-local function send_exec_block(py_src)
-  local hex = to_hex(py_src)
-  local stmt = string.format("exec(compile(bytes.fromhex('%s').decode('utf-8'), '<my_ipy>', 'exec'), globals(), globals())\n", hex)
-  return stmt
-end
-
--- Build a short Python statement to exec a file's contents in globals().
-local function exec_file_stmt(path)
-  -- Read and exec file contents in globals(); path is single-quoted
-  local safe = _py_quote_single(path)
-  return string.format("exec(open('%s', 'r', encoding='utf-8').read(), globals(), globals())\n", safe)
-end
-
 -- Quietly set IPython working directory according to config.
 local function set_exec_cwd_for(file_path)
   if not M.is_open() then return end
@@ -177,7 +112,7 @@ local function set_exec_cwd_for(file_path)
   end
   if not dir or #dir == 0 then return end
   if M._last_cwd_sent == dir then return end
-  local safe = _py_quote_single(dir)
+  local safe = utils.py_quote_single(dir)
   -- Use IPython magic with quiet flag; avoid extra output
   M.term_instance:send(string.format("%%cd -q '%s'\n", safe))
   M._last_cwd_sent = dir
@@ -215,60 +150,13 @@ end
 
 ---Apply a set of sensible default keymaps.
 M.apply_default_keymaps = function()
-    local group = api.nvim_create_augroup('MyIpyKeymaps', { clear = true })
-    -- Apply Python buffer keymaps
-    api.nvim_create_autocmd('FileType', {
-        group = group,
-        pattern = 'python',
-        callback = function(args)
-            M.apply_buffer_keymaps(args.buf)
-        end,
-    })
-    -- Map <leader>iv globally: back to editor
-    pcall(vim.keymap.set, 'n', '<leader>iv', M.goto_vi, { silent = true, desc = 'IPy: Back to editor' })
-    pcall(vim.keymap.set, 't', '<leader>iv', function() M.goto_vi() end, { silent = true, desc = 'IPy: Back to editor' })
-    -- Provide global access to Variable Explorer even outside Python buffers
-    pcall(vim.keymap.set, 'n', '<leader>vx', function() require('my_ipy').var_explorer_open() end, { silent = true, desc = 'IPy: Variable explorer' })
-    pcall(vim.keymap.set, 'n', '<leader>vr', function() require('my_ipy').var_explorer_refresh() end, { silent = true, desc = 'IPy: Refresh variables' })
-    -- User commands for discoverability
-    pcall(api.nvim_create_user_command, 'MyIpyVars', function() require('my_ipy').var_explorer_open() end, {})
-    pcall(api.nvim_create_user_command, 'MyIpyVarsRefresh', function() require('my_ipy').var_explorer_refresh() end, {})
-    -- Preview arbitrary name/path (supports dotted/indexed paths, e.g., `yy.b`, `hh.h2`)
-    pcall(api.nvim_create_user_command, 'MyIpyPreview', function(opts)
-      local name = (opts and opts.args) or ''
-      if name ~= '' then require('my_ipy').request_preview(name) end
-    end, { nargs = 1, complete = 'buffer' })
+  keymaps.apply_defaults()
 end
 
 ---Apply buffer-local keymaps for Python files.
 ---@param bufnr integer
 M.apply_buffer_keymaps = function(bufnr)
-    local function set(mode, lhs, rhs, desc)
-        vim.keymap.set(mode, lhs, rhs, { desc = desc, silent = true, buffer = bufnr })
-    end
-    -- Toggle terminal
-    set('n', '<leader>ti', M.toggle, 'IPy: Toggle terminal')
-    -- Jump to IPython / back to editor
-    set('n', '<leader>ii', M.goto_ipy, 'IPy: Focus terminal')
-    set('n', '<leader>iv', M.goto_vi,  'IPy: Back to editor')
-    -- Run current cell
-    set('n', '<leader><CR>', M.run_cell, 'IPy: Run cell')
-    -- Run current file
-    set('n', '<F5>', M.run_file, 'IPy: Run file (%run)')
-    -- Run current line (normal) / selection (visual)
-    set('n', '<leader>r', M.run_line, 'IPy: Run line')
-    set('v', '<leader>r', M.run_lines, 'IPy: Run selection')
-    -- F9 as alternative for line/selection
-    set('n', '<F9>', M.run_line, 'IPy: Run line (F9)')
-    set('v', '<F9>', M.run_lines, 'IPy: Run selection (F9)')
-    -- Cell navigation in normal and visual modes
-    set('n', ']c', M.down_cell, 'IPy: Next cell')
-    set('n', '[c', M.up_cell,  'IPy: Prev cell')
-    set('v', ']c', M.down_cell, 'IPy: Next cell (visual)')
-    set('v', '[c', M.up_cell,  'IPy: Prev cell (visual)')
-    -- Variable explorer and refresh
-    set('n', '<leader>vx', function() M.var_explorer_open() end, 'IPy: Variable explorer')
-    set('n', '<leader>vr', function() M.var_explorer_refresh() end, 'IPy: Refresh variables')
+  keymaps.apply_buffer(bufnr)
 end
 
 ---Return whether the IPython terminal is currently open.
@@ -282,7 +170,7 @@ end
 M.open = function(go_back, cb)
     local cwd = fn.getcwd()
     -- Ensure we have a kernel running and a connection file
-    M._ensure_kernel(function(ok, conn_file)
+    kernel.ensure(M.config.python_cmd, function(ok, conn_file)
         if not ok then
             vim.notify('my_ipy: failed to start Jupyter kernel', vim.log.levels.ERROR)
             if cb then cb(false) end
@@ -345,8 +233,8 @@ M.open = function(go_back, cb)
             if M.config.matplotlib_ion ~= false then
               M.term_instance:send("import matplotlib.pyplot as plt; plt.ion()\n")
             end
-            if file_exists(path_startup_script) then
-              M.term_instance:send(exec_file_stmt(path_startup_script))
+            if utils.file_exists(path_startup_script) then
+              M.term_instance:send(utils.exec_file_stmt(path_startup_script))
             else
               -- Common numerics so user snippets like `array([...])` work
               M.term_instance:send("import numpy as np; from numpy import array\n")
@@ -559,124 +447,7 @@ end
 
 -- Define a Spyder-like runcell helper and register an IPython line magic.
 local function _runcell_py_code()
-  return [[
-import io, os, re, shlex, contextlib, sys, traceback
-from IPython.core.magic import register_line_magic
-
-_CELL_RE = re.compile(r'^# %%+')
-
-@contextlib.contextmanager
-def _mi_cwd(path):
-    if not path:
-        yield; return
-    try:
-        old = os.getcwd()
-    except Exception:
-        old = None
-    try:
-        os.chdir(path)
-        yield
-    finally:
-        if old is not None:
-            try:
-                os.chdir(old)
-            except Exception:
-                pass
-
-@contextlib.contextmanager
-def _mi_exec_env(filename):
-    g = globals()
-    prev_file = g.get('__file__', None)
-    added = False
-    try:
-        fdir = os.path.dirname(os.path.abspath(filename))
-        if fdir and fdir not in sys.path:
-            sys.path.insert(0, fdir)
-            added = True
-        g['__file__'] = filename
-        yield
-    finally:
-        if added:
-            try:
-                sys.path.remove(fdir)
-            except Exception:
-                pass
-        if prev_file is None:
-            g.pop('__file__', None)
-        else:
-            g['__file__'] = prev_file
-
-def runcell(index, filename, cwd=None):
-    try:
-        idx = int(index)
-    except Exception:
-        print('runcell: invalid index'); return
-    try:
-        with io.open(filename, 'r', encoding='utf-8') as f:
-            lines = f.read().splitlines()
-    except Exception as e:
-        print(f'runcell: cannot read {filename}: {e}'); return
-    # Compute cell starts using only explicit markers ('# %%'), index is 0-based over markers
-    starts = [i for i, ln in enumerate(lines) if _CELL_RE.match(ln)]
-    starts = sorted(set(starts))
-    if idx < 0 or idx >= len(starts):
-        print(f'runcell: index out of range: {idx}'); return
-    s = starts[idx]
-    # Next marker (or EOF)
-    e = (starts[idx + 1] - 1) if (idx + 1) < len(starts) else (len(lines) - 1)
-    code = '\n'.join(lines[s:e+1]) + '\n'
-    with _mi_cwd(cwd):
-        with _mi_exec_env(filename):
-            try:
-                exec(compile(code, filename, 'exec'), globals(), globals())
-            except SystemExit:
-                # Allow graceful exits without noisy tracebacks
-                pass
-            except Exception:
-                traceback.print_exc()
-
-@register_line_magic('runcell')
-def _runcell_magic(line):
-    try:
-        parts = shlex.split(line)
-    except Exception:
-        print('Usage: %runcell <index> <path> [cwd]'); return
-    if len(parts) < 2:
-        print('Usage: %runcell <index> <path> [cwd]'); return
-    try:
-        idx = int(parts[0])
-    except Exception:
-        print('runcell: invalid index'); return
-    cwd = parts[2] if len(parts) > 2 else None
-    runcell(idx, parts[1], cwd)
- 
-def runfile(filename, cwd=None):
-    try:
-        with io.open(filename, 'r', encoding='utf-8') as f:
-            src = f.read()
-    except Exception as e:
-        print(f'runfile: cannot read {filename}: {e}'); return
-    with _mi_cwd(cwd):
-        with _mi_exec_env(filename):
-            try:
-                exec(compile(src, filename, 'exec'), globals(), globals())
-            except SystemExit:
-                pass
-            except Exception:
-                traceback.print_exc()
-
-@register_line_magic('runfile')
-def _runfile_magic(line):
-    try:
-        parts = shlex.split(line)
-    except Exception:
-        print('Usage: %runfile <path> [cwd]'); return
-    if len(parts) < 1:
-        print('Usage: %runfile <path> [cwd]'); return
-    path = parts[0]
-    cwd = parts[1] if len(parts) > 1 else None
-    runfile(path, cwd)
-  ]]
+  return require('my_ipy.exec_magics').build()
 end
 
 function M._ensure_runcell_helpers()
@@ -687,7 +458,7 @@ function M._ensure_runcell_helpers()
     M._runcell_path = fn.tempname() .. '.myipy_runcell.py'
     pcall(fn.writefile, vim.split(code, "\n", { plain = true }), M._runcell_path)
   end
-  M.term_instance:send(exec_file_stmt(M._runcell_path))
+  M.term_instance:send(utils.exec_file_stmt(M._runcell_path))
   M._runcell_sent = true
 end
 
@@ -701,7 +472,7 @@ function M._send_helpers_if_needed()
     M._helpers_path = fn.tempname() .. '.myipy_helpers.py'
     pcall(fn.writefile, vim.split(code, "\n", { plain = true }), M._helpers_path)
   end
-  M.term_instance:send(exec_file_stmt(M._helpers_path))
+  M.term_instance:send(utils.exec_file_stmt(M._helpers_path))
   M._helpers_sent = true
 end
 
@@ -741,8 +512,8 @@ end
 
 -- Request the kernel connection file path once and cache it.
 function M._ensure_conn_file(cb)
-  -- Delegate to kernel manager: we start the kernel ourselves and own the conn file.
-  M._ensure_kernel(cb)
+  -- Delegate to kernel manager: it owns the lifecycle of the kernel process.
+  kernel.ensure_conn_file(M.config.python_cmd, cb)
 end
 
 ---Close the IPython terminal if running.
@@ -750,13 +521,10 @@ M.close = function()
 	if M.is_open() then
 		fn.jobstop(M.term_instance.job_id)
 	end
-    M._conn_file = nil
     M._zmq_ready = false
     pcall(function() require('my_ipy.zmq_client').stop() end)
-    if M._kernel_job then
-        pcall(fn.jobstop, M._kernel_job)
-        M._kernel_job = nil
-    end
+    -- Stop the background kernel process
+    pcall(kernel.stop)
     if M._helpers_path then
         pcall(os.remove, M._helpers_path)
         M._helpers_path = nil
@@ -834,9 +602,9 @@ M.run_file = function()
 			elseif mode == 'pwd' then
 				cwd_arg = fn.getcwd()
 			end
-			local safe = _py_quote_single(abs_path)
+			local safe = utils.py_quote_single(abs_path)
 			if cwd_arg and #cwd_arg > 0 then
-				local safecwd = _py_quote_single(cwd_arg)
+				local safecwd = utils.py_quote_single(cwd_arg)
 				M.term_instance:send(string.format("runfile('%s','%s')\n", safe, safecwd))
 			else
 				M.term_instance:send(string.format("runfile('%s')\n", safe))
@@ -844,7 +612,7 @@ M.run_file = function()
 		else
 			-- Adjust working directory as configured and use %run
 			set_exec_cwd_for(abs_path)
-			local safe = _py_quote_double(abs_path)
+			local safe = utils.py_quote_double(abs_path)
 			M.term_instance:send(string.format("%%run \"%s\"\n", safe))
 		end
 	end
@@ -866,7 +634,7 @@ M.send_lines = function(line_start, line_stop)
     if not M.is_open() then return end
     -- Execute multi-line selection robustly by shipping as hex-encoded Python and exec() it.
     local block = table.concat(tb_lines, "\n") .. "\n"
-    local payload = send_exec_block(block)
+    local payload = utils.send_exec_block(block)
     M.term_instance:send(payload)
   end
 
@@ -879,7 +647,7 @@ end
 
 ---Send the current visual selection (linewise) to IPython.
 M.run_lines = function()
-	local line_start0, line_end_excl0 = selection_line_range()
+	local line_start0, line_end_excl0 = utils.selection_line_range()
 	if not line_start0 then return end
 	M.send_lines(line_start0, line_end_excl0)
 end
@@ -1054,7 +822,7 @@ M.run_cell = function()
 			if vim.bo.modified and M.config.runcell_save_before_run ~= false then
 				pcall(vim.cmd, 'write')
 			end
-			if (not vim.bo.modified) and file_exists(path) then
+			if (not vim.bo.modified) and utils.file_exists(path) then
 				-- Determine working directory to pass into runcell (no global %cd)
 				local cwd_arg = nil
 				local mode = M.config.exec_cwd_mode or 'pwd'
@@ -1071,9 +839,9 @@ M.run_cell = function()
 					if s ~= nil then idx = idx + 1 end
 				end
 				M._ensure_runcell_helpers()
-				local safe = _py_quote_single(path)
+				local safe = utils.py_quote_single(path)
 				if cwd_arg and #cwd_arg > 0 then
-					local safecwd = _py_quote_single(cwd_arg)
+					local safecwd = utils.py_quote_single(cwd_arg)
 					M.term_instance:send(string.format("runcell(%d, '%s', '%s')\n", idx, safe, safecwd))
 				else
 					M.term_instance:send(string.format("runcell(%d, '%s')\n", idx, safe))

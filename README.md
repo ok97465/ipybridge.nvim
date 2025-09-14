@@ -173,3 +173,17 @@ Troubleshooting
 - For variable explorer and preview, ensure `ipykernel`, `jupyter_client`, and `pyzmq` are installed in the kernel’s environment.
 - If the split opens but does not accept input, check your terminal integration or try a different shell.
 - Windows console sequences are handled, but some terminals may require different escape behavior.
+
+Developer Notes
+- Modules and responsibilities:
+  - `lua/my_ipy/init.lua`: public API and orchestration of features.
+  - `lua/my_ipy/term_ipy.lua`: terminal split wrapper (open/send/scroll/cleanup).
+  - `lua/my_ipy/utils.lua`: small utilities (quoting, selection range, exec helpers).
+  - `lua/my_ipy/keymaps.lua`: default keymaps and user commands.
+  - `lua/my_ipy/kernel.lua`: standalone ipykernel lifecycle and connection file.
+  - `lua/my_ipy/zmq_client.lua`: NDJSON ZMQ bridge to the kernel (vars/preview).
+  - `lua/my_ipy/dispatch.lua`: routes decoded messages to UI modules.
+  - `lua/my_ipy/var_explorer.lua`: variable explorer floating window.
+  - `lua/my_ipy/data_viewer.lua`: preview window for arrays/dataframes/objects.
+  - `lua/my_ipy/exec_magics.lua`: IPython runcell/runfile execution magics.
+- Public API remains the same; internals are split for readability and maintenance.
