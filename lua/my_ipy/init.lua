@@ -58,6 +58,9 @@ M.config = {
     simple_prompt = false,
     -- Optional color scheme for ZMQTerminalInteractiveShell (e.g., 'Linux', 'LightBG', 'NoColor').
     ipython_colors = nil,
+    -- Variable explorer: hide variables by exact name or type name (supports '*' suffix as prefix wildcard)
+    hidden_var_names = { 'pi', 'newaxis' },
+    hidden_type_names = { 'ZMQInteractiveShell', 'Axes', 'Figure', 'AxesSubplot' },
 }
 
 -- Fast file existence check using libuv.
@@ -926,7 +929,11 @@ end
 function M.request_vars()
   if M.config.use_zmq and M._zmq_ready then
     local z = require('my_ipy.zmq_client')
-    local ok_req = z.request('vars', { max_repr = 120 }, function(msg)
+    local ok_req = z.request('vars', {
+      max_repr = 120,
+      hide_names = M.config.hidden_var_names,
+      hide_types = M.config.hidden_type_names,
+    }, function(msg)
       if msg and msg.ok and msg.tag == 'vars' then
         local ok, vx = pcall(require, 'my_ipy.var_explorer')
         if ok and vx and vx.on_vars then vx.on_vars(msg.data or {}) end

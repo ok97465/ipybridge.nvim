@@ -49,7 +49,23 @@ def __mi_shape(x):
         pass
     return None
 
-def __mi_list_vars(max_repr=120):
+def __mi_list_vars(max_repr=120, hide_names=None, hide_types=None):
+    def _match(name, patterns):
+        if not patterns:
+            return False
+        try:
+            for p in patterns:
+                if not isinstance(p, str):
+                    continue
+                if p.endswith('*'):
+                    if name.startswith(p[:-1]):
+                        return True
+                else:
+                    if name == p:
+                        return True
+        except Exception:
+            return False
+        return False
     import types
     g = globals()
     out = {}
@@ -60,9 +76,13 @@ def __mi_list_vars(max_repr=120):
             continue
         if k in ('In','Out','exit','quit','get_ipython'):
             continue
+        if _match(k, hide_names):
+            continue
         if isinstance(v, (types.ModuleType, types.FunctionType, type)) or callable(v):
             continue
         t = type(v).__name__
+        if _match(t, hide_types):
+            continue
         shp = __mi_shape(v)
         br = __mi_srepr(v, max_repr)
         try:
@@ -172,7 +192,13 @@ def __mi_preview(name, max_rows=50, max_cols=20):
             continue
         if op == 'vars':
             max_repr = int(args.get('max_repr', 120))
-            ok, data, err = run_and_collect(f"__mi_list_vars(max_repr={max_repr})")
+            hn = args.get('hide_names') or []
+            ht = args.get('hide_types') or []
+            # Build a Python expression with JSON-literal lists
+            import json as __json
+            hn_expr = __json.dumps(hn, ensure_ascii=False)
+            ht_expr = __json.dumps(ht, ensure_ascii=False)
+            ok, data, err = run_and_collect(f"__mi_list_vars(max_repr={max_repr}, hide_names={hn_expr}, hide_types={ht_expr})")
             resp = { 'id': rid, 'ok': ok, 'tag': 'vars' }
             if ok:
                 resp['data'] = data

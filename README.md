@@ -58,6 +58,8 @@ Additional options
 - `viewer_max_rows` / `viewer_max_cols` (numbers): DataFrame/ndarray preview limits.
 - `simple_prompt` (boolean): Use simplified prompt in Jupyter console. Defaults to `false` for richer colors/UI.
 - `ipython_colors` (string|nil): Color scheme applied via IPython's `%colors` magic (e.g., `Linux`, `LightBG`, `NoColor`). Some jupyter-console versions ignore CLI flags; this runtime magic is used for portability.
+- `hidden_var_names` (string[]): Variable names to hide in the Variable Explorer (exact match; supports `*` suffix for prefix match). Example: `{ 'pi', 'newaxis' }`.
+- `hidden_type_names` (string[]): Type names to hide (exact or prefix with `*`). Examples: `{ 'ZMQInteractiveShell', 'Axes', 'Figure', 'AxesSubplot' }`.
 
 Cell Syntax
 - Lines beginning with `# %%` (one or more `%`) mark cell boundaries.
