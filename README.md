@@ -96,6 +96,10 @@ Spyder-like Runcell
 - If `runcell_save_before_run = true` (default), the buffer is saved first to ensure the helper runs the latest contents.
 - If the buffer is unsaved or the file path is missing, the plugin falls back to sending the cell text directly.
 
+Runfile Magic
+- The helper also defines `runfile(path, cwd=None)` and registers `%runfile`.
+- When `prefer_runcell_magic = true`, `run_file()` uses `runfile('<abs_path>', '<cwd>')` instead of `%run` and avoids changing the global working directory.
+
 Variable Explorer & Data Viewer (ZMQ)
 - Open the variable explorer and request current variables from the kernel over a lightweight ZMQ backend.
 - Requirements: `ipykernel`, `jupyter_client`, `pyzmq` (in the Python environment of the kernel).

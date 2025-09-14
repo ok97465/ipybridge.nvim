@@ -609,6 +609,33 @@ def _runcell_magic(line):
         print('runcell: invalid index'); return
     cwd = parts[2] if len(parts) > 2 else None
     runcell(idx, parts[1], cwd)
+ 
+def runfile(filename, cwd=None):
+    try:
+        with io.open(filename, 'r', encoding='utf-8') as f:
+            src = f.read()
+    except Exception as e:
+        print(f'runfile: cannot read {filename}: {e}'); return
+    with _mi_cwd(cwd):
+        with _mi_exec_env(filename):
+            try:
+                exec(compile(src, filename, 'exec'), globals(), globals())
+            except SystemExit:
+                pass
+            except Exception:
+                traceback.print_exc()
+
+@register_line_magic('runfile')
+def _runfile_magic(line):
+    try:
+        parts = shlex.split(line)
+    except Exception:
+        print('Usage: %runfile <path> [cwd]'); return
+    if len(parts) < 1:
+        print('Usage: %runfile <path> [cwd]'); return
+    path = parts[0]
+    cwd = parts[1] if len(parts) > 1 else None
+    runfile(path, cwd)
   ]]
 end
 
@@ -757,10 +784,29 @@ M.run_file = function()
 	local abs_path = fn.expand('%:p')
 	local function after()
 		if not M.is_open() then return end
-		-- Adjust working directory as configured
-		set_exec_cwd_for(abs_path)
-		local safe = tostring(abs_path):gsub('"', '\\"')
-		M.term_instance:send(string.format("%%run \"%s\"\n", safe))
+		if M.config.prefer_runcell_magic then
+			-- Use runfile helper with optional cwd argument; avoid global %cd
+			M._ensure_runcell_helpers()
+			local cwd_arg = nil
+			local mode = M.config.exec_cwd_mode or 'pwd'
+			if mode == 'file' then
+				cwd_arg = fn.fnamemodify(abs_path, ':p:h')
+			elseif mode == 'pwd' then
+				cwd_arg = fn.getcwd()
+			end
+			local safe = tostring(abs_path):gsub("'", "\\'")
+			if cwd_arg and #cwd_arg > 0 then
+				local safecwd = tostring(cwd_arg):gsub("'", "\\'")
+				M.term_instance:send(string.format("runfile('%s','%s')\n", safe, safecwd))
+			else
+				M.term_instance:send(string.format("runfile('%s')\n", safe))
+			end
+		else
+			-- Adjust working directory as configured and use %run
+			set_exec_cwd_for(abs_path)
+			local safe = tostring(abs_path):gsub('"', '\\"')
+			M.term_instance:send(string.format("%%run \"%s\"\n", safe))
+		end
 	end
 	if not M.is_open() then
 		M.open(true, function(ok) if ok then after() end end)
