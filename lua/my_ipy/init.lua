@@ -53,6 +53,11 @@ M.config = {
     --  - 'pwd' : cd to Neovim's current working directory before executing
     --  - 'none': do not change directory
     exec_cwd_mode = 'pwd',
+    -- Console prompt/color options
+    -- Use a rich prompt (colors, toolbar) by default; set true to simplify.
+    simple_prompt = false,
+    -- Optional color scheme for ZMQTerminalInteractiveShell (e.g., 'Linux', 'LightBG', 'NoColor').
+    ipython_colors = nil,
 }
 
 -- Fast file existence check using libuv.
@@ -257,7 +262,9 @@ M.open = function(go_back, cb)
             return
         end
         -- Open jupyter console attached to this kernel
-        local cmd_console = string.format("jupyter console --existing %s --simple-prompt", conn_file)
+        local extra = ''
+        if M.config.simple_prompt then extra = extra .. ' --simple-prompt' end
+        local cmd_console = string.format("jupyter console --existing %s%s", conn_file, extra)
         M.term_instance = term_helper.TermIpy:new(cmd_console, cwd)
         -- Reset helper state and cached paths for new session
         M._helpers_sent = false
@@ -300,6 +307,12 @@ M.open = function(go_back, cb)
                 local stmt = string.format("import matplotlib as _mpl; _mpl.use('%s')\n", b)
                 M.term_instance:send(stmt)
               end
+            end
+            -- Configure IPython color scheme via %colors magic (portable across jupyter-console versions)
+            if M.config.ipython_colors and #tostring(M.config.ipython_colors) > 0 then
+              local c = tostring(M.config.ipython_colors)
+              local stmt = string.format("from IPython import get_ipython; ip=get_ipython();\nif ip is not None: ip.run_line_magic('colors','%s')\n", c)
+              M.term_instance:send(stmt)
             end
             -- Optionally enable interactive mode
             if M.config.matplotlib_ion ~= false then

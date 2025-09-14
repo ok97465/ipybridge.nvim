@@ -56,6 +56,8 @@ Additional options
   - `'none'`: do not change directory
 - `use_zmq` (boolean): Enable ZMQ backend for variable explorer/preview (default `true`). Requires `ipykernel`, `jupyter_client`, `pyzmq`.
 - `viewer_max_rows` / `viewer_max_cols` (numbers): DataFrame/ndarray preview limits.
+- `simple_prompt` (boolean): Use simplified prompt in Jupyter console. Defaults to `false` for richer colors/UI.
+- `ipython_colors` (string|nil): Color scheme applied via IPython's `%colors` magic (e.g., `Linux`, `LightBG`, `NoColor`). Some jupyter-console versions ignore CLI flags; this runtime magic is used for portability.
 
 Cell Syntax
 - Lines beginning with `# %%` (one or more `%`) mark cell boundaries.
