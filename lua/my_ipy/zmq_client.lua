@@ -64,9 +64,10 @@ function M.is_running()
   return M.job ~= nil
 end
 
-function M.start(python_cmd, conn_file, module_path)
+function M.start(python_cmd, conn_file, module_path, debug)
   if M.is_running() then return true end
   local cmd = { python_cmd or 'python3', '-u', module_path, '--conn-file', conn_file }
+  if debug then table.insert(cmd, '--debug') end
   local job = fn.jobstart(cmd, {
     on_stdout = on_stdout,
     stdout_buffered = false,

@@ -4,7 +4,8 @@ import sys, json, argparse, time
 def main():
     p = argparse.ArgumentParser()
     p.add_argument('--conn-file', required=True)
-    args = p.parse_args()
+    p.add_argument('--debug', action='store_true')
+    opts = p.parse_args()
 
     try:
         from jupyter_client import BlockingKernelClient
@@ -14,8 +15,17 @@ def main():
         return 1
 
     kc = BlockingKernelClient()
-    kc.load_connection_file(args.conn_file)
+    kc.load_connection_file(opts.conn_file)
     kc.start_channels()
+    
+    def dbg(msg):
+        if opts.debug:
+            try:
+                sys.stderr.write(f"[myipy.zmq] {msg}\n")
+                sys.stderr.flush()
+            except Exception:
+                pass
+    dbg('channels started')
 
     PRELUDE = r'''
 import json, types
@@ -145,8 +155,10 @@ def __mi_preview(name, max_rows=50, max_cols=20):
                 break
         except Exception:
             break
+    dbg('prelude ready')
 
     def run_and_collect(code):
+        dbg(f'exec len={len(code)}')
         mid = kc.execute(code, store_history=False, allow_stdin=False, stop_on_error=True)
         acc = ''
         ok = True
@@ -168,12 +180,19 @@ def __mi_preview(name, max_rows=50, max_cols=20):
                 err = '\n'.join(msg['content'].get('traceback', []))
             elif mtype == 'status' and msg['content'].get('execution_state') == 'idle':
                 idle = True
+        # Debug: show how many bytes we captured on stdout for this exec
+        try:
+            dbg(f'stdout bytes={len(acc)} idle={idle}')
+        except Exception:
+            pass
         if not ok:
+            dbg(f'kernel error: {err.splitlines()[-1] if err else "?"}')
             return ok, None, err
         try:
             data = json.loads(acc.strip()) if acc.strip() else None
             return True, data, None
         except Exception as e:
+            dbg(f'parse error: {e}; payload={acc[:120]!r}')
             return False, None, f'parse error: {e}'
 
     for line in sys.stdin:
@@ -186,19 +205,20 @@ def __mi_preview(name, max_rows=50, max_cols=20):
             continue
         rid = req.get('id')
         op = req.get('op')
-        args = req.get('args') or {}
+        op_args = req.get('args') or {}
         if op == 'ping':
             sys.stdout.write(json.dumps({ 'id': rid, 'ok': True, 'tag': 'pong' }) + "\n"); sys.stdout.flush()
             continue
         if op == 'vars':
-            max_repr = int(args.get('max_repr', 120))
-            hn = args.get('hide_names') or []
-            ht = args.get('hide_types') or []
+            max_repr = int(op_args.get('max_repr', 120))
+            hn = op_args.get('hide_names') or []
+            ht = op_args.get('hide_types') or []
             # Build a Python expression with JSON-literal lists
             import json as __json
             hn_expr = __json.dumps(hn, ensure_ascii=False)
             ht_expr = __json.dumps(ht, ensure_ascii=False)
             ok, data, err = run_and_collect(f"__mi_list_vars(max_repr={max_repr}, hide_names={hn_expr}, hide_types={ht_expr})")
+            dbg(f'vars ok={ok} size={0 if not data else len(data)}')
             resp = { 'id': rid, 'ok': ok, 'tag': 'vars' }
             if ok:
                 resp['data'] = data
@@ -206,12 +226,18 @@ def __mi_preview(name, max_rows=50, max_cols=20):
                 resp['error'] = err or 'error'
             sys.stdout.write(json.dumps(resp, ensure_ascii=False) + "\n"); sys.stdout.flush()
         elif op == 'preview':
-            name = args.get('name') or ''
-            mr = int(args.get('max_rows', 30))
-            mc = int(args.get('max_cols', 20))
+            name = op_args.get('name') or ''
+            mr = int(op_args.get('max_rows', 30))
+            mc = int(op_args.get('max_cols', 20))
             # sanitize name for code injection
             name_esc = str(name).replace("'", "\\'")
             ok, data, err = run_and_collect(f"__mi_preview('{name_esc}', max_rows={mr}, max_cols={mc})")
+            try:
+                dbg(f'preview name={name!r} ok={ok} err={bool(err)} data_none={data is None}')
+                if data is not None:
+                    dbg(f'preview data keys={list(data.keys())}')
+            except Exception:
+                pass
             resp = { 'id': rid, 'ok': ok, 'tag': 'preview' }
             if ok:
                 resp['data'] = data

@@ -85,8 +85,22 @@ end
 
 local function set_content(lines)
   if not is_open() then return end
+  -- Normalize: nvim_buf_set_lines requires each item to be a single line
+  local out = {}
+  for _, l in ipairs(lines or {}) do
+    local s = l
+    if type(s) ~= 'string' then s = tostring(s or '') end
+    -- Split on CRLF/CR/LF to avoid embedded newlines in a single item
+    if s:find("\n") or s:find("\r") then
+      for _, part in ipairs(vim.split(s, "\r?\n", { plain = false })) do
+        table.insert(out, part)
+      end
+    else
+      table.insert(out, s)
+    end
+  end
   api.nvim_buf_set_option(M.buf, 'modifiable', true)
-  api.nvim_buf_set_lines(M.buf, 0, -1, false, lines)
+  api.nvim_buf_set_lines(M.buf, 0, -1, false, out)
   api.nvim_buf_set_option(M.buf, 'modifiable', false)
 end
 
@@ -154,4 +168,3 @@ function M.close()
 end
 
 return M
-

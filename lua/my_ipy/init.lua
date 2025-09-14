@@ -11,7 +11,7 @@ local term_helper = require("my_ipy.term_ipy")
 local fs = vim.fs
 local uv = vim.uv
 
-local M = { term_instance = nil, _helpers_sent = false, _pending_preview = nil, _conn_file = nil, _kernel_job = nil, _helpers_path = nil, _runcell_sent = false, _runcell_path = nil, _last_cwd_sent = nil }
+local M = { term_instance = nil, _helpers_sent = false, _conn_file = nil, _kernel_job = nil, _helpers_path = nil, _runcell_sent = false, _runcell_path = nil, _last_cwd_sent = nil }
 -- Cell markers must be exactly: start of line '#', one space, then at least '%%'.
 -- Examples matched: '# %%', '# %% Import'. Examples NOT matched: '  # %%', '#%%'.
 local CELL_PATTERN = [[^# %%\+]]
@@ -61,6 +61,9 @@ M.config = {
     -- Variable explorer: hide variables by exact name or type name (supports '*' suffix as prefix wildcard)
     hidden_var_names = { 'pi', 'newaxis' },
     hidden_type_names = { 'ZMQInteractiveShell', 'Axes', 'Figure', 'AxesSubplot' },
+    -- ZMQ backend debug logs (Python client prints to stderr)
+    zmq_debug = false,
+    
 }
 
 -- Fast file existence check using libuv.
@@ -936,7 +939,11 @@ function M.request_vars()
     }, function(msg)
       if msg and msg.ok and msg.tag == 'vars' then
         local ok, vx = pcall(require, 'my_ipy.var_explorer')
-        if ok and vx and vx.on_vars then vx.on_vars(msg.data or {}) end
+        if ok and vx and vx.on_vars then
+          vim.schedule(function()
+            vx.on_vars(msg.data or {})
+          end)
+        end
       else
         vim.schedule(function()
           vim.notify('my_ipy: ZMQ vars request failed', vim.log.levels.WARN)
@@ -966,7 +973,11 @@ function M.request_preview(name)
     local ok_req = z.request('preview', { name = name, max_rows = M.config.viewer_max_rows, max_cols = M.config.viewer_max_cols }, function(msg)
       if msg and msg.ok and msg.tag == 'preview' then
         local ok, dv = pcall(require, 'my_ipy.data_viewer')
-        if ok and dv and dv.on_preview then dv.on_preview(msg.data or {}) end
+        if ok and dv and dv.on_preview then
+          vim.schedule(function()
+            dv.on_preview(msg.data or {})
+          end)
+        end
       else
         vim.schedule(function()
           vim.notify('my_ipy: ZMQ preview request failed', vim.log.levels.WARN)
@@ -1000,7 +1011,7 @@ function M.ensure_zmq(cb)
     local plugin_dir = fn.fnamemodify(this, ':h')           -- /repo/lua/my_ipy
     local repo_root = fn.fnamemodify(plugin_dir, ':h:h')     -- /repo
     local backend = repo_root .. '/python/myipy_kernel_client.py'
-    local ok_start = z.start(M.config.python_cmd, conn_file, backend)
+    local ok_start = z.start(M.config.python_cmd, conn_file, backend, M.config.zmq_debug)
     if not ok_start then if cb then cb(false) end; return end
     -- Probe readiness with a ping
     local tried = 0
