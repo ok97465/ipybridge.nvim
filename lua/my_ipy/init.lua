@@ -68,6 +68,11 @@ M.config = {
     hidden_type_names = { 'ZMQInteractiveShell', 'Axes', 'Figure', 'AxesSubplot' },
     -- ZMQ backend debug logs (Python client prints to stderr)
     zmq_debug = false,
+    -- How to send multi-line selections/cells to IPython.
+    -- 'exec'  : send as hex-encoded Python and exec() it (robust, default)
+    -- 'paste' : send as plain text using bracketed paste so the console shows
+    --           the code exactly as if it was typed (Spyder-like echo).
+    multiline_send_mode = 'paste',
     
 }
 
@@ -632,10 +637,19 @@ M.send_lines = function(line_start, line_stop)
 
   local function do_send()
     if not M.is_open() then return end
-    -- Execute multi-line selection robustly by shipping as hex-encoded Python and exec() it.
-    local block = table.concat(tb_lines, "\n") .. "\n"
-    local payload = utils.send_exec_block(block)
-    M.term_instance:send(payload)
+    -- Choose how to deliver multi-line code to IPython.
+    -- 'exec' ensures reliability across terminals; 'paste' mirrors typed input.
+    local mode = tostring(M.config.multiline_send_mode or 'exec')
+    if mode == 'paste' then
+      -- Use bracketed paste so IPython displays the pasted block with prompts.
+      local payload = utils.paste_block(tb_lines)
+      M.term_instance:send(payload)
+    else
+      -- Default: ship as hex-encoded Python and execute via exec().
+      local block = table.concat(tb_lines, "\n") .. "\n"
+      local payload = utils.send_exec_block(block)
+      M.term_instance:send(payload)
+    end
   end
 
 	if not M.is_open() then

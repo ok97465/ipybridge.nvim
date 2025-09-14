@@ -60,6 +60,7 @@ Additional options
 - `ipython_colors` (string|nil): Color scheme applied via IPython's `%colors` magic (e.g., `Linux`, `LightBG`, `NoColor`). Some jupyter-console versions ignore CLI flags; this runtime magic is used for portability.
 - `hidden_var_names` (string[]): Variable names to hide in the Variable Explorer (exact match; supports `*` suffix for prefix match). Example: `{ 'pi', 'newaxis' }`.
 - `hidden_type_names` (string[]): Type names to hide (exact or prefix with `*`). Examples: `{ 'ZMQInteractiveShell', 'Axes', 'Figure', 'AxesSubplot' }`.
+- `multiline_send_mode` (string): How selections/cells are sent. `'exec'` executes a hex-encoded block via `exec()`; `'paste'`(default) sends a plain-text bracketed paste so the console echoes the code like typed.
 
 Cell Syntax
 - Lines beginning with `# %%` (one or more `%`) mark cell boundaries.
@@ -84,7 +85,9 @@ Notes
 - On open, the plugin starts a Jupyter kernel and attaches a `jupyter console --existing` in a `botright vsplit`.
 - Matplotlib: if configured, the backend is set first (IPython magic or `matplotlib.use()`), then `plt.ion()` is called (configurable).
 - If `startup_script` exists in the current working directory, it is executed in the console; otherwise minimal numeric imports are sent.
-- Multi-line sending uses bracketed paste sequences (ESC[200~ ... ESC[201~) for reliable block input across terminals.
+- Multi-line sending mode is configurable:
+  - Default is `'exec'` which hex-encodes the selection and executes it via `exec()` (robust; minimal echo).
+  - Set `multiline_send_mode = 'paste'` to send plain text using bracketed paste (ESC[200~ ... ESC[201~) so IPython shows the exact code as if it was typed (similar to Spyder).
 - Cell detection uses a `# %%`-style marker and is implemented with `vim.regex` and `vim.iter` (Neovim 0.11+ APIs) for clarity and performance.
 - When `set_default_keymaps` is enabled, keymaps are also applied to already-open Python buffers at startup.
 
