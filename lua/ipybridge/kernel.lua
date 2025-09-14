@@ -1,4 +1,4 @@
--- Kernel management for my_ipy.nvim
+-- Kernel management for ipybridge.nvim
 -- Starts/stops a standalone Jupyter kernel and exposes its connection file.
 
 local uv = vim.uv
@@ -60,4 +60,3 @@ function M.stop()
 end
 
 return M
-

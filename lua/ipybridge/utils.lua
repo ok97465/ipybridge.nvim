@@ -1,4 +1,4 @@
--- Utility helpers for my_ipy.nvim
+-- Utility helpers for ipybridge.nvim
 -- All comments are written in English per user request.
 
 local uv = vim.uv
@@ -57,7 +57,7 @@ end
 -- Build a Python exec(compile(...)) that decodes a hex-encoded block and executes it in globals().
 function M.send_exec_block(py_src)
   local hex = to_hex(py_src)
-  local stmt = string.format("exec(compile(bytes.fromhex('%s').decode('utf-8'), '<my_ipy>', 'exec'), globals(), globals())\n", hex)
+  local stmt = string.format("exec(compile(bytes.fromhex('%s').decode('utf-8'), '<ipybridge>', 'exec'), globals(), globals())\n", hex)
   return stmt
 end
 
@@ -76,4 +76,3 @@ function M.paste_block(lines_tbl)
 end
 
 return M
-

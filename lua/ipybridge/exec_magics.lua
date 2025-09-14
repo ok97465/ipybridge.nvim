@@ -1,4 +1,4 @@
--- IPython execution magics for my_ipy.nvim
+-- IPython execution magics for ipybridge.nvim
 -- Provides Python code string that defines runcell/runfile line magics.
 
 local M = {}

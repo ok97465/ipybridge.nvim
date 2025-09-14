@@ -1,4 +1,4 @@
--- ZMQ client manager for my_ipy.nvim
+-- ZMQ client manager for ipybridge.nvim
 -- Spawns a background Python process that attaches to the existing IPython kernel
 -- via Jupyter's connection file and serves NDJSON over stdio.
 
@@ -46,7 +46,7 @@ local function on_stderr(job_id, data, _)
   local msg = table.concat(data, "\n")
   if #vim.trim(msg) > 0 then
     vim.schedule(function()
-      vim.notify('[my_ipy.zmq] stderr: ' .. msg, vim.log.levels.WARN)
+      vim.notify('[ipybridge.zmq] stderr: ' .. msg, vim.log.levels.WARN)
     end)
   end
 end

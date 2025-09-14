@@ -1,4 +1,4 @@
--- Variable Explorer UI for my_ipy.nvim
+-- Variable Explorer UI for ipybridge.nvim
 -- Renders a floating window listing variables with type/shape/preview.
 
 local api = vim.api
@@ -87,14 +87,14 @@ local function ensure_win()
   api.nvim_set_option_value('buftype', 'nofile', { buf = M.buf })
   api.nvim_set_option_value('bufhidden', 'wipe', { buf = M.buf })
   api.nvim_set_option_value('swapfile', false, { buf = M.buf })
-  api.nvim_set_option_value('filetype', 'myipy-vars', { buf = M.buf })
+  api.nvim_set_option_value('filetype', 'ipybridge-vars', { buf = M.buf })
   api.nvim_buf_set_option(M.buf, 'modifiable', false)
   -- Keymaps
   local function map(lhs, rhs, desc)
     vim.keymap.set('n', lhs, rhs, { buffer = M.buf, silent = true, nowait = true, desc = desc })
   end
   map('q', close_win, 'Close')
-  map('r', function() require('my_ipy').var_explorer_refresh() end, 'Refresh')
+  map('r', function() require('ipybridge').var_explorer_refresh() end, 'Refresh')
   map('<CR>', function()
     local lnum = api.nvim_win_get_cursor(M.win)[1]
     local name = M._line2name[lnum]
@@ -111,7 +111,7 @@ local function ensure_win()
         end
       end
       if previewable then
-        require('my_ipy.data_viewer').open(name)
+        require('ipybridge.data_viewer').open(name)
       end
     end
   end, 'Open viewer')
@@ -123,7 +123,7 @@ function M.open()
 end
 
 function M.refresh()
-  require('my_ipy').var_explorer_refresh()
+  require('ipybridge').var_explorer_refresh()
 end
 
 function M.on_vars(tbl)

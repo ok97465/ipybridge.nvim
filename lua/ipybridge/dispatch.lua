@@ -6,14 +6,14 @@ function M.handle(msg)
   -- msg: { tag = 'vars'|'preview'|..., data = table|nil, error = string|nil }
   if type(msg) ~= 'table' or not msg.tag then return end
   if msg.tag == 'vars' then
-    local ok, mod = pcall(require, 'my_ipy.var_explorer')
+    local ok, mod = pcall(require, 'ipybridge.var_explorer')
     if ok and mod and mod.on_vars then
       pcall(mod.on_vars, msg.data or {})
     end
     return
   end
   if msg.tag == 'preview' then
-    local ok, mod = pcall(require, 'my_ipy.data_viewer')
+    local ok, mod = pcall(require, 'ipybridge.data_viewer')
     if ok and mod and mod.on_preview then
       pcall(mod.on_preview, msg.data or { error = msg.error })
     end
@@ -22,4 +22,3 @@ function M.handle(msg)
 end
 
 return M
-

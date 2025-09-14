@@ -128,7 +128,7 @@ function TermIpy:__on_stdout(data)
     local ok, msg = pcall(vim.json.decode, payload)
     if ok and type(msg) == 'table' and msg.tag then
       pcall(function()
-        require('my_ipy.dispatch').handle(msg)
+        require('ipybridge.dispatch').handle(msg)
       end)
     end
     -- Drop up to end token

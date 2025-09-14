@@ -1,4 +1,4 @@
--- Keymap helpers for my_ipy.nvim
+-- Keymap helpers for ipybridge.nvim
 -- Comments in English; concise and explicit descriptions.
 
 local api = vim.api
@@ -7,8 +7,8 @@ local M = {}
 
 -- Apply a set of sensible default keymaps and user commands.
 function M.apply_defaults()
-  local my = require('my_ipy')
-  local group = api.nvim_create_augroup('MyIpyKeymaps', { clear = true })
+  local my = require('ipybridge')
+  local group = api.nvim_create_augroup('IpybridgeKeymaps', { clear = true })
 
   -- Apply Python buffer keymaps
   api.nvim_create_autocmd('FileType', {
@@ -24,21 +24,21 @@ function M.apply_defaults()
   pcall(vim.keymap.set, 't', '<leader>iv', function() my.goto_vi() end, { silent = true, desc = 'IPy: Back to editor' })
 
   -- Variable explorer commands (global)
-  pcall(vim.keymap.set, 'n', '<leader>vx', function() require('my_ipy').var_explorer_open() end, { silent = true, desc = 'IPy: Variable explorer' })
-  pcall(vim.keymap.set, 'n', '<leader>vr', function() require('my_ipy').var_explorer_refresh() end, { silent = true, desc = 'IPy: Refresh variables' })
+  pcall(vim.keymap.set, 'n', '<leader>vx', function() require('ipybridge').var_explorer_open() end, { silent = true, desc = 'IPy: Variable explorer' })
+  pcall(vim.keymap.set, 'n', '<leader>vr', function() require('ipybridge').var_explorer_refresh() end, { silent = true, desc = 'IPy: Refresh variables' })
 
   -- User commands for discoverability
-  pcall(api.nvim_create_user_command, 'MyIpyVars', function() require('my_ipy').var_explorer_open() end, {})
-  pcall(api.nvim_create_user_command, 'MyIpyVarsRefresh', function() require('my_ipy').var_explorer_refresh() end, {})
-  pcall(api.nvim_create_user_command, 'MyIpyPreview', function(opts)
+  pcall(api.nvim_create_user_command, 'IpybridgeVars', function() require('ipybridge').var_explorer_open() end, {})
+  pcall(api.nvim_create_user_command, 'IpybridgeVarsRefresh', function() require('ipybridge').var_explorer_refresh() end, {})
+  pcall(api.nvim_create_user_command, 'IpybridgePreview', function(opts)
     local name = (opts and opts.args) or ''
-    if name ~= '' then require('my_ipy').request_preview(name) end
+    if name ~= '' then require('ipybridge').request_preview(name) end
   end, { nargs = 1, complete = 'buffer' })
 end
 
 -- Apply buffer-local keymaps for Python files.
 function M.apply_buffer(bufnr)
-  local my = require('my_ipy')
+  local my = require('ipybridge')
   local function set(mode, lhs, rhs, desc)
     vim.keymap.set(mode, lhs, rhs, { desc = desc, silent = true, buffer = bufnr })
   end
@@ -68,4 +68,3 @@ function M.apply_buffer(bufnr)
 end
 
 return M
-

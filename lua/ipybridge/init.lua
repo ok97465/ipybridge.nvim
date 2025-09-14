@@ -1,17 +1,17 @@
 -- This plugin requires Neovim 0.11 or newer.
 -- Fail fast on older versions to prevent undefined behavior.
 if vim.fn.has('nvim-0.11') ~= 1 then
-  error('my_ipy.nvim requires Neovim 0.11 or newer')
+  error('ipybridge.nvim requires Neovim 0.11 or newer')
 end
 
 local vim = vim
 local api = vim.api
 local fn = vim.fn
-local term_helper = require("my_ipy.term_ipy")
+local term_helper = require("ipybridge.term_ipy")
 -- Refactored internal modules (utilities, keymaps, kernel manager)
-local utils = require("my_ipy.utils")
-local keymaps = require("my_ipy.keymaps")
-local kernel = require("my_ipy.kernel")
+local utils = require("ipybridge.utils")
+local keymaps = require("ipybridge.keymaps")
+local kernel = require("ipybridge.kernel")
 local fs = vim.fs
 local uv = vim.uv
 
@@ -177,7 +177,7 @@ M.open = function(go_back, cb)
     -- Ensure we have a kernel running and a connection file
     kernel.ensure(M.config.python_cmd, function(ok, conn_file)
         if not ok then
-            vim.notify('my_ipy: failed to start Jupyter kernel', vim.log.levels.ERROR)
+            vim.notify('ipybridge: failed to start Jupyter kernel', vim.log.levels.ERROR)
             if cb then cb(false) end
             return
         end
@@ -197,7 +197,7 @@ M.open = function(go_back, cb)
         M.ensure_zmq(function(ok2)
             if not ok2 then
                 vim.schedule(function()
-                    vim.notify('my_ipy: failed to start ZMQ backend', vim.log.levels.WARN)
+                    vim.notify('ipybridge: failed to start ZMQ backend', vim.log.levels.WARN)
                 end)
             end
         end)
@@ -452,7 +452,7 @@ end
 
 -- Define a Spyder-like runcell helper and register an IPython line magic.
 local function _runcell_py_code()
-  return require('my_ipy.exec_magics').build()
+  return require('ipybridge.exec_magics').build()
 end
 
 function M._ensure_runcell_helpers()
@@ -527,7 +527,7 @@ M.close = function()
 		fn.jobstop(M.term_instance.job_id)
 	end
     M._zmq_ready = false
-    pcall(function() require('my_ipy.zmq_client').stop() end)
+    pcall(function() require('ipybridge.zmq_client').stop() end)
     -- Stop the background kernel process
     pcall(kernel.stop)
     if M._helpers_path then
@@ -703,7 +703,7 @@ end
 
 -- Public: open the variable explorer window and refresh data.
 M.var_explorer_open = function()
-  require('my_ipy.var_explorer').open()
+  require('ipybridge.var_explorer').open()
   -- Trigger a vars request; request_vars() self-ensures ZMQ readiness.
   -- Avoid redundant readiness checks here.
   M.request_vars()
@@ -718,14 +718,14 @@ end
 -- Internal: request variable list from kernel.
 function M.request_vars()
   if M.config.use_zmq and M._zmq_ready then
-    local z = require('my_ipy.zmq_client')
+    local z = require('ipybridge.zmq_client')
     local ok_req = z.request('vars', {
       max_repr = 120,
       hide_names = M.config.hidden_var_names,
       hide_types = M.config.hidden_type_names,
     }, function(msg)
       if msg and msg.ok and msg.tag == 'vars' then
-        local ok, vx = pcall(require, 'my_ipy.var_explorer')
+        local ok, vx = pcall(require, 'ipybridge.var_explorer')
         if ok and vx and vx.on_vars then
           vim.schedule(function()
             vx.on_vars(msg.data or {})
@@ -733,12 +733,12 @@ function M.request_vars()
         end
       else
         vim.schedule(function()
-          vim.notify('my_ipy: ZMQ vars request failed', vim.log.levels.WARN)
+          vim.notify('ipybridge: ZMQ vars request failed', vim.log.levels.WARN)
         end)
       end
     end)
     if not ok_req then
-      vim.notify('my_ipy: ZMQ request send failed', vim.log.levels.WARN)
+      vim.notify('ipybridge: ZMQ request send failed', vim.log.levels.WARN)
     end
     return
   end
@@ -747,7 +747,7 @@ function M.request_vars()
     if ok then
       M.request_vars()
     else
-      vim.notify('my_ipy: ZMQ backend not available; vars unavailable', vim.log.levels.WARN)
+      vim.notify('ipybridge: ZMQ backend not available; vars unavailable', vim.log.levels.WARN)
     end
   end)
 end
@@ -756,10 +756,10 @@ end
 function M.request_preview(name)
   if not name or #name == 0 then return end
   if M.config.use_zmq and M._zmq_ready then
-    local z = require('my_ipy.zmq_client')
+    local z = require('ipybridge.zmq_client')
     local ok_req = z.request('preview', { name = name, max_rows = M.config.viewer_max_rows, max_cols = M.config.viewer_max_cols }, function(msg)
       if msg and msg.ok and msg.tag == 'preview' then
-        local ok, dv = pcall(require, 'my_ipy.data_viewer')
+        local ok, dv = pcall(require, 'ipybridge.data_viewer')
         if ok and dv and dv.on_preview then
           vim.schedule(function()
             dv.on_preview(msg.data or {})
@@ -767,12 +767,12 @@ function M.request_preview(name)
         end
       else
         vim.schedule(function()
-          vim.notify('my_ipy: ZMQ preview request failed', vim.log.levels.WARN)
+          vim.notify('ipybridge: ZMQ preview request failed', vim.log.levels.WARN)
         end)
       end
     end)
     if not ok_req then
-      vim.notify('my_ipy: ZMQ request send failed', vim.log.levels.WARN)
+      vim.notify('ipybridge: ZMQ request send failed', vim.log.levels.WARN)
     end
     return
   end
@@ -781,7 +781,7 @@ function M.request_preview(name)
     if ok then
       M.request_preview(name)
     else
-      vim.notify('my_ipy: ZMQ backend not available; preview unavailable', vim.log.levels.WARN)
+      vim.notify('ipybridge: ZMQ backend not available; preview unavailable', vim.log.levels.WARN)
     end
   end)
 end
@@ -792,10 +792,10 @@ function M.ensure_zmq(cb)
   if M._zmq_ready then if cb then cb(true) end; return end
   M._ensure_conn_file(function(ok, conn_file)
     if not ok or not conn_file then if cb then cb(false) end; return end
-    local z = require('my_ipy.zmq_client')
+    local z = require('ipybridge.zmq_client')
     -- Resolve backend path relative to repo root: ../../ -> python/myipy_kernel_client.py
     local this = debug.getinfo(1, 'S').source:sub(2)
-    local plugin_dir = fn.fnamemodify(this, ':h')           -- /repo/lua/my_ipy
+    local plugin_dir = fn.fnamemodify(this, ':h')           -- /repo/lua/ipybridge
     local repo_root = fn.fnamemodify(plugin_dir, ':h:h')     -- /repo
     local backend = repo_root .. '/python/myipy_kernel_client.py'
     local ok_start = z.start(M.config.python_cmd, conn_file, backend, M.config.zmq_debug)

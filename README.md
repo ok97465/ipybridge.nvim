@@ -1,4 +1,4 @@
-# my_ipy.nvim
+# ipybridge.nvim
 
 Minimal helper to run IPython/Jupyter in a terminal split and send code from the current buffer, tuned for Neovim 0.11+.
 
@@ -13,9 +13,9 @@ Installation (lazy.nvim)
 - Example:
   ```lua
   {
-    "ok97465/my_ipy.nvim",
+    "ok97465/ipybridge.nvim",
     config = function()
-      require("my_ipy").setup({
+      require("ipybridge").setup({
         profile_name = "vim",           -- or nil to omit --profile
         startup_script = "import_in_console.py", -- looked up in CWD
         sleep_ms_after_open = 1000,      -- defer init to allow IPython to start
@@ -67,19 +67,19 @@ Cell Syntax
 - A “cell” runs from the most recent `# %%` (or file start) up to the line before the next `# %%` (or file end).
 
 API
-- `require('my_ipy').setup(opts)` — Configure the plugin.
-- `require('my_ipy').toggle()` — Toggle the IPython terminal split.
-- `require('my_ipy').open(go_back)` — Open the terminal. If `go_back` is `true`, jump back to the previous window after initialization.
-- `require('my_ipy').close()` — Close the terminal job if running.
-- `require('my_ipy').goto_ipy()` — Focus the IPython split and enter insert mode.
-- `require('my_ipy').goto_vi()` — Return focus from the IPython split to the previous window.
-- `require('my_ipy').run_file()` — Run the current file via `%run <filebase>` in IPython.
-- `require('my_ipy').run_line()` — Send the current line, then move the cursor down.
-- `require('my_ipy').run_lines()` — Send the current visual selection (linewise) to IPython.
-- `require('my_ipy').send_lines(start_line, end_line)` — Send lines `[start_line, end_line)` by 0-indexed range.
-- `require('my_ipy').run_cmd(cmd)` — Send an arbitrary command string.
-- `require('my_ipy').run_cell()` — Run the current cell and move the cursor to the beginning of the next one.
-- `require('my_ipy').up_cell()` / `down_cell()` — Move to the previous/next cell.
+- `require('ipybridge').setup(opts)` — Configure the plugin.
+- `require('ipybridge').toggle()` — Toggle the IPython terminal split.
+- `require('ipybridge').open(go_back)` — Open the terminal. If `go_back` is `true`, jump back to the previous window after initialization.
+- `require('ipybridge').close()` — Close the terminal job if running.
+- `require('ipybridge').goto_ipy()` — Focus the IPython split and enter insert mode.
+- `require('ipybridge').goto_vi()` — Return focus from the IPython split to the previous window.
+- `require('ipybridge').run_file()` — Run the current file via `%run <filebase>` in IPython.
+- `require('ipybridge').run_line()` — Send the current line, then move the cursor down.
+- `require('ipybridge').run_lines()` — Send the current visual selection (linewise) to IPython.
+- `require('ipybridge').send_lines(start_line, end_line)` — Send lines `[start_line, end_line)` by 0-indexed range.
+- `require('ipybridge').run_cmd(cmd)` — Send an arbitrary command string.
+- `require('ipybridge').run_cell()` — Run the current cell and move the cursor to the beginning of the next one.
+- `require('ipybridge').up_cell()` / `down_cell()` — Move to the previous/next cell.
 
 Notes
 - On open, the plugin starts a Jupyter kernel and attaches a `jupyter console --existing` in a `botright vsplit`.
@@ -138,9 +138,9 @@ Global
   - `<leader>iv` → back to editor (works anywhere; exits terminal and jumps back)
 
 User Commands
-- `:MyIpyVars` → open variable explorer
-- `:MyIpyVarsRefresh` → refresh variables
-- `:MyIpyPreview <name>` → open preview for a variable or path (supports dotted/indexed paths, e.g., `yy.b`, `yy.c`, `hh.h2`, `arr[0]`)
+- `:IpybridgeVars` → open variable explorer
+- `:IpybridgeVarsRefresh` → refresh variables
+- `:IpybridgePreview <name>` → open preview for a variable or path (supports dotted/indexed paths, e.g., `yy.b`, `yy.c`, `hh.h2`, `arr[0]`)
 
 Terminal Buffers
 - Terminal mode:
@@ -148,25 +148,25 @@ Terminal Buffers
 
 Manual Mappings Example
 ```lua
-local my_ipy = require('my_ipy')
+local ipybridge = require('ipybridge')
 vim.api.nvim_create_autocmd('FileType', {
   pattern = 'python',
   callback = function()
-    vim.keymap.set('n', '<leader>ti', my_ipy.toggle, { buffer = true })
-    vim.keymap.set('n', '<leader>ii', my_ipy.goto_ipy, { buffer = true })
-    vim.keymap.set('n', '<leader>iv', my_ipy.goto_vi,  { buffer = true })
-    vim.keymap.set('n', '<leader><CR>', my_ipy.run_cell, { buffer = true })
-    vim.keymap.set('n', '<F5>', my_ipy.run_file, { buffer = true })
-    vim.keymap.set('n', '<leader>r', my_ipy.run_line, { buffer = true })
-    vim.keymap.set('v', '<leader>r', my_ipy.run_lines, { buffer = true })
-    vim.keymap.set('n', '<F9>', my_ipy.run_line, { buffer = true })
-    vim.keymap.set('v', '<F9>', my_ipy.run_lines, { buffer = true })
-    vim.keymap.set('n', ']c', my_ipy.down_cell, { buffer = true })
-    vim.keymap.set('n', '[c', my_ipy.up_cell,   { buffer = true })
-    vim.keymap.set('v', ']c', my_ipy.down_cell, { buffer = true })
-    vim.keymap.set('v', '[c', my_ipy.up_cell,   { buffer = true })
+    vim.keymap.set('n', '<leader>ti', ipybridge.toggle, { buffer = true })
+    vim.keymap.set('n', '<leader>ii', ipybridge.goto_ipy, { buffer = true })
+    vim.keymap.set('n', '<leader>iv', ipybridge.goto_vi,  { buffer = true })
+    vim.keymap.set('n', '<leader><CR>', ipybridge.run_cell, { buffer = true })
+    vim.keymap.set('n', '<F5>', ipybridge.run_file, { buffer = true })
+    vim.keymap.set('n', '<leader>r', ipybridge.run_line, { buffer = true })
+    vim.keymap.set('v', '<leader>r', ipybridge.run_lines, { buffer = true })
+    vim.keymap.set('n', '<F9>', ipybridge.run_line, { buffer = true })
+    vim.keymap.set('v', '<F9>', ipybridge.run_lines, { buffer = true })
+    vim.keymap.set('n', ']c', ipybridge.down_cell, { buffer = true })
+    vim.keymap.set('n', '[c', ipybridge.up_cell,   { buffer = true })
+    vim.keymap.set('v', ']c', ipybridge.down_cell, { buffer = true })
+    vim.keymap.set('v', '[c', ipybridge.up_cell,   { buffer = true })
     -- In the terminal buffer, set this (example):
-    -- vim.keymap.set('t', '<leader>iv', my_ipy.goto_vi, { buffer = <ipy_bufnr> })
+    -- vim.keymap.set('t', '<leader>iv', ipybridge.goto_vi, { buffer = <ipy_bufnr> })
   end,
 })
 ```
@@ -179,14 +179,14 @@ Troubleshooting
 
 Developer Notes
 - Modules and responsibilities:
-  - `lua/my_ipy/init.lua`: public API and orchestration of features.
-  - `lua/my_ipy/term_ipy.lua`: terminal split wrapper (open/send/scroll/cleanup).
-  - `lua/my_ipy/utils.lua`: small utilities (quoting, selection range, exec helpers).
-  - `lua/my_ipy/keymaps.lua`: default keymaps and user commands.
-  - `lua/my_ipy/kernel.lua`: standalone ipykernel lifecycle and connection file.
-  - `lua/my_ipy/zmq_client.lua`: NDJSON ZMQ bridge to the kernel (vars/preview).
-  - `lua/my_ipy/dispatch.lua`: routes decoded messages to UI modules.
-  - `lua/my_ipy/var_explorer.lua`: variable explorer floating window.
-  - `lua/my_ipy/data_viewer.lua`: preview window for arrays/dataframes/objects.
-  - `lua/my_ipy/exec_magics.lua`: IPython runcell/runfile execution magics.
+  - `lua/ipybridge/init.lua`: public API and orchestration of features.
+  - `lua/ipybridge/term_ipy.lua`: terminal split wrapper (open/send/scroll/cleanup).
+  - `lua/ipybridge/utils.lua`: small utilities (quoting, selection range, exec helpers).
+  - `lua/ipybridge/keymaps.lua`: default keymaps and user commands.
+  - `lua/ipybridge/kernel.lua`: standalone ipykernel lifecycle and connection file.
+  - `lua/ipybridge/zmq_client.lua`: NDJSON ZMQ bridge to the kernel (vars/preview).
+  - `lua/ipybridge/dispatch.lua`: routes decoded messages to UI modules.
+  - `lua/ipybridge/var_explorer.lua`: variable explorer floating window.
+  - `lua/ipybridge/data_viewer.lua`: preview window for arrays/dataframes/objects.
+  - `lua/ipybridge/exec_magics.lua`: IPython runcell/runfile execution magics.
 - Public API remains the same; internals are split for readability and maintenance.

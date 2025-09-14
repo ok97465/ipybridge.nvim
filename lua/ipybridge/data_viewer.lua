@@ -207,7 +207,7 @@ local function drilldown_current()
     M.name = path
     update_title(path)
     set_content({ 'Loading preview for ' .. tostring(path) .. ' ...' })
-    require('my_ipy').request_preview(path)
+    require('ipybridge').request_preview(path)
   end
 end
 
@@ -230,14 +230,14 @@ local function ensure_win(name)
   api.nvim_set_option_value('buftype', 'nofile', { buf = M.buf })
   api.nvim_set_option_value('bufhidden', 'wipe', { buf = M.buf })
   api.nvim_set_option_value('swapfile', false, { buf = M.buf })
-  api.nvim_set_option_value('filetype', 'myipy-view', { buf = M.buf })
+  api.nvim_set_option_value('filetype', 'ipybridge-view', { buf = M.buf })
   api.nvim_buf_set_option(M.buf, 'modifiable', false)
   local function map(lhs, rhs, desc)
     vim.keymap.set('n', lhs, rhs, { buffer = M.buf, silent = true, nowait = true, desc = desc })
   end
   map('q', close_win, 'Close')
   map('r', function()
-    if M.name then require('my_ipy').request_preview(M.name) end
+    if M.name then require('ipybridge').request_preview(M.name) end
   end, 'Refresh')
   map('<CR>', drilldown_current, 'Drill-down preview')
 end
@@ -247,7 +247,7 @@ function M.open(name)
   ensure_win(name)
   update_title(name)
   set_content({ 'Loading preview for ' .. tostring(name) .. ' ...' })
-  require('my_ipy').request_preview(name)
+  require('ipybridge').request_preview(name)
 end
 
 function M.on_preview(data)
