@@ -65,6 +65,21 @@ local function file_exists(path)
   return uv.fs_stat(path) and true or false
 end
 
+-- Normalize a filesystem path for Python literals (portable across OS).
+-- 1) Convert Windows backslashes to forward slashes
+-- 2) Quote for single or double-quoted Python strings as needed
+local function _norm_path(p)
+  return tostring(p or ''):gsub('\\', '/')
+end
+
+local function _py_quote_single(p)
+  return _norm_path(p):gsub("'", "\\'")
+end
+
+local function _py_quote_double(p)
+  return _norm_path(p):gsub('"', '\\"')
+end
+
 -- Return normalized 0-indexed (start_row, start_col, end_row, end_col) of visual selection.
 -- Return a 0-indexed (start_row, end_row_exclusive) line range for visual selection.
 -- Works reliably even when called directly from a visual-mode mapping by using getpos('v').
@@ -137,7 +152,8 @@ end
 
 -- Build a short Python statement to exec a file's contents in globals().
 local function exec_file_stmt(path)
-  local safe = tostring(path):gsub("'", "\\'")
+  -- Read and exec file contents in globals(); path is single-quoted
+  local safe = _py_quote_single(path)
   return string.format("exec(open('%s', 'r', encoding='utf-8').read(), globals(), globals())\n", safe)
 end
 
@@ -155,7 +171,7 @@ local function set_exec_cwd_for(file_path)
   end
   if not dir or #dir == 0 then return end
   if M._last_cwd_sent == dir then return end
-  local safe = tostring(dir):gsub("'", "\\'")
+  local safe = _py_quote_single(dir)
   -- Use IPython magic with quiet flag; avoid extra output
   M.term_instance:send(string.format("%%cd -q '%s'\n", safe))
   M._last_cwd_sent = dir
@@ -807,9 +823,9 @@ M.run_file = function()
 			elseif mode == 'pwd' then
 				cwd_arg = fn.getcwd()
 			end
-			local safe = tostring(abs_path):gsub("'", "\\'")
+			local safe = _py_quote_single(abs_path)
 			if cwd_arg and #cwd_arg > 0 then
-				local safecwd = tostring(cwd_arg):gsub("'", "\\'")
+				local safecwd = _py_quote_single(cwd_arg)
 				M.term_instance:send(string.format("runfile('%s','%s')\n", safe, safecwd))
 			else
 				M.term_instance:send(string.format("runfile('%s')\n", safe))
@@ -817,7 +833,7 @@ M.run_file = function()
 		else
 			-- Adjust working directory as configured and use %run
 			set_exec_cwd_for(abs_path)
-			local safe = tostring(abs_path):gsub('"', '\\"')
+			local safe = _py_quote_double(abs_path)
 			M.term_instance:send(string.format("%%run \"%s\"\n", safe))
 		end
 	end
@@ -1032,9 +1048,9 @@ M.run_cell = function()
 					if s ~= nil then idx = idx + 1 end
 				end
 				M._ensure_runcell_helpers()
-				local safe = tostring(path):gsub("'", "\\'")
+				local safe = _py_quote_single(path)
 				if cwd_arg and #cwd_arg > 0 then
-					local safecwd = tostring(cwd_arg):gsub("'", "\\'")
+					local safecwd = _py_quote_single(cwd_arg)
 					M.term_instance:send(string.format("runcell(%d, '%s', '%s')\n", idx, safe, safecwd))
 				else
 					M.term_instance:send(string.format("runcell(%d, '%s')\n", idx, safe))
