@@ -83,6 +83,50 @@ local function render_generic(data)
   return lines
 end
 
+-- Render ctypes.Structure preview
+local function render_ctypes(data)
+  local lines = {}
+  local sname = tostring(data.struct_name or '')
+  table.insert(lines, string.format('ctypes.Structure %s', sname))
+  table.insert(lines, string.rep('-', 80))
+  local fields = type(data.fields) == 'table' and data.fields or {}
+  if #fields == 0 then
+    table.insert(lines, '(no fields)')
+    return lines
+  end
+  for _, it in ipairs(fields) do
+    local fname = tostring(it.name or '')
+    local ctype = tostring(it.ctype or '')
+    local kind = tostring(it.kind or '')
+    if kind == 'array' then
+      local vals = {}
+      for _, v in ipairs(it.values or {}) do table.insert(vals, to_str(v)) end
+      local suffix = ''
+      if type(it.length) == 'number' then suffix = string.format(' len=%d', it.length) end
+      table.insert(lines, string.format('%s [%s]%s: [ %s ]', fname, ctype, suffix, table.concat(vals, ', ')))
+    elseif kind == 'struct' then
+      -- Nested struct: render as JSON-ish
+      local v = it.value
+      local ok, encoded = pcall(vim.fn.json_encode, v)
+      table.insert(lines, string.format('%s [%s]: %s', fname, ctype, ok and encoded or to_str(v)))
+    else
+      table.insert(lines, string.format('%s [%s]: %s', fname, ctype, to_str(it.value)))
+    end
+  end
+  return lines
+end
+
+-- Render standalone ctypes.Array preview
+local function render_ctypes_array(data)
+  local lines = {}
+  table.insert(lines, string.format('ctypes.Array %s len=%s', tostring(data.ctype or ''), tostring(data.length or '')))
+  table.insert(lines, string.rep('-', 80))
+  local vals = {}
+  for _, v in ipairs(data.values or {}) do table.insert(vals, to_str(v)) end
+  table.insert(lines, '[ ' .. table.concat(vals, ', ') .. ' ]')
+  return lines
+end
+
 local function set_content(lines)
   if not is_open() then return end
   -- Normalize: nvim_buf_set_lines requires each item to be a single line
@@ -157,6 +201,10 @@ function M.on_preview(data)
     lines = render_df(data)
   elseif data.kind == 'ndarray' then
     lines = render_nd(data)
+  elseif data.kind == 'ctypes' then
+    lines = render_ctypes(data)
+  elseif data.kind == 'ctypes_array' then
+    lines = render_ctypes_array(data)
   else
     lines = render_generic(data)
   end

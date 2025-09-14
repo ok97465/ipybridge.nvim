@@ -29,6 +29,7 @@ def main():
 
     PRELUDE = r'''
 import json, types
+# Optional scientific libs
 try:
     import numpy as _np
 except Exception:
@@ -37,6 +38,11 @@ try:
     import pandas as _pd
 except Exception:
     _pd = None
+# Optional ctypes for struct/array preview
+try:
+    import ctypes as _ct
+except Exception:
+    _ct = None
 
 def __mi_srepr(x, n=120):
     try:
@@ -111,6 +117,7 @@ def __mi_preview(name, max_rows=50, max_cols=20):
     if name not in g:
         print(json.dumps({"name": name, "error": "Name not found"})); return
     obj = g[name]
+    # Preview for pandas.DataFrame
     try:
         if _pd is not None and isinstance(obj, _pd.DataFrame):
             df = obj.iloc[:max_rows, :max_cols]
@@ -124,6 +131,7 @@ def __mi_preview(name, max_rows=50, max_cols=20):
             print(json.dumps(data, ensure_ascii=False)); return
     except Exception as e:
         print(json.dumps({"name": name, "error": str(e)})); return
+    # Preview for numpy.ndarray
     try:
         if _np is not None and isinstance(obj, _np.ndarray):
             arr = obj
@@ -137,6 +145,126 @@ def __mi_preview(name, max_rows=50, max_cols=20):
             print(json.dumps(info, ensure_ascii=False)); return
     except Exception as e:
         print(json.dumps({"name": name, "error": str(e)})); return
+    # Preview for ctypes.Structure and ctypes.Array
+    try:
+        if _ct is not None and isinstance(obj, _ct.Structure):
+            # Helper: stringify a ctypes type nicely
+            def _ctype_name(t):
+                try:
+                    return getattr(t, '__name__', str(t))
+                except Exception:
+                    return str(t)
+            # Helper: extract array element type if possible
+            def _array_elt_type(a_type):
+                try:
+                    return getattr(a_type, '_type_', None)
+                except Exception:
+                    return None
+            # Helper: convert ctypes value/array/struct into Python-native preview
+            def _unbox(x, depth=0, max_elems= max_cols if isinstance(max_cols, int) else 20):
+                # Limit recursion depth to avoid cycles
+                if depth > 5:
+                    return '<depth limit>'
+                try:
+                    if _ct is not None and isinstance(x, _ct.Array):
+                        n = len(x)
+                        out = []
+                        m = int(max_elems) if isinstance(max_elems, int) else 20
+                        for i in range(min(n, m)):
+                            out.append(_unbox(x[i], depth+1, max_elems))
+                        if n > m:
+                            out.append(f'...(+{n-m} more)')
+                        return out
+                    if _ct is not None and isinstance(x, _ct.Structure):
+                        d = {}
+                        for fname, ftype in getattr(x, '_fields_', []) or []:
+                            try:
+                                fv = getattr(x, fname)
+                            except Exception:
+                                fv = '<unreadable>'
+                            d[str(fname)] = _unbox(fv, depth+1, max_elems)
+                        return d
+                    # Try .value for simple ctypes scalars
+                    try:
+                        return getattr(x, 'value')
+                    except Exception:
+                        pass
+                    # Fallback: return as-is if JSON can handle, else repr
+                    if isinstance(x, (str, int, float, bool)) or x is None:
+                        return x
+                    return __mi_srepr(x, 120)
+                except Exception:
+                    return '<error>'
+            # Build field list for Structure
+            items = []
+            try:
+                for fname, ftype in getattr(obj, '_fields_', []) or []:
+                    try:
+                        raw = getattr(obj, fname)
+                    except Exception as e:
+                        raw = '<unreadable>'
+                    entry = {
+                        'name': str(fname),
+                        'ctype': _ctype_name(ftype),
+                    }
+                    try:
+                        if _ct is not None and isinstance(raw, _ct.Array):
+                            # Array preview
+                            elt_t = _array_elt_type(ftype)
+                            entry['kind'] = 'array'
+                            entry['elem_ctype'] = _ctype_name(elt_t) if elt_t else None
+                            n = len(raw)
+                            entry['length'] = int(n)
+                            m = int(max_cols) if isinstance(max_cols, int) else 20
+                            entry['values'] = _unbox(raw, 0, m)
+                        elif _ct is not None and isinstance(raw, _ct.Structure):
+                            entry['kind'] = 'struct'
+                            entry['value'] = _unbox(raw, 0, max_cols)
+                        else:
+                            entry['kind'] = 'scalar'
+                            entry['value'] = _unbox(raw, 0, max_cols)
+                    except Exception:
+                        entry['kind'] = 'unknown'
+                        entry['value'] = '<error>'
+                    items.append(entry)
+            except Exception as e:
+                print(json.dumps({"name": name, "error": f"ctypes inspect error: {e}"})); return
+            data = {
+                'name': name,
+                'kind': 'ctypes',
+                'struct_name': type(obj).__name__,
+                'fields': items,
+            }
+            print(json.dumps(data, ensure_ascii=False)); return
+        # Standalone ctypes arrays (not within a Structure)
+        if _ct is not None and isinstance(obj, _ct.Array):
+            def _unbox_arr(a, max_elems= max_rows if isinstance(max_rows, int) else 50):
+                try:
+                    n = len(a)
+                    m = int(max_elems)
+                    out = []
+                    for i in range(min(n, m)):
+                        x = a[i]
+                        try:
+                            v = getattr(x, 'value')
+                        except Exception:
+                            v = x
+                        out.append(v)
+                    if n > m:
+                        out.append(f'...(+{n-m} more)')
+                    return out
+                except Exception:
+                    return __mi_srepr(a, 200)
+            data = {
+                'name': name,
+                'kind': 'ctypes_array',
+                'ctype': getattr(type(obj), '__name__', str(type(obj))),
+                'length': int(len(obj)),
+                'values': _unbox_arr(obj),
+            }
+            print(json.dumps(data, ensure_ascii=False)); return
+    except Exception as e:
+        print(json.dumps({"name": name, "error": f"ctypes error: {e}"})); return
     print(json.dumps({"name": name, "kind": "object", "repr": __mi_srepr(obj, 300)}, ensure_ascii=False))
 '''
 
