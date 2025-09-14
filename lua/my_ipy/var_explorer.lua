@@ -99,8 +99,20 @@ local function ensure_win()
     local lnum = api.nvim_win_get_cursor(M.win)[1]
     local name = M._line2name[lnum]
     if name then
-      -- Open viewer for selected variable
-      require('my_ipy.data_viewer').open(name)
+      local it = M.vars[name] or {}
+      local kind = tostring(it.kind or '')
+      local previewable = false
+      if kind == 'ndarray' or kind == 'dataframe' or kind == 'dataclass' or kind == 'ctypes' or kind == 'ctypes_array' then
+        previewable = true
+      else
+        local r = tostring(it.repr or '')
+        if #r >= 3 and r:sub(-3) == '...' then
+          previewable = true
+        end
+      end
+      if previewable then
+        require('my_ipy.data_viewer').open(name)
+      end
     end
   end, 'Open viewer')
 end

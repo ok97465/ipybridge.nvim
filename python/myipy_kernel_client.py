@@ -43,6 +43,90 @@ try:
     import ctypes as _ct
 except Exception:
     _ct = None
+try:
+    import dataclasses as _dc
+except Exception:
+    _dc = None
+
+# Resolve dotted/indexed path like: foo.bar[0]['key']
+def __mi_resolve_path(path):
+    # Simple path resolver: globals.name[...].attr ...
+    s = str(path)
+    n = len(s)
+    i = 0
+    def _is_ident_char(ch):
+        return ch.isalnum() or ch == '_'
+    def _read_ident(idx):
+        j = idx
+        while j < n and _is_ident_char(s[j]):
+            j += 1
+        return (s[idx:j] if j > idx else None), j
+    try:
+        # Skip leading spaces
+        while i < n and s[i].isspace():
+            i += 1
+        name, i = _read_ident(i)
+        if not name:
+            return False, None, 'invalid start'
+        g = globals()
+        if name not in g:
+            return False, None, 'Name not found'
+        cur = g[name]
+        while i < n:
+            ch = s[i]
+            if ch.isspace():
+                i += 1
+                continue
+            if ch == '.':
+                i += 1
+                ident, i = _read_ident(i)
+                if not ident:
+                    return False, None, 'invalid attribute'
+                cur = getattr(cur, ident)
+                continue
+            if ch == '[':
+                i += 1
+                # key could be int or quoted string
+                if i < n and s[i] in "'\"":
+                    q = s[i]; i += 1
+                    buf = ''
+                    while i < n:
+                        c = s[i]
+                        if c == '\\':
+                            if i + 1 < n:
+                                buf += s[i+1]
+                                i += 2
+                                continue
+                        if c == q:
+                            break
+                        buf += c
+                        i += 1
+                    if i >= n or s[i] != q:
+                        return False, None, 'unterminated string key'
+                    key = buf
+                    i += 1
+                else:
+                    j = i
+                    neg = False
+                    if j < n and s[j] == '-':
+                        neg = True; j += 1
+                    while j < n and s[j].isdigit():
+                        j += 1
+                    if j == i + (1 if neg else 0):
+                        return False, None, 'invalid index'
+                    key = int(s[i:j])
+                    i = j
+                # expect closing ]
+                if i >= n or s[i] != ']':
+                    return False, None, 'missing ]'
+                i += 1
+                cur = cur[key]
+                continue
+            # Unexpected character
+            return False, None, 'invalid character'
+        return True, cur, None
+    except Exception as e:
+        return False, None, str(e)
 
 def __mi_srepr(x, n=120):
     try:
@@ -103,20 +187,37 @@ def __mi_list_vars(max_repr=120, hide_names=None, hide_types=None):
         br = __mi_srepr(v, max_repr)
         try:
             dtype = None
+            kind = None
             if _np is not None and isinstance(v, _np.ndarray):
                 dtype = str(v.dtype)
+                kind = 'ndarray'
             elif _pd is not None and isinstance(v, _pd.DataFrame):
-                dtype = str(v.dtypes.to_dict())
+                try:
+                    dtype = str(v.dtypes.to_dict())
+                except Exception:
+                    dtype = None
+                kind = 'dataframe'
+            else:
+                # Secondary kinds
+                try:
+                    if _dc is not None and _dc.is_dataclass(v):
+                        kind = 'dataclass'
+                    elif _ct is not None and isinstance(v, _ct.Structure):
+                        kind = 'ctypes'
+                    elif _ct is not None and isinstance(v, _ct.Array):
+                        kind = 'ctypes_array'
+                except Exception:
+                    pass
         except Exception:
             dtype = None
-        out[k] = {"type": t, "shape": shp, "dtype": dtype, "repr": br}
+            kind = None
+        out[k] = {"type": t, "shape": shp, "dtype": dtype, "repr": br, "kind": kind}
     print(json.dumps(out, ensure_ascii=False))
 
 def __mi_preview(name, max_rows=50, max_cols=20):
-    g = globals()
-    if name not in g:
-        print(json.dumps({"name": name, "error": "Name not found"})); return
-    obj = g[name]
+    ok_path, obj, perr = __mi_resolve_path(name)
+    if not ok_path:
+        print(json.dumps({"name": name, "error": perr or "Name not found"})); return
     # Preview for pandas.DataFrame
     try:
         if _pd is not None and isinstance(obj, _pd.DataFrame):
@@ -145,6 +246,31 @@ def __mi_preview(name, max_rows=50, max_cols=20):
             print(json.dumps(info, ensure_ascii=False)); return
     except Exception as e:
         print(json.dumps({"name": name, "error": str(e)})); return
+    # Preview for dataclasses: show field summaries and array/dataframe shapes
+    try:
+        if _dc is not None and _dc.is_dataclass(obj):
+            items = []
+            for f in _dc.fields(obj):
+                fname = f.name
+                try:
+                    fv = getattr(obj, fname)
+                except Exception:
+                    fv = '<unreadable>'
+                entry = { 'name': str(fname), 'type': getattr(f.type, '__name__', str(f.type)) }
+                try:
+                    if _np is not None and isinstance(fv, _np.ndarray):
+                        entry.update({ 'kind': 'ndarray', 'shape': list(getattr(fv, 'shape', [])), 'dtype': str(getattr(fv, 'dtype', '')) })
+                    elif _pd is not None and isinstance(fv, _pd.DataFrame):
+                        entry.update({ 'kind': 'dataframe', 'shape': [int(fv.shape[0]), int(fv.shape[1])] })
+                    else:
+                        entry.update({ 'kind': 'value', 'repr': __mi_srepr(fv, 120) })
+                except Exception:
+                    entry.update({ 'kind': 'value', 'repr': '<error>' })
+                items.append(entry)
+            data = { 'name': name, 'kind': 'dataclass', 'class_name': type(obj).__name__, 'fields': items }
+            print(json.dumps(data, ensure_ascii=False)); return
+    except Exception as e:
+        print(json.dumps({"name": name, "error": f"dataclass error: {e}"})); return
     # Preview for ctypes.Structure and ctypes.Array
     try:
         if _ct is not None and isinstance(obj, _ct.Structure):

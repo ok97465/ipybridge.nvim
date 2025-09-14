@@ -6,6 +6,8 @@ local M = {
   buf = nil,
   win = nil,
   name = nil,
+  _line2path = {},
+  _last = nil,
 }
 
 local function is_open()
@@ -83,16 +85,54 @@ local function render_generic(data)
   return lines
 end
 
+-- Render dataclass preview
+local function render_dataclass(data)
+  local lines = {}
+  local map = {}
+  local cname = tostring(data.class_name or '')
+  table.insert(lines, string.format('dataclass %s', cname))
+  table.insert(lines, string.rep('-', 80))
+  local fields = type(data.fields) == 'table' and data.fields or {}
+  if #fields == 0 then
+    table.insert(lines, '(no fields)')
+    return lines, map
+  end
+  for _, it in ipairs(fields) do
+    local fname = tostring(it.name or '')
+    local ty = tostring(it.type or '')
+    local kind = tostring(it.kind or '')
+    if kind == 'ndarray' then
+      local shp = it.shape or {}
+      local dtype = tostring(it.dtype or '')
+      table.insert(lines, string.format('%s <%s> ndarray shape=%s dtype=%s', fname, ty, table.concat(vim.tbl_map(tostring, shp), 'x'), dtype))
+      map[#lines] = (M.name or data.name or '') .. '.' .. fname
+    elseif kind == 'dataframe' then
+      local shp = it.shape or {}
+      local shape_str = (#shp >= 2) and (tostring(shp[1]) .. 'x' .. tostring(shp[2])) or table.concat(vim.tbl_map(tostring, shp), 'x')
+      table.insert(lines, string.format('%s <%s> DataFrame shape=%s', fname, ty, shape_str))
+      map[#lines] = (M.name or data.name or '') .. '.' .. fname
+    else
+      table.insert(lines, string.format('%s <%s> = %s', fname, ty, to_str(it.repr)))
+      local r = tostring(it.repr or '')
+      if #r >= 3 and r:sub(-3) == '...' then
+        map[#lines] = (M.name or data.name or '') .. '.' .. fname
+      end
+    end
+  end
+  return lines, map
+end
+
 -- Render ctypes.Structure preview
 local function render_ctypes(data)
   local lines = {}
+  local map = {}
   local sname = tostring(data.struct_name or '')
   table.insert(lines, string.format('ctypes.Structure %s', sname))
   table.insert(lines, string.rep('-', 80))
   local fields = type(data.fields) == 'table' and data.fields or {}
   if #fields == 0 then
     table.insert(lines, '(no fields)')
-    return lines
+    return lines, map
   end
   for _, it in ipairs(fields) do
     local fname = tostring(it.name or '')
@@ -104,16 +144,19 @@ local function render_ctypes(data)
       local suffix = ''
       if type(it.length) == 'number' then suffix = string.format(' len=%d', it.length) end
       table.insert(lines, string.format('%s [%s]%s: [ %s ]', fname, ctype, suffix, table.concat(vals, ', ')))
+      map[#lines] = (M.name or data.name or '') .. '.' .. fname
     elseif kind == 'struct' then
       -- Nested struct: render as JSON-ish
       local v = it.value
       local ok, encoded = pcall(vim.fn.json_encode, v)
       table.insert(lines, string.format('%s [%s]: %s', fname, ctype, ok and encoded or to_str(v)))
+      map[#lines] = (M.name or data.name or '') .. '.' .. fname
     else
       table.insert(lines, string.format('%s [%s]: %s', fname, ctype, to_str(it.value)))
+      -- For scalars, usually not drillable
     end
   end
-  return lines
+  return lines, map
 end
 
 -- Render standalone ctypes.Array preview
@@ -148,6 +191,26 @@ local function set_content(lines)
   api.nvim_buf_set_option(M.buf, 'modifiable', false)
 end
 
+local function update_title(name)
+  if not is_open() then return end
+  local ok = pcall(api.nvim_win_set_config, M.win, { title = ' Preview: ' .. (name or '') .. ' ' })
+  if not ok then
+    -- ignore if not supported
+  end
+end
+
+local function drilldown_current()
+  if not is_open() then return end
+  local lnum = api.nvim_win_get_cursor(M.win)[1]
+  local path = M._line2path[lnum]
+  if path and type(path) == 'string' and #path > 0 then
+    M.name = path
+    update_title(path)
+    set_content({ 'Loading preview for ' .. tostring(path) .. ' ...' })
+    require('my_ipy').request_preview(path)
+  end
+end
+
 local function ensure_win(name)
   if is_open() then return end
   M.buf = api.nvim_create_buf(false, true)
@@ -176,11 +239,13 @@ local function ensure_win(name)
   map('r', function()
     if M.name then require('my_ipy').request_preview(M.name) end
   end, 'Refresh')
+  map('<CR>', drilldown_current, 'Drill-down preview')
 end
 
 function M.open(name)
   M.name = name
   ensure_win(name)
+  update_title(name)
   set_content({ 'Loading preview for ' .. tostring(name) .. ' ...' })
   require('my_ipy').request_preview(name)
 end
@@ -196,18 +261,22 @@ function M.on_preview(data)
     return
   end
   if not data then return end
-  local lines
+  local lines, map = nil, {}
   if data.kind == 'dataframe' then
     lines = render_df(data)
   elseif data.kind == 'ndarray' then
     lines = render_nd(data)
+  elseif data.kind == 'dataclass' then
+    lines, map = render_dataclass(data)
   elseif data.kind == 'ctypes' then
-    lines = render_ctypes(data)
+    lines, map = render_ctypes(data)
   elseif data.kind == 'ctypes_array' then
     lines = render_ctypes_array(data)
   else
     lines = render_generic(data)
   end
+  M._last = data
+  M._line2path = map or {}
   set_content(lines)
 end
 

@@ -111,8 +111,8 @@ Variable Explorer & Data Viewer (ZMQ)
   - `<leader>vx` → open variable explorer
   - `<leader>vr` → refresh variables
 - Explorer buffer shortcuts:
-  - `q` → close, `r` → refresh, `<CR>` → open preview for the selected variable
-- Preview window shows DataFrame/ndarray/object summaries; press `r` to refresh, `q` to close.
+  - `q` → close, `r` → refresh, `<CR>` → open preview when available (DataFrame/ndarray/dataclass/ctypes or truncated repr)
+- Preview window shows DataFrame/ndarray/object summaries; press `r` to refresh, `q` to close. In the viewer, `<CR>` on a dataclass/ctypes field drills down (e.g., `yy.b`, `hh.h2`).
 
 Default Keymaps (Python buffers only)
 - Normal:
@@ -137,6 +137,7 @@ Global
 User Commands
 - `:MyIpyVars` → open variable explorer
 - `:MyIpyVarsRefresh` → refresh variables
+- `:MyIpyPreview <name>` → open preview for a variable or path (supports dotted/indexed paths, e.g., `yy.b`, `yy.c`, `hh.h2`, `arr[0]`)
 
 Terminal Buffers
 - Terminal mode:

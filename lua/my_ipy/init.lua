@@ -233,6 +233,11 @@ M.apply_default_keymaps = function()
     -- User commands for discoverability
     pcall(api.nvim_create_user_command, 'MyIpyVars', function() require('my_ipy').var_explorer_open() end, {})
     pcall(api.nvim_create_user_command, 'MyIpyVarsRefresh', function() require('my_ipy').var_explorer_refresh() end, {})
+    -- Preview arbitrary name/path (supports dotted/indexed paths, e.g., `yy.b`, `hh.h2`)
+    pcall(api.nvim_create_user_command, 'MyIpyPreview', function(opts)
+      local name = (opts and opts.args) or ''
+      if name ~= '' then require('my_ipy').request_preview(name) end
+    end, { nargs = 1, complete = 'buffer' })
 end
 
 ---Apply buffer-local keymaps for Python files.
