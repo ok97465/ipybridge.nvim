@@ -38,6 +38,8 @@ Minimal helper to run IPython/Jupyter in a terminal split and send code from the
         use_zmq = true,                  -- requires ipykernel + jupyter_client + pyzmq
         viewer_max_rows = 30,
         viewer_max_cols = 20,
+        -- Autoreload: 1, 2, or 'disable' (default 2)
+        autoreload = 2,
       })
     end,
   }
@@ -65,6 +67,10 @@ Minimal helper to run IPython/Jupyter in a terminal split and send code from the
 - `ipython_colors` (string|nil): Color scheme applied via IPython's `%colors` magic (e.g., `Linux`, `LightBG`, `NoColor`). Some jupyter-console versions ignore CLI flags; this runtime magic is used for portability.
 - `hidden_var_names` (string[]): Variable names to hide in the Variable Explorer (exact match; supports `*` suffix for prefix match). Example: `{ 'pi', 'newaxis' }`.
 - `hidden_type_names` (string[]): Type names to hide (exact or prefix with `*`). Examples: `{ 'ZMQInteractiveShell', 'Axes', 'Figure', 'AxesSubplot' }`.
+- `autoreload` (1|2|'disable'): Configure IPython's autoreload on console startup. Default `2`.
+  - `1`: Reload modules imported with `%aimport`.
+  - `2`: Reload all modules automatically (except excluded); recommended default.
+  - `'disable'`: Do not configure or enable autoreload.
 - `multiline_send_mode` (string): How selections/cells are sent. `'exec'` executes a hex-encoded block via `exec()`; `'paste'`(default) sends a plain-text bracketed paste so the console echoes the code like typed.
 
 ## Cell Syntax

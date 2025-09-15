@@ -68,6 +68,11 @@ M.config = {
     hidden_type_names = { 'ZMQInteractiveShell', 'Axes', 'Figure', 'AxesSubplot' },
     -- ZMQ backend debug logs (Python client prints to stderr)
     zmq_debug = false,
+    -- IPython autoreload: 1, 2, or 'disable' (default 2)
+    --  - 1: Reload modules imported with %aimport
+    --  - 2: Reload all modules (except those excluded)
+    --  - 'disable': Do not configure autoreload
+    autoreload = 2,
     -- How to send multi-line selections/cells to IPython.
     -- 'exec'  : send as hex-encoded Python and exec() it (robust, default)
     -- 'paste' : send as plain text using bracketed paste so the console shows
@@ -233,6 +238,20 @@ M.open = function(go_back, cb)
               local c = tostring(M.config.ipython_colors)
               local stmt = string.format("from IPython import get_ipython; ip=get_ipython();\nif ip is not None: ip.run_line_magic('colors','%s')\n", c)
               M.term_instance:send(stmt)
+            end
+            -- Configure autoreload extension per user config (default: 2)
+            do
+              local ar = M.config.autoreload
+              if ar == nil then ar = 2 end
+              local mode = tostring(ar)
+              if mode == '1' or mode == '2' then
+                local stmt = string.format(
+                  "from IPython import get_ipython; ip=get_ipython();\n" ..
+                  "if ip is not None: ip.run_line_magic('load_ext','autoreload'); ip.run_line_magic('autoreload','%s')\n",
+                  mode
+                )
+                M.term_instance:send(stmt)
+              end
             end
             -- Optionally enable interactive mode
             if M.config.matplotlib_ion ~= false then
