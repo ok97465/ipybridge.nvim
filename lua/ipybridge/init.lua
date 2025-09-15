@@ -220,6 +220,15 @@ M.open = function(go_back, cb)
             -- Enable interactive plotting and minimal numeric imports for convenience
             local cwd = fn.getcwd()
             local path_startup_script = fs.joinpath(cwd, M.config.startup_script)
+            -- Ensure the IPython working directory matches Neovim's CWD (or file dir per config)
+            -- This helps resolve package imports that rely on project root.
+            -- Apply before running any startup scripts/imports.
+            set_exec_cwd_for(fn.expand('%:p'))
+            -- Ensure current CWD is at the very front of sys.path.
+            -- Use a single-line statement to avoid IPython auto-indent issues.
+            M.term_instance:send(
+              "import sys, os; p=os.getcwd(); sys.path=[p]+[x for x in sys.path if x!=p]\n"
+            )
             -- Configure Matplotlib backend before importing pyplot
             if M.config.matplotlib_backend and #tostring(M.config.matplotlib_backend) > 0 then
               local b = tostring(M.config.matplotlib_backend)
