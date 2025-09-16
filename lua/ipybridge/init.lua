@@ -53,6 +53,8 @@ M.config = {
     prefer_runcell_magic = false,
     -- Save buffer before calling runcell to ensure the file content is current
     runcell_save_before_run = true,
+    -- Save buffer before calling runfile to ensure the file content is current
+    runfile_save_before_run = true,
     -- Working directory mode for executing run_cell/run_file: 'file' | 'pwd' | 'none'
     --  - 'file': cd to the current file's directory before executing
     --  - 'pwd' : cd to Neovim's current working directory before executing
@@ -623,6 +625,10 @@ end
 ---Run the current file in IPython via %run.
 M.run_file = function()
 	local abs_path = fn.expand('%:p')
+	-- Save buffer before run if requested
+	if vim.bo.modified and M.config.runfile_save_before_run ~= false then
+		pcall(vim.cmd, 'write')
+	end
 	local function after()
 		if not M.is_open() then return end
 		if M.config.prefer_runcell_magic then

@@ -33,6 +33,7 @@ Minimal helper to run IPython/Jupyter in a terminal split and send code from the
         -- Spyder-like runcell support
         prefer_runcell_magic = false,    -- run cells via helper instead of raw text
         runcell_save_before_run = true,  -- save buffer before runcell to use up-to-date file
+        runfile_save_before_run = true,  -- save buffer before runfile to use up-to-date file
 
         -- Variable explorer / preview (ZMQ backend)
         use_zmq = true,                  -- requires ipykernel + jupyter_client + pyzmq
@@ -57,6 +58,7 @@ Minimal helper to run IPython/Jupyter in a terminal split and send code from the
 - `matplotlib_ion` (boolean): If `true`, `plt.ion()` is called on startup (default `true`).
 - `prefer_runcell_magic` (boolean): If `true`, run cells via an IPython helper (`runcell(index, path)` / `%runcell`).
 - `runcell_save_before_run` (boolean): Save the buffer before runcell execution (default `true`).
+- `runfile_save_before_run` (boolean): Save the buffer before runfile execution (default `true`).
 - `exec_cwd_mode` (string): Working directory behavior for `run_cell` / `run_file`.
   - `'file'`: change directory to the current file's directory before executing
   - `'pwd'`: change directory to Neovim's `getcwd()` (default)
