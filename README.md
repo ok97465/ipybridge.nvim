@@ -34,6 +34,7 @@ Minimal helper to run IPython/Jupyter in a terminal split and send code from the
         prefer_runcell_magic = false,    -- run cells via helper instead of raw text
         runcell_save_before_run = true,  -- save buffer before runcell to use up-to-date file
         runfile_save_before_run = true,  -- save buffer before runfile to use up-to-date file
+        debugfile_save_before_run = true, -- save buffer before debugfile to use up-to-date file
 
         -- Variable explorer / preview (ZMQ backend)
         use_zmq = true,                  -- requires ipykernel + jupyter_client + pyzmq
@@ -59,6 +60,7 @@ Minimal helper to run IPython/Jupyter in a terminal split and send code from the
 - `prefer_runcell_magic` (boolean): If `true`, run cells via an IPython helper (`runcell(index, path)` / `%runcell`).
 - `runcell_save_before_run` (boolean): Save the buffer before runcell execution (default `true`).
 - `runfile_save_before_run` (boolean): Save the buffer before runfile execution (default `true`).
+- `debugfile_save_before_run` (boolean): Save the buffer before `%debugfile` execution (default `true`).
 - `exec_cwd_mode` (string): Working directory behavior for `run_cell` / `run_file`.
   - `'file'`: change directory to the current file's directory before executing
   - `'pwd'`: change directory to Neovim's `getcwd()` (default)
@@ -78,6 +80,16 @@ Minimal helper to run IPython/Jupyter in a terminal split and send code from the
 ## Cell Syntax
 - Lines beginning with `# %%` (one or more `%`) mark cell boundaries.
 - A “cell” runs from the most recent `# %%` (or file start) up to the line before the next `# %%` (or file end).
+
+### Debugging
+- `%debugfile <path> [cwd]` mirrors Spyder's helper and runs the current file under an IPython `Pdb` instance.
+- The helper pumps the Qt event loop while the debugger waits, so Matplotlib (Qt backends) stays interactive without manual `plt.pause()` calls.
+- Default shortcuts:
+  - `F6` → launch `%debugfile` for the active buffer (uses `exec_cwd_mode` to set the working directory)
+  - `F10` → `next`
+  - `F11` → `step`
+  - `F12` → `continue`
+- `%debugfile` becomes available automatically once the console starts; no manual `%load_ext` needed.
 
 ## API
 - `require('ipybridge').setup(opts)` — Configure the plugin.
@@ -136,8 +148,12 @@ Minimal helper to run IPython/Jupyter in a terminal split and send code from the
   - `<leader>ii` → focus IPython terminal
   - `<leader><CR>` → run current cell (`# %%` delimited)
   - `F5` → run current file (`%run`)
+  - `F6` → debug current file (`%debugfile`)
   - `<leader>r` → run current line
   - `F9` → run current line
+  - `F10` → debugger step over
+  - `F11` → debugger step into
+  - `F12` → debugger continue
   - `]c` / `[c` → next/prev cell
   - `<leader>vx` → variable explorer (global command also available)
   - `<leader>vr` → refresh variables
@@ -153,6 +169,7 @@ Minimal helper to run IPython/Jupyter in a terminal split and send code from the
 ### User Commands
 - `:IpybridgeVars` → open variable explorer
 - `:IpybridgeVarsRefresh` → refresh variables
+- `:IpybridgeDebugFile` → debug the current file via `%debugfile`
 - `:IpybridgePreview <name>` → open preview for a variable or path (supports dotted/indexed paths, e.g., `yy.b`, `yy.c`, `hh.h2`, `arr[0]`)
 
 ### Terminal Buffers
@@ -170,10 +187,14 @@ vim.api.nvim_create_autocmd('FileType', {
     vim.keymap.set('n', '<leader>iv', ipybridge.goto_vi,  { buffer = true })
     vim.keymap.set('n', '<leader><CR>', ipybridge.run_cell, { buffer = true })
     vim.keymap.set('n', '<F5>', ipybridge.run_file, { buffer = true })
+    vim.keymap.set('n', '<F6>', ipybridge.debug_file, { buffer = true })
     vim.keymap.set('n', '<leader>r', ipybridge.run_line, { buffer = true })
     vim.keymap.set('v', '<leader>r', ipybridge.run_lines, { buffer = true })
     vim.keymap.set('n', '<F9>', ipybridge.run_line, { buffer = true })
     vim.keymap.set('v', '<F9>', ipybridge.run_lines, { buffer = true })
+    vim.keymap.set('n', '<F10>', ipybridge.debug_step_over, { buffer = true })
+    vim.keymap.set('n', '<F11>', ipybridge.debug_step_into, { buffer = true })
+    vim.keymap.set('n', '<F12>', ipybridge.debug_continue, { buffer = true })
     vim.keymap.set('n', ']c', ipybridge.down_cell, { buffer = true })
     vim.keymap.set('n', '[c', ipybridge.up_cell,   { buffer = true })
     vim.keymap.set('v', ']c', ipybridge.down_cell, { buffer = true })

@@ -16,7 +16,7 @@ local fs = vim.fs
 local uv = vim.uv
 
 -- Core state for the plugin. Comments are in English; see README for usage.
-local M = { term_instance = nil, _helpers_sent = false, _conn_file = nil, _kernel_job = nil, _helpers_path = nil, _runcell_sent = false, _runcell_path = nil, _last_cwd_sent = nil }
+local M = { term_instance = nil, _helpers_sent = false, _conn_file = nil, _kernel_job = nil, _helpers_path = nil, _runcell_sent = false, _runcell_path = nil, _last_cwd_sent = nil, _debug_active = false }
 -- Cell markers must be exactly: start of line '#', one space, then at least '%%'.
 -- Examples matched: '# %%', '# %% Import'. Examples NOT matched: '  # %%', '#%%'.
 local CELL_PATTERN = [[^# %%\+]]
@@ -55,6 +55,8 @@ M.config = {
     runcell_save_before_run = true,
     -- Save buffer before calling runfile to ensure the file content is current
     runfile_save_before_run = true,
+    -- Save buffer before calling debugfile to ensure the file content is current
+    debugfile_save_before_run = true,
     -- Working directory mode for executing run_cell/run_file: 'file' | 'pwd' | 'none'
     --  - 'file': cd to the current file's directory before executing
     --  - 'pwd' : cd to Neovim's current working directory before executing
@@ -142,6 +144,7 @@ M.setup = function(config)
             viewer_max_cols = { config.viewer_max_cols, 'n', true },
             use_zmq = { config.use_zmq, 'b', true },
             python_cmd = { config.python_cmd, 's', true },
+            debugfile_save_before_run = { config.debugfile_save_before_run, 'b', true },
         })
     end
     M.config = vim.tbl_deep_extend("force", M.config, config or {})
@@ -654,6 +657,39 @@ M.run_file = function()
 			local safe = utils.py_quote_double(abs_path)
 			M.term_instance:send(string.format("%%run \"%s\"\n", safe))
 		end
+		M._debug_active = false
+	end
+	if not M.is_open() then
+		M.open(true, function(ok) if ok then after() end end)
+	else
+		after()
+	end
+end
+
+---Run the current file under IPython debugger via %debugfile.
+M.debug_file = function()
+	local abs_path = fn.expand('%:p')
+	if vim.bo.modified and M.config.debugfile_save_before_run ~= false then
+		pcall(vim.cmd, 'write')
+	end
+	local function after()
+		if not M.is_open() then return end
+		M._ensure_runcell_helpers()
+		local cwd_arg = nil
+		local mode = M.config.exec_cwd_mode or 'pwd'
+		if mode == 'file' then
+			cwd_arg = fn.fnamemodify(abs_path, ':p:h')
+		elseif mode == 'pwd' then
+			cwd_arg = fn.getcwd()
+		end
+		local safe = utils.py_quote_single(abs_path)
+		if cwd_arg and #cwd_arg > 0 then
+			local safecwd = utils.py_quote_single(cwd_arg)
+			M.term_instance:send(string.format("debugfile('%s','%s')\n", safe, safecwd))
+		else
+			M.term_instance:send(string.format("debugfile('%s')\n", safe))
+		end
+		M._debug_active = true
 	end
 	if not M.is_open() then
 		M.open(true, function(ok) if ok then after() end end)
@@ -668,6 +704,8 @@ end
 M.send_lines = function(line_start, line_stop)
 	local tb_lines = api.nvim_buf_get_lines(0, line_start, line_stop, false)
 	if not tb_lines or #tb_lines == 0 then return end
+
+	M._debug_active = false
 
   local function do_send()
     if not M.is_open() then return end
@@ -712,6 +750,7 @@ M.run_line = function()
 		if idx_line_cursor < n_lines then
 			api.nvim_win_set_cursor(0, { idx_line_cursor + 1, 0 })
 		end
+		M._debug_active = false
 	end
 
 	if not M.is_open() then
@@ -733,6 +772,32 @@ M.run_cmd = function(cmd)
 	else
 		after()
 	end
+end
+
+local function send_debug_command(cmd, opts)
+  if not M.is_open() then
+    vim.notify('ipybridge: IPython terminal is not open', vim.log.levels.WARN)
+    return
+  end
+  M.term_instance:send(cmd .. '\n')
+  if opts and opts.deactivate then
+    M._debug_active = false
+  end
+end
+
+---Debugger step over (F10 equivalent).
+M.debug_step_over = function()
+  send_debug_command('n')
+end
+
+---Debugger step into (F11 equivalent).
+M.debug_step_into = function()
+  send_debug_command('s')
+end
+
+---Debugger continue (F12 equivalent).
+M.debug_continue = function()
+  send_debug_command('c', { deactivate = true })
 end
 
 -- Public: open the variable explorer window and refresh data.

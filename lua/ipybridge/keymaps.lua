@@ -30,6 +30,7 @@ function M.apply_defaults()
   -- User commands for discoverability
   pcall(api.nvim_create_user_command, 'IpybridgeVars', function() require('ipybridge').var_explorer_open() end, {})
   pcall(api.nvim_create_user_command, 'IpybridgeVarsRefresh', function() require('ipybridge').var_explorer_refresh() end, {})
+  pcall(api.nvim_create_user_command, 'IpybridgeDebugFile', function() require('ipybridge').debug_file() end, {})
   pcall(api.nvim_create_user_command, 'IpybridgePreview', function(opts)
     local name = (opts and opts.args) or ''
     if name ~= '' then require('ipybridge').request_preview(name) end
@@ -51,12 +52,17 @@ function M.apply_buffer(bufnr)
   set('n', '<leader><CR>', my.run_cell, 'IPy: Run cell')
   -- Run current file
   set('n', '<F5>', my.run_file, 'IPy: Run file (%run)')
+  set('n', '<F6>', my.debug_file, 'IPy: Debug file (%debugfile)')
   -- Run current line (normal) / selection (visual)
   set('n', '<leader>r', my.run_line, 'IPy: Run line')
   set('v', '<leader>r', my.run_lines, 'IPy: Run selection')
   -- F9 as alternative for line/selection
   set('n', '<F9>', my.run_line, 'IPy: Run line (F9)')
   set('v', '<F9>', my.run_lines, 'IPy: Run selection (F9)')
+  -- Debugger stepping helpers
+  set('n', '<F10>', my.debug_step_over, 'IPy: Debug step over (F10)')
+  set('n', '<F11>', my.debug_step_into, 'IPy: Debug step into (F11)')
+  set('n', '<F12>', my.debug_continue, 'IPy: Debug continue (F12)')
   -- Cell navigation in normal and visual modes
   set('n', ']c', my.down_cell, 'IPy: Next cell')
   set('n', '[c', my.up_cell,  'IPy: Prev cell')
