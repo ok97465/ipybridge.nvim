@@ -5,10 +5,75 @@ local M = {}
 
 function M.build()
   return [[
-import io, os, re, shlex, contextlib, sys, traceback, threading, time
+import io, os, re, shlex, contextlib, sys, traceback, threading, time, json, linecache
 from IPython.core.magic import register_line_magic
 
 _CELL_RE = re.compile(r'^# %%+')
+
+_OSC_PREFIX = "\x1b]5379;ipybridge:"
+_OSC_SUFFIX = "\x07"
+
+def _mi_emit_hidden_json(tag, payload):
+    try:
+        msg = json.dumps(payload)
+    except Exception as exc:
+        msg = json.dumps({"error": str(exc)})
+    try:
+        sys.stdout.write(f"{_OSC_PREFIX}{tag}:{msg}{_OSC_SUFFIX}")
+        sys.stdout.flush()
+    except Exception:
+        pass
+
+def _mi_emit_debug_location(frame, lineno=None):
+    if isinstance(frame, (tuple, list)) and len(frame) >= 2 and lineno is None:
+        lineno = frame[1]
+        frame = frame[0]
+    filename = None
+    func = None
+    if frame is not None:
+        try:
+            code = frame.f_code
+        except Exception:
+            code = None
+        if code is not None:
+            try:
+                filename = code.co_filename
+            except Exception:
+                filename = None
+            try:
+                func = code.co_name
+            except Exception:
+                func = None
+        if lineno is None:
+            try:
+                lineno = frame.f_lineno
+            except Exception:
+                lineno = None
+    if lineno is None:
+        return
+    try:
+        lineno_int = int(lineno)
+    except Exception:
+        lineno_int = lineno
+    if filename:
+        try:
+            filename = os.path.abspath(filename)
+        except Exception:
+            pass
+    source = None
+    if filename and isinstance(lineno_int, int):
+        try:
+            linecache.checkcache(filename)
+            source = linecache.getline(filename, lineno_int).rstrip('\r\n') or None
+        except Exception:
+            source = None
+    data = {
+        'file': filename,
+        'line': lineno_int,
+        'function': func,
+        'source': source,
+    }
+    _mi_emit_hidden_json('debug_location', data)
 
 # Matplotlib import is optional and lazily used inside debugfile.
 try:
@@ -229,9 +294,58 @@ class _MiQtAwarePdb:
             return None
 
         class QtAwarePdb(Pdb):
+            _mi_alias_map = {
+                '!next': 'next',
+                '!step': 'step',
+                '!continue': 'continue',
+            }
+
             def interaction(self, *args, **kwargs):
+                self._mi_autoprint = True
                 with _mi_qt_events():
-                    return super().interaction(*args, **kwargs)
+                    try:
+                        return super().interaction(*args, **kwargs)
+                    finally:
+                        self._mi_autoprint = False
+
+            def print_stack_entry(self, frame_lineno, prompt_prefix='\n-> ', context=None):
+                emit = getattr(self, '_mi_autoprint', False)
+                if emit:
+                    try:
+                        frame, lineno = frame_lineno
+                    except Exception:
+                        frame, lineno = frame_lineno, None
+                    try:
+                        lineno_int = int(lineno)
+                    except Exception:
+                        lineno_int = lineno
+                    _mi_emit_debug_location(frame, lineno_int)
+                    try:
+                        shell = getattr(self, 'shell', None)
+                        hooks = getattr(shell, 'hooks', None)
+                        sync = getattr(hooks, 'synchronize_with_editor', None)
+                        if sync is not None and frame is not None and lineno_int is not None:
+                            filename = getattr(frame.f_code, 'co_filename', None)
+                            if filename:
+                                sync(filename, lineno_int, 0)
+                    except Exception:
+                        pass
+                    self._mi_autoprint = False
+                    return
+                return super().print_stack_entry(frame_lineno, prompt_prefix, context)
+
+            def default(self, line):
+                try:
+                    cmd = line.strip().split()[0]
+                except Exception:
+                    cmd = ''
+                target = self._mi_alias_map.get(cmd)
+                if target:
+                    method = getattr(self, 'do_' + target, None)
+                    if method is not None:
+                        arg = line[len(cmd):].lstrip()
+                        return method(arg)
+                return super().default(line)
 
         cls._cls = QtAwarePdb
         return cls._cls

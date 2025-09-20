@@ -913,17 +913,91 @@ end
 
 ---Debugger step over (F10 equivalent).
 M.debug_step_over = function()
-  send_debug_command('n')
+  send_debug_command('!next')
 end
 
 ---Debugger step into (F11 equivalent).
 M.debug_step_into = function()
-  send_debug_command('s')
+  send_debug_command('!step')
 end
 
 ---Debugger continue (F12 equivalent).
 M.debug_continue = function()
-  send_debug_command('c', { deactivate = true })
+  send_debug_command('!continue', { deactivate = true })
+end
+
+local function clamp_cursor_line(bufnr, line)
+  local max_line = api.nvim_buf_line_count(bufnr)
+  if line < 1 then
+    return 1
+  end
+  if line > max_line then
+    return max_line
+  end
+  return line
+end
+
+local function calc_column_from_source(source)
+  if type(source) ~= 'string' or source == '' then
+    return 0
+  end
+  local first = source:find('%S')
+  if not first then
+    return 0
+  end
+  return first - 1
+end
+
+---Handle debug location payload emitted from the embedded debugger.
+---@param info table
+function M.on_debug_location(info)
+  if type(info) ~= 'table' then
+    return
+  end
+  local file = info.file or info.filename
+  local line = info.line
+  if not file or not line then
+    return
+  end
+  if type(line) ~= 'number' then
+    line = tonumber(line)
+  end
+  if not line then
+    return
+  end
+  local abs = normalize_path(file)
+  if not abs then
+    return
+  end
+  local bufnr = fn.bufadd(abs)
+  if bufnr <= 0 then
+    return
+  end
+  fn.bufload(bufnr)
+  line = clamp_cursor_line(bufnr, line)
+  local col = calc_column_from_source(info.source)
+  local target_win = nil
+  for _, win in ipairs(api.nvim_list_wins()) do
+    if api.nvim_win_is_valid(win) and api.nvim_win_get_buf(win) == bufnr then
+      target_win = win
+      break
+    end
+  end
+  if not target_win then
+    target_win = api.nvim_get_current_win()
+    if not api.nvim_win_is_valid(target_win) then
+      return
+    end
+    if api.nvim_win_get_buf(target_win) ~= bufnr then
+      pcall(api.nvim_win_set_buf, target_win, bufnr)
+    end
+  end
+  api.nvim_win_call(target_win, function()
+    pcall(api.nvim_win_set_cursor, target_win, { line, col })
+    pcall(vim.cmd, 'normal! zv')
+    pcall(vim.cmd, 'normal! zz')
+  end)
+  M._debug_active = true
 end
 
 -- Public: open the variable explorer window and refresh data.

@@ -19,6 +19,15 @@ function M.handle(msg)
     end
     return
   end
+  if msg.tag == 'debug_location' then
+    local bridge = package.loaded['ipybridge']
+    if bridge and type(bridge.on_debug_location) == 'function' then
+      vim.schedule(function()
+        pcall(bridge.on_debug_location, msg.data or {})
+      end)
+    end
+    return
+  end
 end
 
 return M
