@@ -6,6 +6,14 @@ local fn = vim.fn
 
 local M = {}
 
+local function default_on_message(msg)
+  local ok, dispatch = pcall(require, 'ipybridge.dispatch')
+  if not ok or not dispatch then return end
+  local handler = dispatch.handle
+  if type(handler) ~= 'function' then return end
+  pcall(handler, msg)
+end
+
 -- Simple terminal wrapper for running IPython in a split.
 local TermIpy = {job_id = nil, buf_id = nil, win_id = nil}
 TermIpy.__index = TermIpy
@@ -14,17 +22,6 @@ local split_cmd = "botright vsplit"
 local OSC_PREFIX = "\27]5379;ipybridge:"
 local OSC_PREFIX_LEN = #OSC_PREFIX
 local OSC_SUFFIX = "\7"
-
--- Strip ANSI escape sequences from a string (CSI/OSC common forms).
-local function strip_ansi(s)
-  if type(s) ~= 'string' then return s end
-  -- Remove CSI sequences: ESC [ ... cmd
-  s = s:gsub("\27%[[%d;?]*[%@-~]", "")
-  -- Remove OSC sequences: ESC ] ... BEL or ST
-  s = s:gsub("\27%].-", "")
-  s = s:gsub("\27%].-\27\\", "")
-  return s
-end
 
 local function __handle_exit(term)
 	return function(...)
@@ -41,12 +38,16 @@ local function __handle_exit(term)
 	end
 end
 
-function TermIpy:new(cmd, cwd)
-	local tb = setmetatable({}, TermIpy)
-	tb._acc = ""
-	tb._osc_pending = ""
-	tb:__spawn(cmd, cwd)
-	return tb
+function TermIpy:new(cmd, cwd, opts)
+  local tb = setmetatable({}, TermIpy)
+  tb._osc_pending = ""
+  if opts and type(opts.on_message) == 'function' then
+    tb._on_message = opts.on_message
+  else
+    tb._on_message = default_on_message
+  end
+  tb:__spawn(cmd, cwd)
+  return tb
 end
 
 function TermIpy:__handle_hidden_payload(payload)
@@ -64,10 +65,11 @@ function TermIpy:__handle_hidden_payload(payload)
     end)
     return
   end
+  local handler = self._on_message
+  if type(handler) ~= 'function' then return end
+  local message = { tag = tag, data = decoded }
   vim.schedule(function()
-    pcall(function()
-      require('ipybridge.dispatch').handle({ tag = tag, data = decoded })
-    end)
+    pcall(handler, message)
   end)
 end
 
@@ -183,39 +185,10 @@ function TermIpy:__spawn(cmd, cwd)
 end
 
 function TermIpy:__on_stdout(data)
-  -- Accumulate chunks and extract sentinel-wrapped JSON messages.
-  -- Other outputs are ignored by this parser and left in terminal buffer.
-  -- Expected format: __MYIPY_JSON_START__{...}__MYIPY_JSON_END__
   for _, line in ipairs(data) do
     if line ~= nil and line ~= '' then
-      local cleaned = self:__extract_hidden(line)
-      if cleaned ~= nil then
-        self._acc = self._acc .. strip_ansi(cleaned) .. "\n"
-      end
+      self:__extract_hidden(line)
     end
-  end
-  local start_tok = "__MYIPY_JSON_START__"
-  local end_tok = "__MYIPY_JSON_END__"
-  while true do
-    local s = self._acc:find(start_tok, 1, true)
-    if not s then break end
-    local e = self._acc:find(end_tok, s + #start_tok, true)
-    if not e then break end
-    local payload = self._acc:sub(s + #start_tok, e - 1)
-    -- Trim potential newlines around payload
-    payload = payload:gsub("^\n+", ""):gsub("\n+$", "")
-    local ok, msg = pcall(vim.json.decode, payload)
-    if ok and type(msg) == 'table' and msg.tag then
-      pcall(function()
-        require('ipybridge.dispatch').handle(msg)
-      end)
-    end
-    -- Drop up to end token
-    self._acc = self._acc:sub(e + #end_tok)
-  end
-  -- Prevent unbounded growth
-  if #self._acc > 2 * 1024 * 1024 then
-    self._acc = self._acc:sub(-1024 * 1024)
   end
 end
 

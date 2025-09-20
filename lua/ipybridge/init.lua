@@ -8,6 +8,7 @@ local vim = vim
 local api = vim.api
 local fn = vim.fn
 local term_helper = require("ipybridge.term_ipy")
+local dispatch = require("ipybridge.dispatch")
 -- Refactored internal modules (utilities, keymaps, kernel manager)
 local utils = require("ipybridge.utils")
 local keymaps = require("ipybridge.keymaps")
@@ -320,7 +321,7 @@ M.open = function(go_back, cb)
         local extra = ''
         if M.config.simple_prompt then extra = extra .. ' --simple-prompt' end
         local cmd_console = string.format("jupyter console --existing %s%s", conn_file, extra)
-        M.term_instance = term_helper.TermIpy:new(cmd_console, cwd)
+        M.term_instance = term_helper.TermIpy:new(cmd_console, cwd, { on_message = dispatch.handle })
         -- Reset helper state and cached paths for new session
         M._helpers_sent = false
         if M._helpers_path then pcall(os.remove, M._helpers_path); M._helpers_path = nil end
@@ -419,7 +420,7 @@ end
 -- It defines JSON emit, variable listing, and preview for DataFrame/ndarray.
 local function _helpers_py_code()
   return [[
-import json, inspect, types
+import json, inspect, types, sys
 try:
     import numpy as _np
 except Exception:
@@ -429,18 +430,23 @@ try:
 except Exception:
     _pd = None
 
-_S = "__MYIPY_JSON_START__"
-_E = "__MYIPY_JSON_END__"
-_HIDE_ON = "\x1b[8m"   # SGR conceal on
-_HIDE_OFF = "\x1b[0m"  # reset attributes
+_OSC_PREFIX = "\x1b]5379;ipybridge:"
+_OSC_SUFFIX = "\x07"
 
 def _myipy_emit(tag, payload):
-    # Print sentinel-wrapped JSON, visually hidden in most terminals (SGR 8).
-    msg = json.dumps({"tag": tag, "data": payload}) if not isinstance(payload, Exception) else json.dumps({"tag": tag, "error": str(payload)})
+    # Emit OSC-encoded payload to keep terminal output clean.
     try:
-        print(_HIDE_ON + _S + msg + _E + _HIDE_OFF, flush=True)
-    except Exception as e:
-        print(_HIDE_ON + _S + json.dumps({"tag": tag, "error": str(e)}) + _E + _HIDE_OFF, flush=True)
+        if isinstance(payload, Exception):
+            body = json.dumps({"error": str(payload)})
+        else:
+            body = json.dumps(payload)
+    except Exception as exc:
+        body = json.dumps({"error": str(exc)})
+    try:
+        sys.stdout.write(f"{_OSC_PREFIX}{tag}:{body}{_OSC_SUFFIX}")
+        sys.stdout.flush()
+    except Exception:
+        pass
 
 def _myipy_srepr(x, n=120):
     try:
