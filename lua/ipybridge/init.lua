@@ -16,11 +16,133 @@ local fs = vim.fs
 local uv = vim.uv
 
 -- Core state for the plugin. Comments are in English; see README for usage.
-local M = { term_instance = nil, _helpers_sent = false, _conn_file = nil, _kernel_job = nil, _helpers_path = nil, _runcell_sent = false, _runcell_path = nil, _last_cwd_sent = nil, _debug_active = false }
+local M = { term_instance = nil, _helpers_sent = false, _conn_file = nil, _kernel_job = nil, _helpers_path = nil, _runcell_sent = false, _runcell_path = nil, _last_cwd_sent = nil, _debug_active = false, _breakpoints = {}, _breakpoint_signs = {}, _breakpoint_seq = 0, _breakpoint_support_ready = false }
 -- Cell markers must be exactly: start of line '#', one space, then at least '%%'.
 -- Examples matched: '# %%', '# %% Import'. Examples NOT matched: '  # %%', '#%%'.
 local CELL_PATTERN = [[^# %%\+]]
 local CELL_RE = vim.regex(CELL_PATTERN)
+local BP_SIGN_GROUP = 'IpybridgeBreakpoints'
+local BP_SIGN_NAME = 'IpybridgeBreakpoint'
+
+local function normalize_path(path)
+  if not path or path == '' then return nil end
+  local abs = fn.fnamemodify(path, ':p')
+  if not abs or abs == '' then return nil end
+  return abs:gsub("\\", "/")
+end
+
+local function collect_breakpoints()
+  local payload = {}
+  for file_path, line_set in pairs(M._breakpoints or {}) do
+    local lines = {}
+    for line in pairs(line_set) do
+      table.insert(lines, line)
+    end
+    if #lines > 0 then
+      table.sort(lines)
+      payload[file_path] = lines
+    end
+  end
+  return payload
+end
+
+local function refresh_breakpoint_signs(bufnr)
+  if not bufnr or not api.nvim_buf_is_loaded(bufnr) then return end
+  local bt = vim.bo[bufnr]
+  if bt and bt.buftype and bt.buftype ~= '' then
+    vim.fn.sign_unplace(BP_SIGN_GROUP, { buffer = bufnr })
+    M._breakpoint_signs[bufnr] = nil
+    return
+  end
+  local ft = (bt and bt.filetype) or ''
+  if ft ~= 'python' then
+    vim.fn.sign_unplace(BP_SIGN_GROUP, { buffer = bufnr })
+    M._breakpoint_signs[bufnr] = nil
+    return
+  end
+  local name = api.nvim_buf_get_name(bufnr)
+  local norm = normalize_path(name)
+  if not norm then
+    vim.fn.sign_unplace(BP_SIGN_GROUP, { buffer = bufnr })
+    M._breakpoint_signs[bufnr] = nil
+    return
+  end
+  local entry = (M._breakpoints or {})[norm]
+  vim.fn.sign_unplace(BP_SIGN_GROUP, { buffer = bufnr })
+  M._breakpoint_signs[bufnr] = {}
+  if not entry then return end
+  local lines = {}
+  for line in pairs(entry) do
+    table.insert(lines, line)
+  end
+  table.sort(lines)
+  for _, line in ipairs(lines) do
+    M._breakpoint_seq = (M._breakpoint_seq or 0) + 1
+    local id = M._breakpoint_seq
+    vim.fn.sign_place(id, BP_SIGN_GROUP, BP_SIGN_NAME, bufnr, { lnum = line, priority = 80 })
+    M._breakpoint_signs[bufnr][line] = id
+  end
+end
+
+local function ensure_breakpoint_support()
+  if M._breakpoint_support_ready then return end
+  M._breakpoints = M._breakpoints or {}
+  M._breakpoint_signs = M._breakpoint_signs or {}
+  M._breakpoint_seq = M._breakpoint_seq or 0
+  pcall(vim.fn.sign_define, BP_SIGN_NAME, { text = 'B', texthl = 'DiagnosticSignError', linehl = '', numhl = '' })
+  local group = api.nvim_create_augroup('IpybridgeBreakpoints', { clear = true })
+  api.nvim_create_autocmd({ 'BufEnter', 'BufWinEnter' }, {
+    group = group,
+    callback = function(args)
+      refresh_breakpoint_signs(args.buf)
+    end,
+  })
+  api.nvim_create_autocmd('BufUnload', {
+    group = group,
+    callback = function(args)
+      M._breakpoint_signs[args.buf] = nil
+    end,
+  })
+  M._breakpoint_support_ready = true
+end
+
+local function push_breakpoints()
+  if not M.is_open() then return end
+  local payload = collect_breakpoints()
+  local script
+  if next(payload) == nil then
+    script = "__ipybridge_breakpoints__ = {}"
+  else
+    local ok, encoded = pcall(vim.json.encode, payload)
+    if not ok or not encoded then return end
+    local safe = encoded:gsub("\\", "\\\\"):gsub("'", "\\'")
+    script = string.format("import json\n__ipybridge_breakpoints__ = json.loads('%s')", safe)
+  end
+  local stmt = utils.send_exec_block(script)
+  M.term_instance:send(stmt)
+end
+
+---Toggle a breakpoint at the current cursor line for the active Python buffer.
+function M.toggle_breakpoint()
+  ensure_breakpoint_support()
+  local bufnr = api.nvim_get_current_buf()
+  if not api.nvim_buf_is_loaded(bufnr) then return end
+  local bt = vim.bo[bufnr]
+  if bt and bt.filetype ~= 'python' then return end
+  local norm = normalize_path(api.nvim_buf_get_name(bufnr))
+  if not norm then return end
+  local line = api.nvim_win_get_cursor(0)[1]
+  M._breakpoints[norm] = M._breakpoints[norm] or {}
+  if M._breakpoints[norm][line] then
+    M._breakpoints[norm][line] = nil
+    if next(M._breakpoints[norm]) == nil then
+      M._breakpoints[norm] = nil
+    end
+  else
+    M._breakpoints[norm][line] = true
+  end
+  refresh_breakpoint_signs(bufnr)
+end
 
 M.config = {
 	profile_name = "vim",
@@ -149,6 +271,8 @@ M.setup = function(config)
     end
     M.config = vim.tbl_deep_extend("force", M.config, config or {})
 
+    ensure_breakpoint_support()
+
     if M.config.set_default_keymaps then
         M.apply_default_keymaps()
         -- Also apply to any already-open Python buffers
@@ -157,6 +281,7 @@ M.setup = function(config)
                 local ft = (vim.bo[b] and vim.bo[b].filetype) or ""
                 if ft == 'python' then
                     M.apply_buffer_keymaps(b)
+                    refresh_breakpoint_signs(b)
                 end
             end
         end
@@ -675,6 +800,7 @@ M.debug_file = function()
 	local function after()
 		if not M.is_open() then return end
 		M._ensure_runcell_helpers()
+		push_breakpoints()
 		local cwd_arg = nil
 		local mode = M.config.exec_cwd_mode or 'pwd'
 		if mode == 'file' then

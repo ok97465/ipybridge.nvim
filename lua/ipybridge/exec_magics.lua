@@ -384,6 +384,27 @@ def debugfile(filename, cwd=None):
     _mi_enable_gui()
     glbs = globals()
     dbg = pdb_cls()
+    try:
+        dbg.clear_all_breaks()
+    except Exception:
+        pass
+    try:
+        bp_map = glbs.get('__ipybridge_breakpoints__', {})
+    except Exception:
+        bp_map = {}
+    if isinstance(bp_map, dict):
+        for bp_file, bp_lines in bp_map.items():
+            if not isinstance(bp_lines, (list, tuple, set)):
+                continue
+            for bp_line in bp_lines:
+                try:
+                    line_no = int(bp_line)
+                except Exception:
+                    continue
+                try:
+                    dbg.set_break(bp_file, line_no)
+                except Exception:
+                    pass
     old_break_hook = getattr(sys, 'breakpointhook', None)
     try:
         sys.breakpointhook = dbg.set_trace

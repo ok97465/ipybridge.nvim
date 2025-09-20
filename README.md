@@ -82,6 +82,7 @@ Minimal helper to run IPython/Jupyter in a terminal split and send code from the
 - A “cell” runs from the most recent `# %%` (or file start) up to the line before the next `# %%` (or file end).
 
 ### Debugging
+- `<leader>b` toggles a persistent breakpoint sign at the cursor and sends the updated list to the IPython debugger.
 - `%debugfile <path> [cwd]` mirrors Spyder's helper and runs the current file under an IPython `Pdb` instance.
 - The helper pumps the Qt event loop while the debugger waits, so Matplotlib (Qt backends) stays interactive without manual `plt.pause()` calls.
 - Default shortcuts:
@@ -150,6 +151,7 @@ Minimal helper to run IPython/Jupyter in a terminal split and send code from the
   - `F5` → run current file (`%run`)
   - `F6` → debug current file (`%debugfile`)
   - `<leader>r` → run current line
+  - `<leader>b` → toggle debugger breakpoint
   - `F9` → run current line
   - `F10` → debugger step over
   - `F11` → debugger step into
@@ -189,6 +191,7 @@ vim.api.nvim_create_autocmd('FileType', {
     vim.keymap.set('n', '<F5>', ipybridge.run_file, { buffer = true })
     vim.keymap.set('n', '<F6>', ipybridge.debug_file, { buffer = true })
     vim.keymap.set('n', '<leader>r', ipybridge.run_line, { buffer = true })
+    vim.keymap.set('n', '<leader>b', ipybridge.toggle_breakpoint, { buffer = true })
     vim.keymap.set('v', '<leader>r', ipybridge.run_lines, { buffer = true })
     vim.keymap.set('n', '<F9>', ipybridge.run_line, { buffer = true })
     vim.keymap.set('v', '<F9>', ipybridge.run_lines, { buffer = true })
