@@ -13,11 +13,12 @@ local dispatch = require("ipybridge.dispatch")
 local utils = require("ipybridge.utils")
 local keymaps = require("ipybridge.keymaps")
 local kernel = require("ipybridge.kernel")
+local py_module = require("ipybridge.py_module")
 local fs = vim.fs
 local uv = vim.uv
 
 -- Core state for the plugin. Comments are in English; see README for usage.
-local M = { term_instance = nil, _helpers_sent = false, _conn_file = nil, _kernel_job = nil, _helpers_path = nil, _runcell_sent = false, _runcell_path = nil, _last_cwd_sent = nil, _debug_active = false, _breakpoints = {}, _breakpoint_signs = {}, _breakpoint_seq = 0, _breakpoint_support_ready = false }
+local M = { term_instance = nil, _helpers_sent = false, _conn_file = nil, _kernel_job = nil, _helpers_path = nil, _runcell_sent = false, _runcell_path = nil, _last_cwd_sent = nil, _debug_active = false, _breakpoints = {}, _breakpoint_signs = {}, _breakpoint_seq = 0, _breakpoint_support_ready = false, _latest_vars = nil }
 -- Cell markers must be exactly: start of line '#', one space, then at least '%%'.
 -- Examples matched: '# %%', '# %% Import'. Examples NOT matched: '  # %%', '#%%'.
 local CELL_PATTERN = [[^# %%\+]]
@@ -83,6 +84,35 @@ local function refresh_breakpoint_signs(bufnr)
     vim.fn.sign_place(id, BP_SIGN_GROUP, BP_SIGN_NAME, bufnr, { lnum = line, priority = 80 })
     M._breakpoint_signs[bufnr][line] = id
   end
+end
+
+local function get_debug_preview_payload(name)
+  if not name or name == '' then
+    return nil
+  end
+  local vars = M._latest_vars
+  if type(vars) ~= 'table' then
+    return nil
+  end
+  local entry = vars[name]
+  if type(entry) == 'table' then
+    local cache = entry._preview_cache
+    if cache then
+      return cache
+    end
+  end
+  for _, item in pairs(vars) do
+    if type(item) == 'table' then
+      local children = item._preview_children
+      if type(children) == 'table' then
+        local payload = children[name]
+        if payload then
+          return payload
+        end
+      end
+    end
+  end
+  return nil
 end
 
 local function ensure_breakpoint_support()
@@ -163,7 +193,8 @@ M.config = {
 	sleep_ms_after_open = 1000,
 	set_default_keymaps = true,
 	viewer_max_rows = 30,
-	viewer_max_cols = 20,
+    viewer_max_cols = 20,
+    var_repr_limit = 120,
     use_zmq = true,
     python_cmd = "python3",
     -- Matplotlib backend/ion control for the interactive console.
@@ -265,6 +296,7 @@ M.setup = function(config)
             set_default_keymaps = { config.set_default_keymaps, 'b', true },
             viewer_max_rows = { config.viewer_max_rows, 'n', true },
             viewer_max_cols = { config.viewer_max_cols, 'n', true },
+            var_repr_limit = { config.var_repr_limit, 'n', true },
             use_zmq = { config.use_zmq, 'b', true },
             python_cmd = { config.python_cmd, 's', true },
             debugfile_save_before_run = { config.debugfile_save_before_run, 'b', true },
@@ -286,6 +318,10 @@ M.setup = function(config)
                 end
             end
         end
+    end
+
+    if M.is_open() then
+        M._sync_var_filters()
     end
 end
 
@@ -348,6 +384,8 @@ M.open = function(go_back, cb)
         -- Defer initial setup to avoid blocking UI while the terminal spins up.
         vim.defer_fn(function()
             if not M.is_open() then return end
+            M._send_helpers_if_needed()
+            M._sync_var_filters()
             -- Enable interactive plotting and minimal numeric imports for convenience
             local cwd = fn.getcwd()
             local path_startup_script = fs.joinpath(cwd, M.config.startup_script)
@@ -416,202 +454,10 @@ M.open = function(go_back, cb)
     end)
 end
 
--- Build the Python helper code to be injected into IPython session.
--- It defines JSON emit, variable listing, and preview for DataFrame/ndarray.
 local function _helpers_py_code()
-  return [[
-import json, inspect, types, sys
-try:
-    import numpy as _np
-except Exception:
-    _np = None
-try:
-    import pandas as _pd
-except Exception:
-    _pd = None
-
-_OSC_PREFIX = "\x1b]5379;ipybridge:"
-_OSC_SUFFIX = "\x07"
-
-def _myipy_emit(tag, payload):
-    # Emit OSC-encoded payload to keep terminal output clean.
-    try:
-        if isinstance(payload, Exception):
-            body = json.dumps({"error": str(payload)})
-        else:
-            body = json.dumps(payload)
-    except Exception as exc:
-        body = json.dumps({"error": str(exc)})
-    try:
-        sys.stdout.write(f"{_OSC_PREFIX}{tag}:{body}{_OSC_SUFFIX}")
-        sys.stdout.flush()
-    except Exception:
-        pass
-
-def _myipy_srepr(x, n=120):
-    try:
-        r = repr(x)
-        if len(r) > n:
-            r = r[:n] + "..."
-        return r
-    except Exception:
-        return "<unrepr>"
-
-def _myipy_shape(x):
-    try:
-        if _np is not None and isinstance(x, _np.ndarray):
-            return list(getattr(x, 'shape', []))
-        if _pd is not None and isinstance(x, _pd.DataFrame):
-            return [int(x.shape[0]), int(x.shape[1])]
-        if hasattr(x, '__len__') and not isinstance(x, (str, bytes, dict)):
-            return [len(x)]
-    except Exception:
-        pass
-    return None
-
-def _myipy_list_vars(max_repr=120, __path=None):
-    import builtins, types, sys
-    g = globals()
-    out = {}
-    for k, v in g.items():
-        if not isinstance(k, str):
-            continue
-        if k.startswith('_'):
-            continue
-        if k in ('In','Out','exit','quit','get_ipython'):
-            continue
-        t = type(v).__name__
-        # Skip modules/functions/classes to reduce noise
-        # Skip modules/functions/classes/callables (e.g., numpy ufunc)
-        if isinstance(v, (types.ModuleType, types.FunctionType, type)) or callable(v):
-            continue
-        shp = _myipy_shape(v)
-        br = _myipy_srepr(v, max_repr)
-        try:
-            dtype = None
-            if _np is not None and isinstance(v, _np.ndarray):
-                dtype = str(v.dtype)
-            elif _pd is not None and isinstance(v, _pd.DataFrame):
-                dtype = str(v.dtypes.to_dict())
-        except Exception:
-            dtype = None
-        out[k] = {"type": t, "shape": shp, "dtype": dtype, "repr": br}
-    if __path:
-        _myipy_write_json(__path, out)
-    else:
-        _myipy_emit("vars", out)
-    _myipy_purge_last_history()
-
-def _myipy_write_json(path, obj):
-    try:
-        import io, os
-        with io.open(path, 'w', encoding='utf-8') as f:
-            json.dump(obj, f, ensure_ascii=False)
-    except Exception as e:
-        # As a last resort, emit an error (hidden)
-        _myipy_emit('preview', { 'name': obj.get('name') if isinstance(obj, dict) else None, 'error': str(e) })
-
-def _myipy_get_conn_file(__path=None):
-    try:
-        ip = get_ipython()
-        cf = getattr(ip.kernel, 'connection_file', None)
-    except Exception as e:
-        cf = None
-    data = { 'connection_file': cf }
-    if __path:
-        _myipy_write_json(__path, data)
-    else:
-        _myipy_emit('conn', data)
-
-def _myipy_purge_last_history():
-    try:
-        ip = get_ipython()
-        hm = ip.history_manager
-        cur = hm.db.cursor() if hasattr(hm, 'db') else hm.get_db_cursor()
-        sess = hm.session_number
-        cur.execute("SELECT max(line) FROM input WHERE session=?", (sess,))
-        row = cur.fetchone()
-        maxline = row[0] if row else None
-        if maxline:
-            cur.execute("DELETE FROM input WHERE session=? AND line=?", (sess, maxline))
-            try:
-                hm.db.commit()
-            except Exception:
-                pass
-        try:
-            if getattr(hm, 'input_hist_parsed', None):
-                hm.input_hist_parsed.pop()
-        except Exception:
-            pass
-        try:
-            if getattr(hm, 'input_hist_raw', None):
-                hm.input_hist_raw.pop()
-        except Exception:
-            pass
-    except Exception:
-        pass
-
-def _myipy_preview(name, max_rows=50, max_cols=20, __path=None):
-    g = globals()
-    if name not in g:
-        _myipy_emit("preview", {"name": name, "error": "Name not found"})
-        _myipy_purge_last_history()
-        return
-    obj = g[name]
-    try:
-        if _pd is not None and isinstance(obj, _pd.DataFrame):
-            df = obj.iloc[:max_rows, :max_cols]
-            data = {
-                "name": name,
-                "kind": "dataframe",
-                "shape": [int(df.shape[0]), int(df.shape[1])],
-                "columns": [str(c) for c in df.columns.to_list()],
-                "rows": [ [ None if _pd.isna(v) else (str(v) if not isinstance(v, (int,float,bool)) else v) for v in row ] for row in df.itertuples(index=False, name=None) ]
-            }
-            if __path:
-                _myipy_write_json(__path, data)
-            else:
-                _myipy_emit("preview", data)
-            _myipy_purge_last_history()
-            return
-    except Exception as e:
-        if __path:
-            _myipy_write_json(__path, {"name": name, "error": str(e)})
-        else:
-            _myipy_emit("preview", {"name": name, "error": str(e)})
-        _myipy_purge_last_history()
-        return
-    try:
-        if _np is not None and isinstance(obj, _np.ndarray):
-            arr = obj
-            info = {"name": name, "kind": "ndarray", "dtype": str(arr.dtype), "shape": list(arr.shape)}
-            if getattr(arr, 'ndim', 0) == 1:
-                info["values1d"] = arr[:max_rows].tolist()
-            elif getattr(arr, 'ndim', 0) == 2:
-                info["rows"] = arr[:max_rows, :max_cols].tolist()
-            else:
-                info["repr"] = _myipy_srepr(arr, 300)
-            if __path:
-                _myipy_write_json(__path, info)
-            else:
-                _myipy_emit("preview", info)
-            _myipy_purge_last_history()
-            return
-    except Exception as e:
-        if __path:
-            _myipy_write_json(__path, {"name": name, "error": str(e)})
-        else:
-            _myipy_emit("preview", {"name": name, "error": str(e)})
-        _myipy_purge_last_history()
-        return
-    # Generic fallback: show repr
-    data = {"name": name, "kind": "object", "repr": _myipy_srepr(obj, 300)}
-    if __path:
-        _myipy_write_json(__path, data)
-    else:
-        _myipy_emit("preview", data)
-    _myipy_purge_last_history()
-  ]]
+  local template = py_module.source('bootstrap_helpers.py')
+  local module_b64 = py_module.base64('ipybridge_ns.py')
+  return template:gsub('__MODULE_B64__', module_b64)
 end
 
 -- Define a Spyder-like runcell helper and register an IPython line magic.
@@ -643,6 +489,23 @@ function M._send_helpers_if_needed()
   end
   M.term_instance:send(utils.exec_file_stmt(M._helpers_path))
   M._helpers_sent = true
+end
+
+local function encode_json(value)
+  local ok, encoded = pcall(vim.json.encode, value)
+  if not ok or not encoded then
+    return '[]'
+  end
+  return encoded
+end
+
+function M._sync_var_filters()
+  -- Filters are supplied directly with each ZMQ request; no terminal command needed.
+  -- This function remains for API compatibility but intentionally performs no action.
+end
+
+function M._update_latest_vars(data)
+  M._latest_vars = data or {}
 end
 
 -- Ensure a standalone Jupyter kernel is running and return its connection file.
@@ -703,6 +566,7 @@ M.close = function()
         M._runcell_path = nil
     end
     M._last_cwd_sent = nil
+    M._latest_vars = nil
 end
 
 ---Toggle the IPython terminal split.
@@ -821,7 +685,11 @@ M.debug_file = function()
 		else
 			M.term_instance:send(string.format("debugfile('%s')\n", safe))
 		end
+		local was_debug = M._debug_active
 		M._debug_active = true
+		if not was_debug then
+			M._sync_var_filters()
+		end
 	end
 	if not M.is_open() then
 		M.open(true, function(ok) if ok then after() end end)
@@ -1003,29 +871,51 @@ function M.on_debug_location(info)
     pcall(vim.cmd, 'normal! zv')
     pcall(vim.cmd, 'normal! zz')
   end)
+  local was_debug = M._debug_active
   M._debug_active = true
+  if not was_debug then
+    M._sync_var_filters()
+  end
 end
 
 -- Public: open the variable explorer window and refresh data.
 M.var_explorer_open = function()
   require('ipybridge.var_explorer').open()
-  -- Trigger a vars request; request_vars() self-ensures ZMQ readiness.
-  -- Avoid redundant readiness checks here.
+  if M._debug_active then
+    if M._latest_vars then
+      local ok, vx = pcall(require, 'ipybridge.var_explorer')
+      if ok and vx and vx.on_vars then
+        vx.on_vars(M._latest_vars)
+      end
+    end
+    return
+  end
   M.request_vars()
 end
 
 -- Public: refresh variable list.
 M.var_explorer_refresh = function()
-  -- Avoid repeated ensure calls; delegate to request_vars() which ensures ZMQ.
+  if M._debug_active then
+    local ok, vx = pcall(require, 'ipybridge.var_explorer')
+    if ok and vx and vx.on_vars and M._latest_vars then
+      vx.on_vars(M._latest_vars)
+    end
+    return
+  end
   M.request_vars()
 end
 
 -- Internal: request variable list from kernel.
 function M.request_vars()
+  M._sync_var_filters()
+  if M._debug_active then
+    return
+  end
   if M.config.use_zmq and M._zmq_ready then
     local z = require('ipybridge.zmq_client')
+    local max_repr = tonumber(M.config.var_repr_limit) or 120
     local ok_req = z.request('vars', {
-      max_repr = 120,
+      max_repr = max_repr,
       hide_names = M.config.hidden_var_names,
       hide_types = M.config.hidden_type_names,
     }, function(msg)
@@ -1060,9 +950,32 @@ end
 -- Internal: request preview for a variable name from kernel.
 function M.request_preview(name)
   if not name or #name == 0 then return end
+  local debug_mode = M._debug_active == true
+  if debug_mode then
+    local payload = get_debug_preview_payload(name)
+    vim.schedule(function()
+      local ok, dv = pcall(require, 'ipybridge.data_viewer')
+      if not (ok and dv and dv.on_preview) then
+        return
+      end
+      if payload then
+        dv.on_preview(payload)
+      else
+        dv.on_preview({ name = name, error = 'Preview data not ready yet' })
+      end
+    end)
+    return
+  else
+    M._sync_var_filters()
+  end
   if M.config.use_zmq and M._zmq_ready then
     local z = require('ipybridge.zmq_client')
-    local ok_req = z.request('preview', { name = name, max_rows = M.config.viewer_max_rows, max_cols = M.config.viewer_max_cols }, function(msg)
+    local payload = {
+      name = name,
+      max_rows = M.config.viewer_max_rows,
+      max_cols = M.config.viewer_max_cols,
+    }
+    local ok_req = z.request('preview', payload, function(msg)
       if msg and msg.ok and msg.tag == 'preview' then
         local ok, dv = pcall(require, 'ipybridge.data_viewer')
         if ok and dv and dv.on_preview then

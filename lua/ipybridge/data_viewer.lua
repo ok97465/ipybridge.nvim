@@ -251,6 +251,7 @@ function M.open(name)
 end
 
 function M.on_preview(data)
+  if data == vim.NIL then data = nil end
   -- Expect data.name to match current viewer; otherwise open a new viewer.
   local name = data and data.name or M.name
   if not is_open() or (M.name ~= name and name) then
@@ -260,7 +261,10 @@ function M.on_preview(data)
     set_content({ 'Error: ' .. tostring(data.error) })
     return
   end
-  if not data then return end
+  if not data or type(data) ~= 'table' then
+    set_content({ 'Preview unavailable' })
+    return
+  end
   local lines, map = nil, {}
   if data.kind == 'dataframe' then
     lines = render_df(data)

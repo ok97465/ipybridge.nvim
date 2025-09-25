@@ -1,505 +1,239 @@
 #!/usr/bin/env python3
-import sys, json, argparse, time
+"""Backend process used by ipybridge.nvim to query kernel state via ZMQ."""
 
-def main():
-    p = argparse.ArgumentParser()
-    p.add_argument('--conn-file', required=True)
-    p.add_argument('--debug', action='store_true')
-    opts = p.parse_args()
+import argparse
+import base64
+import ast
+import json
+from typing import Optional
+import contextlib
+import sys
+import time
+from pathlib import Path
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--conn-file", required=True)
+    parser.add_argument("--debug", action="store_true")
+    opts = parser.parse_args()
 
     try:
         from jupyter_client import BlockingKernelClient
-    except Exception as e:
-        sys.stdout.write(json.dumps({"id":"0","ok":False,"error":"jupyter_client missing"})+"\n")
+    except Exception:
+        sys.stdout.write(json.dumps({"id": "0", "ok": False, "error": "jupyter_client missing"}) + "\n")
         sys.stdout.flush()
         return 1
 
-    kc = BlockingKernelClient()
-    kc.load_connection_file(opts.conn_file)
-    kc.start_channels()
-    
-    def dbg(msg):
-        if opts.debug:
-            try:
-                sys.stderr.write(f"[myipy.zmq] {msg}\n")
-                sys.stderr.flush()
-            except Exception:
-                pass
-    dbg('channels started')
+    module_path = Path(__file__).with_name("ipybridge_ns.py")
+    module_src = module_path.read_text(encoding="utf-8")
+    module_b64 = base64.b64encode(module_src.encode("utf-8")).decode("ascii")
+    bootstrap_template = Path(__file__).with_name("bootstrap_helpers.py").read_text(encoding="utf-8")
 
-    PRELUDE = r'''
-import json, types
-# Optional scientific libs
-try:
-    import numpy as _np
-except Exception:
-    _np = None
-try:
-    import pandas as _pd
-except Exception:
-    _pd = None
-# Optional ctypes for struct/array preview
-try:
-    import ctypes as _ct
-except Exception:
-    _ct = None
-try:
-    import dataclasses as _dc
-except Exception:
-    _dc = None
+    client = BlockingKernelClient()
+    client.load_connection_file(opts.conn_file)
+    client.start_channels()
 
-# Resolve dotted/indexed path like: foo.bar[0]['key']
-def __mi_resolve_path(path):
-    # Simple path resolver: globals.name[...].attr ...
-    s = str(path)
-    n = len(s)
-    i = 0
-    def _is_ident_char(ch):
-        return ch.isalnum() or ch == '_'
-    def _read_ident(idx):
-        j = idx
-        while j < n and _is_ident_char(s[j]):
-            j += 1
-        return (s[idx:j] if j > idx else None), j
+    def dbg(message: str) -> None:
+        if not opts.debug:
+            return
+        try:
+            sys.stderr.write(f"[myipy.zmq] {message}\n")
+            sys.stderr.flush()
+        except Exception:
+            pass
+
+    dbg("channels started")
+
+    seq_counter = 1
+
+    def next_seq() -> int:
+        nonlocal seq_counter
+        current = seq_counter
+        seq_counter += 1
+        return current
+
+    prelude = bootstrap_template.replace("__MODULE_B64__", module_b64)
+    prelude += "\n_myipy_set_debug_logging({flag})\n".format(flag="True" if opts.debug else "False")
+
+    msg_id = client.execute(prelude, store_history=False, allow_stdin=False, stop_on_error=False)
     try:
-        # Skip leading spaces
-        while i < n and s[i].isspace():
-            i += 1
-        name, i = _read_ident(i)
-        if not name:
-            return False, None, 'invalid start'
-        g = globals()
-        if name not in g:
-            return False, None, 'Name not found'
-        cur = g[name]
-        while i < n:
-            ch = s[i]
-            if ch.isspace():
-                i += 1
-                continue
-            if ch == '.':
-                i += 1
-                ident, i = _read_ident(i)
-                if not ident:
-                    return False, None, 'invalid attribute'
-                cur = getattr(cur, ident)
-                continue
-            if ch == '[':
-                i += 1
-                # key could be int or quoted string
-                if i < n and s[i] in "'\"":
-                    q = s[i]; i += 1
-                    buf = ''
-                    while i < n:
-                        c = s[i]
-                        if c == '\\':
-                            if i + 1 < n:
-                                buf += s[i+1]
-                                i += 2
-                                continue
-                        if c == q:
-                            break
-                        buf += c
-                        i += 1
-                    if i >= n or s[i] != q:
-                        return False, None, 'unterminated string key'
-                    key = buf
-                    i += 1
-                else:
-                    j = i
-                    neg = False
-                    if j < n and s[j] == '-':
-                        neg = True; j += 1
-                    while j < n and s[j].isdigit():
-                        j += 1
-                    if j == i + (1 if neg else 0):
-                        return False, None, 'invalid index'
-                    key = int(s[i:j])
-                    i = j
-                # expect closing ]
-                if i >= n or s[i] != ']':
-                    return False, None, 'missing ]'
-                i += 1
-                cur = cur[key]
-                continue
-            # Unexpected character
-            return False, None, 'invalid character'
-        return True, cur, None
-    except Exception as e:
-        return False, None, str(e)
-
-def __mi_srepr(x, n=120):
-    try:
-        r = repr(x)
-        if len(r) > n:
-            r = r[:n] + '...'
-        return r
-    except Exception:
-        return '<unrepr>'
-
-def __mi_shape(x):
-    try:
-        if _np is not None and isinstance(x, _np.ndarray):
-            return list(getattr(x, 'shape', []))
-        if _pd is not None and isinstance(x, _pd.DataFrame):
-            return [int(x.shape[0]), int(x.shape[1])]
-        if hasattr(x, '__len__') and not isinstance(x, (str, bytes, dict)):
-            return [len(x)]
+        client.get_shell_msg(timeout=5)
     except Exception:
         pass
-    return None
-
-def __mi_list_vars(max_repr=120, hide_names=None, hide_types=None):
-    def _match(name, patterns):
-        if not patterns:
-            return False
-        try:
-            for p in patterns:
-                if not isinstance(p, str):
-                    continue
-                if p.endswith('*'):
-                    if name.startswith(p[:-1]):
-                        return True
-                else:
-                    if name == p:
-                        return True
-        except Exception:
-            return False
-        return False
-    import types
-    g = globals()
-    out = {}
-    for k, v in g.items():
-        if not isinstance(k, str):
-            continue
-        if k.startswith('_'):
-            continue
-        if k in ('In','Out','exit','quit','get_ipython'):
-            continue
-        if _match(k, hide_names):
-            continue
-        if isinstance(v, (types.ModuleType, types.FunctionType, type)) or callable(v):
-            continue
-        t = type(v).__name__
-        if _match(t, hide_types):
-            continue
-        shp = __mi_shape(v)
-        br = __mi_srepr(v, max_repr)
-        try:
-            dtype = None
-            kind = None
-            if _np is not None and isinstance(v, _np.ndarray):
-                dtype = str(v.dtype)
-                kind = 'ndarray'
-            elif _pd is not None and isinstance(v, _pd.DataFrame):
-                try:
-                    dtype = str(v.dtypes.to_dict())
-                except Exception:
-                    dtype = None
-                kind = 'dataframe'
-            else:
-                # Secondary kinds
-                try:
-                    if _dc is not None and _dc.is_dataclass(v):
-                        kind = 'dataclass'
-                    elif _ct is not None and isinstance(v, _ct.Structure):
-                        kind = 'ctypes'
-                    elif _ct is not None and isinstance(v, _ct.Array):
-                        kind = 'ctypes_array'
-                except Exception:
-                    pass
-        except Exception:
-            dtype = None
-            kind = None
-        out[k] = {"type": t, "shape": shp, "dtype": dtype, "repr": br, "kind": kind}
-    print(json.dumps(out, ensure_ascii=False))
-
-def __mi_preview(name, max_rows=50, max_cols=20):
-    ok_path, obj, perr = __mi_resolve_path(name)
-    if not ok_path:
-        print(json.dumps({"name": name, "error": perr or "Name not found"})); return
-    # Preview for pandas.DataFrame
-    try:
-        if _pd is not None and isinstance(obj, _pd.DataFrame):
-            df = obj.iloc[:max_rows, :max_cols]
-            data = {
-                "name": name,
-                "kind": "dataframe",
-                "shape": [int(df.shape[0]), int(df.shape[1])],
-                "columns": [str(c) for c in df.columns.to_list()],
-                "rows": [ [ None if _pd.isna(v) else (str(v) if not isinstance(v, (int,float,bool)) else v) for v in row ] for row in df.itertuples(index=False, name=None) ]
-            }
-            print(json.dumps(data, ensure_ascii=False)); return
-    except Exception as e:
-        print(json.dumps({"name": name, "error": str(e)})); return
-    # Preview for numpy.ndarray
-    try:
-        if _np is not None and isinstance(obj, _np.ndarray):
-            arr = obj
-            info = {"name": name, "kind": "ndarray", "dtype": str(arr.dtype), "shape": list(arr.shape)}
-            if getattr(arr, 'ndim', 0) == 1:
-                info["values1d"] = arr[:max_rows].tolist()
-            elif getattr(arr, 'ndim', 0) == 2:
-                info["rows"] = arr[:max_rows, :max_cols].tolist()
-            else:
-                info["repr"] = __mi_srepr(arr, 300)
-            print(json.dumps(info, ensure_ascii=False)); return
-    except Exception as e:
-        print(json.dumps({"name": name, "error": str(e)})); return
-    # Preview for dataclasses: show field summaries and array/dataframe shapes
-    try:
-        if _dc is not None and _dc.is_dataclass(obj):
-            items = []
-            for f in _dc.fields(obj):
-                fname = f.name
-                try:
-                    fv = getattr(obj, fname)
-                except Exception:
-                    fv = '<unreadable>'
-                entry = { 'name': str(fname), 'type': getattr(f.type, '__name__', str(f.type)) }
-                try:
-                    if _np is not None and isinstance(fv, _np.ndarray):
-                        entry.update({ 'kind': 'ndarray', 'shape': list(getattr(fv, 'shape', [])), 'dtype': str(getattr(fv, 'dtype', '')) })
-                    elif _pd is not None and isinstance(fv, _pd.DataFrame):
-                        entry.update({ 'kind': 'dataframe', 'shape': [int(fv.shape[0]), int(fv.shape[1])] })
-                    else:
-                        entry.update({ 'kind': 'value', 'repr': __mi_srepr(fv, 120) })
-                except Exception:
-                    entry.update({ 'kind': 'value', 'repr': '<error>' })
-                items.append(entry)
-            data = { 'name': name, 'kind': 'dataclass', 'class_name': type(obj).__name__, 'fields': items }
-            print(json.dumps(data, ensure_ascii=False)); return
-    except Exception as e:
-        print(json.dumps({"name": name, "error": f"dataclass error: {e}"})); return
-    # Preview for ctypes.Structure and ctypes.Array
-    try:
-        if _ct is not None and isinstance(obj, _ct.Structure):
-            # Helper: stringify a ctypes type nicely
-            def _ctype_name(t):
-                try:
-                    return getattr(t, '__name__', str(t))
-                except Exception:
-                    return str(t)
-            # Helper: extract array element type if possible
-            def _array_elt_type(a_type):
-                try:
-                    return getattr(a_type, '_type_', None)
-                except Exception:
-                    return None
-            # Helper: convert ctypes value/array/struct into Python-native preview
-            def _unbox(x, depth=0, max_elems= max_cols if isinstance(max_cols, int) else 20):
-                # Limit recursion depth to avoid cycles
-                if depth > 5:
-                    return '<depth limit>'
-                try:
-                    if _ct is not None and isinstance(x, _ct.Array):
-                        n = len(x)
-                        out = []
-                        m = int(max_elems) if isinstance(max_elems, int) else 20
-                        for i in range(min(n, m)):
-                            out.append(_unbox(x[i], depth+1, max_elems))
-                        if n > m:
-                            out.append(f'...(+{n-m} more)')
-                        return out
-                    if _ct is not None and isinstance(x, _ct.Structure):
-                        d = {}
-                        for fname, ftype in getattr(x, '_fields_', []) or []:
-                            try:
-                                fv = getattr(x, fname)
-                            except Exception:
-                                fv = '<unreadable>'
-                            d[str(fname)] = _unbox(fv, depth+1, max_elems)
-                        return d
-                    # Try .value for simple ctypes scalars
-                    try:
-                        return getattr(x, 'value')
-                    except Exception:
-                        pass
-                    # Fallback: return as-is if JSON can handle, else repr
-                    if isinstance(x, (str, int, float, bool)) or x is None:
-                        return x
-                    return __mi_srepr(x, 120)
-                except Exception:
-                    return '<error>'
-            # Build field list for Structure
-            items = []
-            try:
-                for fname, ftype in getattr(obj, '_fields_', []) or []:
-                    try:
-                        raw = getattr(obj, fname)
-                    except Exception as e:
-                        raw = '<unreadable>'
-                    entry = {
-                        'name': str(fname),
-                        'ctype': _ctype_name(ftype),
-                    }
-                    try:
-                        if _ct is not None and isinstance(raw, _ct.Array):
-                            # Array preview
-                            elt_t = _array_elt_type(ftype)
-                            entry['kind'] = 'array'
-                            entry['elem_ctype'] = _ctype_name(elt_t) if elt_t else None
-                            n = len(raw)
-                            entry['length'] = int(n)
-                            m = int(max_cols) if isinstance(max_cols, int) else 20
-                            entry['values'] = _unbox(raw, 0, m)
-                        elif _ct is not None and isinstance(raw, _ct.Structure):
-                            entry['kind'] = 'struct'
-                            entry['value'] = _unbox(raw, 0, max_cols)
-                        else:
-                            entry['kind'] = 'scalar'
-                            entry['value'] = _unbox(raw, 0, max_cols)
-                    except Exception:
-                        entry['kind'] = 'unknown'
-                        entry['value'] = '<error>'
-                    items.append(entry)
-            except Exception as e:
-                print(json.dumps({"name": name, "error": f"ctypes inspect error: {e}"})); return
-            data = {
-                'name': name,
-                'kind': 'ctypes',
-                'struct_name': type(obj).__name__,
-                'fields': items,
-            }
-            print(json.dumps(data, ensure_ascii=False)); return
-        # Standalone ctypes arrays (not within a Structure)
-        if _ct is not None and isinstance(obj, _ct.Array):
-            def _unbox_arr(a, max_elems= max_rows if isinstance(max_rows, int) else 50):
-                try:
-                    n = len(a)
-                    m = int(max_elems)
-                    out = []
-                    for i in range(min(n, m)):
-                        x = a[i]
-                        try:
-                            v = getattr(x, 'value')
-                        except Exception:
-                            v = x
-                        out.append(v)
-                    if n > m:
-                        out.append(f'...(+{n-m} more)')
-                    return out
-                except Exception:
-                    return __mi_srepr(a, 200)
-            data = {
-                'name': name,
-                'kind': 'ctypes_array',
-                'ctype': getattr(type(obj), '__name__', str(type(obj))),
-                'length': int(len(obj)),
-                'values': _unbox_arr(obj),
-            }
-            print(json.dumps(data, ensure_ascii=False)); return
-    except Exception as e:
-        print(json.dumps({"name": name, "error": f"ctypes error: {e}"})); return
-    print(json.dumps({"name": name, "kind": "object", "repr": __mi_srepr(obj, 300)}, ensure_ascii=False))
-'''
-
-    # Seed helpers in the kernel (no history)
-    msg_id = kc.execute(PRELUDE, store_history=False, allow_stdin=False, stop_on_error=False)
-    # Drain shell reply
-    try:
-        kc.get_shell_msg(timeout=5)
-    except Exception:
-        pass
-    # Drain until idle
     while True:
         try:
-            io = kc.get_iopub_msg(timeout=0.2)
-            if io['msg_type'] == 'status' and io['content'].get('execution_state') == 'idle':
+            io_msg = client.get_iopub_msg(timeout=0.2)
+            if io_msg['msg_type'] == 'status' and io_msg['content'].get('execution_state') == 'idle':
                 break
         except Exception:
             break
-    dbg('prelude ready')
+    dbg("prelude ready")
 
-    def run_and_collect(code):
-        dbg(f'exec len={len(code)}')
-        mid = kc.execute(code, store_history=False, allow_stdin=False, stop_on_error=True)
-        acc = ''
-        ok = True
-        err = None
+    def _shorten(src: str, limit: int = 80) -> str:
+        src = src.replace('\n', ' ')
+        if len(src) <= limit:
+            return src
+        return src[:limit] + '…'
+
+    def run_and_collect(code: str, *, user_expression: Optional[str] = None):
+        dbg(f"exec len={len(code)} expr? {bool(user_expression)} payload={_shorten(code)}")
+        exec_id = client.execute(
+            code,
+            store_history=False,
+            allow_stdin=False,
+            stop_on_error=True,
+            user_expressions={'_': user_expression} if user_expression else None,
+            silent=bool(user_expression and not code.strip()),
+        )
+        stdout_chunks = ''
+        success = True
+        error_text = None
         idle = False
-        t0 = time.time()
-        while not idle and (time.time() - t0) < 5.0:
+        start = time.time()
+
+        try:
+            while not idle and (time.time() - start) < 5.0:
+                msg = client.get_iopub_msg(timeout=0.5)
+                if msg.get('parent_header', {}).get('msg_id') != exec_id:
+                    continue
+                msg_type = msg['msg_type']
+                dbg(f'iopub msg type={msg_type} keys={list(msg.keys())}')
+                if msg_type == 'stream' and msg['content'].get('name') == 'stdout':
+                    stdout_chunks += msg['content'].get('text', '')
+                elif msg_type == 'error':
+                    success = False
+                    error_text = '\n'.join(msg['content'].get('traceback', []))
+                elif msg_type == 'status' and msg['content'].get('execution_state') == 'idle':
+                    idle = True
+                elif msg_type == 'debug_reply':
+                    dbg(f'debug reply content keys={list(msg.get("content", {}).keys())}')
+                    idle = True
+        except Exception as exc:
+            dbg(f'iopub loop error: {exc}')
+
+        dbg(f'stdout bytes={len(stdout_chunks)} idle={idle}')
+        if not success:
+            dbg(f'kernel error: {error_text.splitlines()[-1] if error_text else "?"}')
+            return False, None, error_text
+        dbg(f'stdout bytes={len(stdout_chunks)} idle={idle} stop_on_timeout={success and bool(stdout_chunks)}')
+        try:
+            reply = client.get_shell_msg(timeout=5)
+        except Exception as exc:
+            dbg(('shell reply timeout (expr)' if user_expression else 'shell reply timeout') + f': {exc}')
+            if success and stdout_chunks:
+                dbg('using stdout payload despite shell timeout')
+                try:
+                    data = json.loads(stdout_chunks.strip())
+                    return True, data, None
+                except Exception as parse_exc:
+                    dbg(f'stdout parse error after timeout: {parse_exc}')
+            return False, None, f'shell timeout: {exc}'
+
+        content = reply.get('content') or {}
+        status = content.get('status') or 'ok'
+        dbg(f'shell reply status={status} keys={list(content.keys())}')
+        if status != 'ok':
+            err = 'error'
+            if 'ename' in content and 'evalue' in content:
+                err = f"{content['ename']}: {content['evalue']}"
+            return False, None, err
+
+        if user_expression:
+            expr_payload = (content.get('user_expressions') or {}).get('_') or {}
+            dbg(f'user expr payload status={expr_payload.get("status")} keys={list(expr_payload.keys())}')
+            if expr_payload.get('status') != 'ok':
+                err = expr_payload.get('ename') or expr_payload.get('status') or 'error'
+                return False, None, err
+            data_field = expr_payload.get('data') or {}
+            if not data_field:
+                dbg('user expr data field empty')
+                return False, None, 'empty payload'
+            json_text = data_field.get('application/json')
+            if json_text is None and 'text/plain' in data_field:
+                text_value = data_field['text/plain']
+                dbg(f'user expr text/plain={_shorten(str(text_value))}')
+                try:
+                    json_text = ast.literal_eval(text_value) if isinstance(text_value, str) else text_value
+                except Exception:
+                    dbg(f'user expr literal_eval failed; using raw text')
+                    json_text = text_value
+            if json_text is None:
+                return False, None, 'empty payload'
             try:
-                msg = kc.get_iopub_msg(timeout=0.5)
-            except Exception:
-                continue
-            if msg.get('parent_header', {}).get('msg_id') != mid:
-                continue
-            mtype = msg['msg_type']
-            if mtype == 'stream' and msg['content'].get('name') == 'stdout':
-                acc += msg['content'].get('text','')
-            elif mtype == 'error':
-                ok = False
-                err = '\n'.join(msg['content'].get('traceback', []))
-            elif mtype == 'status' and msg['content'].get('execution_state') == 'idle':
-                idle = True
-        # Debug: show how many bytes we captured on stdout for this exec
+                data = json.loads(json_text)
+                return True, data, None
+            except Exception as exc:
+                dbg(f'user expr parse error: {exc}; payload={json_text!r}')
+                return False, None, f'parse error: {exc}'
+
+        payload = stdout_chunks.strip()
+        if not payload:
+            dbg('empty payload from kernel')
+            return False, None, 'empty payload'
+        dbg(f'parsing payload from stdout len={len(payload)}')
         try:
-            dbg(f'stdout bytes={len(acc)} idle={idle}')
-        except Exception:
-            pass
-        if not ok:
-            dbg(f'kernel error: {err.splitlines()[-1] if err else "?"}')
-            return ok, None, err
-        try:
-            data = json.loads(acc.strip()) if acc.strip() else None
+            data = json.loads(payload)
             return True, data, None
-        except Exception as e:
-            dbg(f'parse error: {e}; payload={acc[:120]!r}')
-            return False, None, f'parse error: {e}'
+        except Exception as exc:
+            dbg(f'parse error: {exc}; payload={stdout_chunks[:120]!r}')
+            return False, None, f'parse error: {exc}'
 
     for line in sys.stdin:
         line = line.strip()
         if not line:
             continue
         try:
-            req = json.loads(line)
-        except Exception as e:
+            request = json.loads(line)
+        except Exception:
             continue
-        rid = req.get('id')
-        op = req.get('op')
-        op_args = req.get('args') or {}
+        req_id = request.get('id')
+        op = request.get('op')
+        args = request.get('args') or {}
         if op == 'ping':
-            sys.stdout.write(json.dumps({ 'id': rid, 'ok': True, 'tag': 'pong' }) + "\n"); sys.stdout.flush()
+            sys.stdout.write(json.dumps({'id': req_id, 'ok': True, 'tag': 'pong'}) + "\n")
+            sys.stdout.flush()
             continue
         if op == 'vars':
-            max_repr = int(op_args.get('max_repr', 120))
-            hn = op_args.get('hide_names') or []
-            ht = op_args.get('hide_types') or []
-            # Build a Python expression with JSON-literal lists
-            import json as __json
-            hn_expr = __json.dumps(hn, ensure_ascii=False)
-            ht_expr = __json.dumps(ht, ensure_ascii=False)
-            ok, data, err = run_and_collect(f"__mi_list_vars(max_repr={max_repr}, hide_names={hn_expr}, hide_types={ht_expr})")
+            max_repr = int(args.get('max_repr', 120))
+            hide_names = args.get('hide_names') or []
+            hide_types = args.get('hide_types') or []
+            hn_expr = json.dumps(hide_names, ensure_ascii=False)
+            ht_expr = json.dumps(hide_types, ensure_ascii=False)
+            code = f"__mi_list_vars(max_repr={max_repr}, hide_names={hn_expr}, hide_types={ht_expr})"
+            ok, data, err = run_and_collect(code)
             dbg(f'vars ok={ok} size={0 if not data else len(data)}')
-            resp = { 'id': rid, 'ok': ok, 'tag': 'vars' }
+            response = {'id': req_id, 'ok': ok, 'tag': 'vars'}
             if ok:
-                resp['data'] = data
+                response['data'] = data
             else:
-                resp['error'] = err or 'error'
-            sys.stdout.write(json.dumps(resp, ensure_ascii=False) + "\n"); sys.stdout.flush()
+                response['error'] = err or 'error'
+            sys.stdout.write(json.dumps(response, ensure_ascii=False) + "\n")
+            sys.stdout.flush()
         elif op == 'preview':
-            name = op_args.get('name') or ''
-            mr = int(op_args.get('max_rows', 30))
-            mc = int(op_args.get('max_cols', 20))
-            # sanitize name for code injection
+            name = args.get('name') or ''
+            max_rows = int(args.get('max_rows', 30))
+            max_cols = int(args.get('max_cols', 20))
             name_esc = str(name).replace("'", "\\'")
-            ok, data, err = run_and_collect(f"__mi_preview('{name_esc}', max_rows={mr}, max_cols={mc})")
-            try:
-                dbg(f'preview name={name!r} ok={ok} err={bool(err)} data_none={data is None}')
-                if data is not None:
-                    dbg(f'preview data keys={list(data.keys())}')
-            except Exception:
-                pass
-            resp = { 'id': rid, 'ok': ok, 'tag': 'preview' }
+            code = f"__mi_preview('{name_esc}', max_rows={max_rows}, max_cols={max_cols})"
+            dbg(f'preview exec code={_shorten(code)}')
+            ok, data, err = run_and_collect(code)
+            dbg(f'preview name={name!r} ok={ok} err={bool(err)} data_none={data is None}')
+            if data is not None:
+                dbg(f'preview data keys={list(data.keys())}')
+            response = {'id': req_id, 'ok': ok, 'tag': 'preview'}
             if ok:
-                resp['data'] = data
+                response['data'] = data
             else:
-                resp['error'] = err or 'error'
-            sys.stdout.write(json.dumps(resp, ensure_ascii=False) + "\n"); sys.stdout.flush()
+                response['error'] = err or 'error'
+            sys.stdout.write(json.dumps(response, ensure_ascii=False) + "\n")
+            sys.stdout.flush()
         else:
-            sys.stdout.write(json.dumps({ 'id': rid, 'ok': False, 'error': 'unknown op' }) + "\n"); sys.stdout.flush()
+            sys.stdout.write(json.dumps({'id': req_id, 'ok': False, 'error': 'unknown op'}) + "\n")
+            sys.stdout.flush()
 
-if __name__ == '__main__':
+    return None
+
+
+if __name__ == "__main__":
     sys.exit(main() or 0)

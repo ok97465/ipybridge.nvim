@@ -39,5 +39,7 @@ luac.out
 *.x86_64
 *.hex
 
+# Python
+.venv/
 *.pyc
 

@@ -128,6 +128,10 @@ end
 
 function M.on_vars(tbl)
   M.vars = tbl or {}
+  local ok, bridge = pcall(require, 'ipybridge')
+  if ok and bridge and type(bridge._update_latest_vars) == 'function' then
+    pcall(bridge._update_latest_vars, M.vars)
+  end
   render()
 end
 
