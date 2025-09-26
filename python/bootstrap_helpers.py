@@ -17,29 +17,48 @@ _PREVIEW_LIMITS = {"rows": 30, "cols": 20}
 _MAX_CHILD_PREVIEWS = 40
 
 
+def _coerce_int(value, default):
+    try:
+        if value is None:
+            return default
+        return int(value)
+    except Exception:
+        return default
+
+
 class _DebugPreviewContext:
     """Track the latest debug namespace and preview limits."""
 
-    __slots__ = ("namespace", "frame_id", "scoped", "rows", "cols")
+    __slots__ = ("namespace", "frame", "frame_id", "scoped", "rows", "cols", "globals")
 
     def __init__(self):
         self.namespace = None
+        self.frame = None
         self.frame_id = None
         self.scoped = False
         self.rows = int(_PREVIEW_LIMITS.get("rows") or 30)
         self.cols = int(_PREVIEW_LIMITS.get("cols") or 20)
+        self.globals = None
 
     def capture(self, frame, namespace, rows, cols):
-        if isinstance(namespace, dict):
-            self.namespace = namespace
+        if frame is not None:
+            if isinstance(namespace, dict):
+                self.namespace = namespace
+            self.frame = frame
+            self.frame_id = id(frame)
+            self.scoped = True
         else:
-            self.namespace = None
-        self.frame_id = id(frame) if frame is not None else None
-        self.scoped = bool(frame)
-        if rows:
-            self.rows = int(rows)
-        if cols:
-            self.cols = int(cols)
+            self.scoped = False
+            if isinstance(namespace, dict):
+                self.globals = namespace
+        if frame is None and self.frame is None and isinstance(namespace, dict):
+            self.namespace = namespace
+        self.rows = _coerce_int(rows, self.rows)
+        if self.rows <= 0:
+            self.rows = int(_PREVIEW_LIMITS.get("rows") or 30)
+        self.cols = _coerce_int(cols, self.cols)
+        if self.cols <= 0:
+            self.cols = int(_PREVIEW_LIMITS.get("cols") or 20)
         _ipy_log_debug(
             "debug context stored frame_id=%s namespace_items=%s" % (
                 self.frame_id if self.frame_id is not None else "none",
@@ -47,10 +66,39 @@ class _DebugPreviewContext:
             )
         )
 
-    def compute(self, name, rows=None, cols=None):
-        effective_rows = int(rows) if rows else self.rows
-        effective_cols = int(cols) if cols else self.cols
+    def compute(self, name, rows=None, cols=None, row_offset=None, col_offset=None):
+        effective_rows = _coerce_int(rows, self.rows)
+        effective_cols = _coerce_int(cols, self.cols)
+        if effective_rows <= 0:
+            effective_rows = self.rows
+        if effective_cols <= 0:
+            effective_cols = self.cols
+        row_base = _coerce_int(row_offset, 0)
+        col_base = _coerce_int(col_offset, 0)
+        if row_base < 0:
+            row_base = 0
+        if col_base < 0:
+            col_base = 0
         namespace = self.namespace if isinstance(self.namespace, dict) else None
+        frame = self.frame if self.frame_id is not None else None
+        if namespace is None and frame is not None:
+            try:
+                rebuilt = _myipy_current_namespace(frame)
+            except Exception:
+                rebuilt = None
+            if isinstance(rebuilt, dict):
+                namespace = rebuilt
+                self.namespace = rebuilt
+        if namespace is None and isinstance(self.globals, dict):
+            namespace = self.globals
+        if namespace is None:
+            try:
+                rebuilt = _myipy_current_namespace()
+            except Exception:
+                rebuilt = None
+            if isinstance(rebuilt, dict) and rebuilt:
+                namespace = rebuilt
+                self.namespace = rebuilt
         if not namespace:
             _ipy_log_debug(
                 f"debug preview compute skipped name={name} reason=no-context"
@@ -62,12 +110,14 @@ class _DebugPreviewContext:
                 namespace=namespace,
                 max_rows=effective_rows,
                 max_cols=effective_cols,
+                row_offset=row_base,
+                col_offset=col_base,
             )
         except Exception as exc:
             payload = {"name": name, "error": f"preview error: {exc}"}
         status = "error" if isinstance(payload, dict) and payload.get("error") else "ok"
         _ipy_log_debug(
-            f"debug preview compute name={name} frame_id={self.frame_id} status={status} rows={effective_rows} cols={effective_cols}"
+            f"debug preview compute name={name} frame_id={self.frame_id} status={status} rows={effective_rows} cols={effective_cols} row_offset={row_base} col_offset={col_base}"
         )
         return payload
 
@@ -97,6 +147,14 @@ class _DebugPreviewServer:
             _ipy_log_debug(f"debug preview server start failed: {exc}")
             return None
         port = server.getsockname()[1]
+        if not port or port <= 0:
+            _ipy_log_debug("debug preview server yielded invalid port")
+            try:
+                server.close()
+            except Exception:
+                pass
+            self._socket = None
+            return None
         self._socket = server
         thread = threading.Thread(
             target=self._serve, name="ipybridge-debug-preview", daemon=True
@@ -155,12 +213,14 @@ class _DebugPreviewServer:
             name = request.get("name")
             rows = request.get("max_rows")
             cols = request.get("max_cols")
-            data = self._context.compute(name, rows, cols)
+            row_offset = request.get("row_offset")
+            col_offset = request.get("col_offset")
+            data = self._context.compute(name, rows, cols, row_offset, col_offset)
             result = {"ok": True, "data": data}
         return json.dumps(result, ensure_ascii=False).encode("utf-8") + b"\n"
 
-    def compute(self, name, rows=None, cols=None):
-        return self._context.compute(name, rows, cols)
+    def compute(self, name, rows=None, cols=None, row_offset=None, col_offset=None):
+        return self._context.compute(name, rows, cols, row_offset, col_offset)
 
 
 _DEBUG_PREVIEW = _DebugPreviewServer(_DebugPreviewContext())
@@ -572,8 +632,18 @@ def _myipy_emit_debug_vars(frame=None):
         _ipy_log_debug(f"emit debug vars failed: {exc}")
 
 
-def __mi_debug_preview(name, max_rows=50, max_cols=20):
-    data = _DEBUG_PREVIEW.compute(name, max_rows, max_cols)
+def __mi_debug_preview(name, max_rows=50, max_cols=20, row_offset=0, col_offset=0):
+    rows = _coerce_int(max_rows, _PREVIEW_LIMITS.get("rows") or 30)
+    cols = _coerce_int(max_cols, _PREVIEW_LIMITS.get("cols") or 20)
+    _PREVIEW_LIMITS["rows"] = rows
+    _PREVIEW_LIMITS["cols"] = cols
+    row_off = _coerce_int(row_offset, 0)
+    col_off = _coerce_int(col_offset, 0)
+    if row_off < 0:
+        row_off = 0
+    if col_off < 0:
+        col_off = 0
+    data = _DEBUG_PREVIEW.compute(name, rows, cols, row_off, col_off)
     print(json.dumps(data, ensure_ascii=False))
     _myipy_purge_last_history()
 
@@ -603,17 +673,26 @@ def __mi_list_vars(max_repr=120, hide_names=None, hide_types=None):
     _myipy_purge_last_history()
 
 
-def __mi_preview(name, max_rows=50, max_cols=20):
-    try:
-        _PREVIEW_LIMITS["rows"] = int(max_rows)
-    except Exception:
-        pass
-    try:
-        _PREVIEW_LIMITS["cols"] = int(max_cols)
-    except Exception:
-        pass
+def __mi_preview(name, max_rows=50, max_cols=20, row_offset=0, col_offset=0):
+    rows = _coerce_int(max_rows, _PREVIEW_LIMITS.get("rows") or 30)
+    cols = _coerce_int(max_cols, _PREVIEW_LIMITS.get("cols") or 20)
+    _PREVIEW_LIMITS["rows"] = rows
+    _PREVIEW_LIMITS["cols"] = cols
+    row_off = _coerce_int(row_offset, 0)
+    col_off = _coerce_int(col_offset, 0)
+    if row_off < 0:
+        row_off = 0
+    if col_off < 0:
+        col_off = 0
     namespace = _myipy_current_namespace()
-    data = _ipy_preview_data(name, namespace=namespace, max_rows=max_rows, max_cols=max_cols)
+    data = _ipy_preview_data(
+        name,
+        namespace=namespace,
+        max_rows=rows,
+        max_cols=cols,
+        row_offset=row_off,
+        col_offset=col_off,
+    )
     print(json.dumps(data, ensure_ascii=False))
     _myipy_purge_last_history()
 

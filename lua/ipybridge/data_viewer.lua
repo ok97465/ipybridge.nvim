@@ -8,6 +8,7 @@ local M = {
   name = nil,
   _line2path = {},
   _last = nil,
+  _window = nil,
 }
 
 local function is_open()
@@ -22,6 +23,7 @@ local function close_win()
     pcall(api.nvim_buf_delete, M.buf, { force = true })
   end
   M.win, M.buf, M.name = nil, nil, nil
+  M._window = nil
 end
 
 local function layout_size()
@@ -30,6 +32,31 @@ local function layout_size()
   local w = math.max(70, math.floor(cols * 0.7))
   local h = math.max(18, math.floor(lines * 0.6))
   return w, h
+end
+
+local function viewer_limits()
+  local ok_bridge, bridge = pcall(require, 'ipybridge')
+  if not ok_bridge or type(bridge) ~= 'table' then
+    return 30, 20
+  end
+  local cfg = bridge.config or {}
+  local rows = tonumber(cfg.viewer_max_rows) or 30
+  local cols = tonumber(cfg.viewer_max_cols) or 20
+  if rows <= 0 then rows = 30 end
+  if cols <= 0 then cols = 20 end
+  return rows, cols
+end
+
+local function clamp_offset(offset, delta, total, window)
+  local target = offset + delta
+  if target < 0 then target = 0 end
+  if total and total > 0 and window and window > 0 then
+    local max_offset = math.max(total - window, 0)
+    if target > max_offset then
+      target = max_offset
+    end
+  end
+  return target
 end
 
 local function to_str(v)
@@ -42,34 +69,64 @@ end
 
 local function render_df(data)
   local lines = {}
-  table.insert(lines, string.format('DataFrame %s  shape=%sx%s', data.name or '', tostring((data.shape or {})[1] or '?'), tostring((data.shape or {})[2] or '?')))
+  local shape = data.total_shape or data.shape or {}
+  table.insert(lines, string.format('DataFrame %s  shape=%sx%s', data.name or '', tostring(shape[1] or '?'), tostring(shape[2] or '?')))
+  local row_offset = tonumber(data.row_offset) or 0
+  local col_offset = tonumber(data.col_offset) or 0
+  local window_rows = #(data.rows or {})
+  local window_cols = #(data.columns or {})
+  local row_end = row_offset + window_rows - 1
+  if row_end < row_offset then row_end = row_offset end
+  local col_end = col_offset + window_cols - 1
+  if col_end < col_offset then col_end = col_offset end
+  table.insert(lines, string.format('window rows %d-%d cols %d-%d', row_offset, row_end, col_offset, col_end))
   table.insert(lines, string.rep('-', 80))
   local cols = data.columns or {}
   if #cols > 0 then
     table.insert(lines, table.concat(vim.tbl_map(tostring, cols), ' | '))
     table.insert(lines, string.rep('-', 80))
   end
-  for _, row in ipairs(data.rows or {}) do
+  for idx, row in ipairs(data.rows or {}) do
     local strs = {}
     for _, v in ipairs(row) do table.insert(strs, to_str(v)) end
-    table.insert(lines, table.concat(strs, ' | '))
+    local row_index = row_offset + idx - 1
+    table.insert(lines, string.format('%6d | %s', row_index, table.concat(strs, ' | ')))
   end
   return lines
 end
 
 local function render_nd(data)
   local lines = {}
+  local shape = data.total_shape or data.shape or {}
   table.insert(lines, string.format('ndarray %s  dtype=%s  shape=%s', data.name or '', tostring(data.dtype or ''), table.concat(vim.tbl_map(tostring, data.shape or {}), 'x')))
-  table.insert(lines, string.rep('-', 80))
+  local row_offset = tonumber(data.row_offset) or 0
+  local col_offset = tonumber(data.col_offset) or 0
+  local window_rows = 0
+  local window_cols = 0
   if type(data.rows) == 'table' then
-    for _, row in ipairs(data.rows) do
+    window_rows = #data.rows
+    window_cols = #(data.rows[1] or {})
+    local row_end = row_offset + window_rows - 1
+    if row_end < row_offset then row_end = row_offset end
+    local col_end = col_offset + window_cols - 1
+    if col_end < col_offset then col_end = col_offset end
+    table.insert(lines, string.format('window rows %d-%d cols %d-%d', row_offset, row_end, col_offset, col_end))
+    table.insert(lines, string.rep('-', 80))
+    for idx, row in ipairs(data.rows) do
       local strs = {}
       for _, v in ipairs(row) do table.insert(strs, to_str(v)) end
-      table.insert(lines, table.concat(strs, ' | '))
+      local row_index = row_offset + idx - 1
+      table.insert(lines, string.format('%6d | %s', row_index, table.concat(strs, ' | ')))
     end
   elseif type(data.values1d) == 'table' then
+    window_rows = #data.values1d
+    local row_end = row_offset + window_rows - 1
+    if row_end < row_offset then row_end = row_offset end
+    table.insert(lines, string.format('window rows %d-%d', row_offset, row_end))
+    table.insert(lines, string.rep('-', 80))
     for i, v in ipairs(data.values1d) do
-      table.insert(lines, string.format('%4d: %s', i, to_str(v)))
+      local row_index = row_offset + i - 1
+      table.insert(lines, string.format('%6d: %s', row_index, to_str(v)))
     end
   else
     table.insert(lines, tostring(data.repr or ''))
@@ -199,15 +256,84 @@ local function update_title(name)
   end
 end
 
+local function current_offsets()
+  local window = M._window or {}
+  local row_offset = tonumber(window.row_offset) or 0
+  local col_offset = tonumber(window.col_offset) or 0
+  if row_offset < 0 then row_offset = 0 end
+  if col_offset < 0 then col_offset = 0 end
+  return row_offset, col_offset
+end
+
+local function request_with_offsets(row_offset, col_offset)
+  if not M.name then return end
+  local label = 'Loading preview for ' .. tostring(M.name) .. ' ...'
+  if row_offset ~= 0 or col_offset ~= 0 then
+    label = label .. string.format(' [rows %d cols %d]', row_offset, col_offset)
+  end
+  set_content({ label })
+  require('ipybridge').request_preview(M.name, {
+    row_offset = row_offset,
+    col_offset = col_offset,
+  })
+end
+
+local function window_shape_dim(dim)
+  if not M._window then return nil end
+  local shape = M._window.shape
+  if type(shape) ~= 'table' then return nil end
+  local value = shape[dim]
+  if type(value) ~= 'number' then value = tonumber(value) end
+  return value
+end
+
+local function move_rows(direction)
+  if not M._window then return end
+  local kind = M._window.kind
+  if kind ~= 'ndarray' and kind ~= 'dataframe' then
+    return
+  end
+  local default_rows = select(1, viewer_limits())
+  local rows_step = tonumber(M._window.max_rows) or default_rows
+  if rows_step <= 0 then rows_step = default_rows end
+  local current_row, current_col = current_offsets()
+  local total_rows = window_shape_dim(1)
+  local new_row = clamp_offset(current_row, rows_step * direction, total_rows, rows_step)
+  if new_row == current_row then return end
+  request_with_offsets(new_row, current_col)
+end
+
+local function move_cols(direction)
+  if not M._window then return end
+  local kind = M._window.kind
+  if kind ~= 'ndarray' and kind ~= 'dataframe' then
+    return
+  end
+  local default_cols = select(2, viewer_limits())
+  local viewer_cols = tonumber(M._window.max_cols) or default_cols
+  if viewer_cols <= 0 then viewer_cols = default_cols end
+  local current_row, current_col = current_offsets()
+  local total_cols = window_shape_dim(2)
+  if (not total_cols or total_cols <= 1) and current_col == 0 and direction ~= 0 then
+    return
+  end
+  if total_cols and total_cols <= viewer_cols and current_col == 0 and direction > 0 then
+    return
+  end
+  local new_col = clamp_offset(current_col, viewer_cols * direction, total_cols, viewer_cols)
+  if new_col == current_col then return end
+  request_with_offsets(current_row, new_col)
+end
+
 local function drilldown_current()
   if not is_open() then return end
   local lnum = api.nvim_win_get_cursor(M.win)[1]
   local path = M._line2path[lnum]
   if path and type(path) == 'string' and #path > 0 then
     M.name = path
+    M._window = { row_offset = 0, col_offset = 0 }
     update_title(path)
-    set_content({ 'Loading preview for ' .. tostring(path) .. ' ...' })
-    require('ipybridge').request_preview(path)
+    request_with_offsets(0, 0)
   end
 end
 
@@ -237,17 +363,25 @@ local function ensure_win(name)
   end
   map('q', close_win, 'Close')
   map('r', function()
-    if M.name then require('ipybridge').request_preview(M.name) end
+    if not M.name then return end
+    local row_off, col_off = current_offsets()
+    request_with_offsets(row_off, col_off)
   end, 'Refresh')
+  map('<C-f>', function() move_rows(1) end, 'Next rows')
+  map('<C-b>', function() move_rows(-1) end, 'Previous rows')
+  map('<C-l>', function() move_cols(1) end, 'Next cols')
+  map('<C-h>', function() move_cols(-1) end, 'Previous cols')
+  map('<C-Right>', function() move_cols(1) end, 'Next cols')
+  map('<C-Left>', function() move_cols(-1) end, 'Previous cols')
   map('<CR>', drilldown_current, 'Drill-down preview')
 end
 
 function M.open(name)
   M.name = name
   ensure_win(name)
+  M._window = { row_offset = 0, col_offset = 0 }
   update_title(name)
-  set_content({ 'Loading preview for ' .. tostring(name) .. ' ...' })
-  require('ipybridge').request_preview(name)
+  request_with_offsets(0, 0)
 end
 
 function M.on_preview(data)
@@ -265,6 +399,21 @@ function M.on_preview(data)
     set_content({ 'Preview unavailable' })
     return
   end
+  local window = M._window or {}
+  local default_rows, default_cols = viewer_limits()
+  window.row_offset = tonumber(data.row_offset) or 0
+  window.col_offset = tonumber(data.col_offset) or 0
+  window.max_rows = tonumber(data.max_rows) or default_rows
+  window.max_cols = tonumber(data.max_cols) or default_cols
+  if type(data.total_shape) == 'table' then
+    window.shape = data.total_shape
+  elseif type(data.shape) == 'table' then
+    window.shape = data.shape
+  else
+    window.shape = nil
+  end
+  window.kind = data.kind
+  M._window = window
   local lines, map = nil, {}
   if data.kind == 'dataframe' then
     lines = render_df(data)

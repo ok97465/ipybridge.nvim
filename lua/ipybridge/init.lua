@@ -1050,11 +1050,26 @@ function M.request_vars()
 end
 
 -- Internal: request preview for a variable name from kernel.
-function M.request_preview(name)
+function M.request_preview(name, opts)
   if not name or #name == 0 then return end
+  opts = opts or {}
+  local row_offset = tonumber(opts.row_offset) or 0
+  local col_offset = tonumber(opts.col_offset) or 0
+  if row_offset < 0 then row_offset = 0 end
+  if col_offset < 0 then col_offset = 0 end
+  local max_rows = tonumber(M.config.viewer_max_rows) or 30
+  local max_cols = tonumber(M.config.viewer_max_cols) or 20
   local debug_mode = M._debug_active == true
   if debug_mode then
-    local payload = get_debug_preview_payload(name)
+    local use_cache = (row_offset == 0 and col_offset == 0)
+    local payload = nil
+    if use_cache then
+      payload = get_debug_preview_payload(name)
+      if type(payload) == 'table' then
+        payload.row_offset = payload.row_offset or 0
+        payload.col_offset = payload.col_offset or 0
+      end
+    end
     if payload then
       vim.schedule(function()
         local ok, dv = pcall(require, 'ipybridge.data_viewer')
@@ -1099,9 +1114,11 @@ function M.request_preview(name)
       local z = require('ipybridge.zmq_client')
       local payload_dbg = {
         name = name,
-        max_rows = M.config.viewer_max_rows,
-        max_cols = M.config.viewer_max_cols,
+        max_rows = max_rows,
+        max_cols = max_cols,
         debug = true,
+        row_offset = row_offset,
+        col_offset = col_offset,
       }
       local ok_req = z.request('preview', payload_dbg, dispatch_response)
       if not ok_req then
@@ -1139,8 +1156,10 @@ function M.request_preview(name)
     local z = require('ipybridge.zmq_client')
     local payload = {
       name = name,
-      max_rows = M.config.viewer_max_rows,
-      max_cols = M.config.viewer_max_cols,
+      max_rows = max_rows,
+      max_cols = max_cols,
+      row_offset = row_offset,
+      col_offset = col_offset,
     }
     local ok_req = z.request('preview', payload, function(msg)
       if msg and msg.ok and msg.tag == 'preview' then
@@ -1164,7 +1183,7 @@ function M.request_preview(name)
   -- Ensure ZMQ then retry once; do not fall back to typing helper calls.
   M.ensure_zmq(function(ok)
     if ok then
-      M.request_preview(name)
+      M.request_preview(name, opts)
     else
       vim.notify('ipybridge: ZMQ backend not available; preview unavailable', vim.log.levels.WARN)
     end

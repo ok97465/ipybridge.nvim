@@ -466,7 +466,9 @@ def _ctypes_array_preview(obj: Any, max_rows: int) -> Dict[str, Any]:
 def preview_data(name: str,
                  namespace: Optional[Mapping[str, Any]] = None,
                  max_rows: int = 50,
-                 max_cols: int = 20) -> Dict[str, Any]:
+                 max_cols: int = 20,
+                 row_offset: int = 0,
+                 col_offset: int = 0) -> Dict[str, Any]:
     """Build a preview payload for the given variable name."""
     ns = namespace or globals()
     ok, obj, err = resolve_path(name, ns)
@@ -475,10 +477,45 @@ def preview_data(name: str,
         return {"name": name, "error": err or "Name not found"}
 
     log_debug(f"preview building name={name}")
+    try:
+        rows_limit = int(max_rows)
+    except Exception:
+        rows_limit = 50
+    try:
+        cols_limit = int(max_cols)
+    except Exception:
+        cols_limit = 20
+    if rows_limit <= 0:
+        rows_limit = 50
+    if cols_limit <= 0:
+        cols_limit = 20
+    try:
+        row_offset = int(row_offset or 0)
+    except Exception:
+        row_offset = 0
+    try:
+        col_offset = int(col_offset or 0)
+    except Exception:
+        col_offset = 0
+    if row_offset < 0:
+        row_offset = 0
+    if col_offset < 0:
+        col_offset = 0
+
     pd_mod = _lazy_import("pandas")
     if pd_mod is not None and isinstance(obj, pd_mod.DataFrame):  # type: ignore[attr-defined]
         try:
-            frame = obj.iloc[:max_rows, :max_cols]
+            total_rows = int(obj.shape[0]) if getattr(obj, "shape", None) else None
+            total_cols = int(obj.shape[1]) if getattr(obj, "shape", None) else None
+            row_base = row_offset
+            col_base = col_offset
+            if total_rows is not None and total_rows > 0 and row_base >= total_rows:
+                row_base = max(total_rows - rows_limit, 0)
+            if total_cols is not None and total_cols > 0 and col_base >= total_cols:
+                col_base = max(total_cols - cols_limit, 0)
+            row_end = row_base + rows_limit if rows_limit > 0 else None
+            col_end = col_base + cols_limit if cols_limit > 0 else None
+            frame = obj.iloc[row_base:row_end, col_base:col_end]
             rows = []
             for row in frame.itertuples(index=False, name=None):
                 converted = []
@@ -490,31 +527,66 @@ def preview_data(name: str,
                     else:
                         converted.append(str(value))
                 rows.append(converted)
-            return {
+            payload: Dict[str, Any] = {
                 "name": name,
                 "kind": "dataframe",
                 "shape": [int(frame.shape[0]), int(frame.shape[1])],
                 "columns": [str(c) for c in frame.columns.to_list()],
                 "rows": rows,
+                "row_offset": row_base,
+                "col_offset": col_base,
+                "max_rows": rows_limit,
+                "max_cols": cols_limit,
             }
+            if total_rows is not None and total_cols is not None:
+                payload["total_shape"] = [total_rows, total_cols]
+            return payload
         except Exception as exc:
             return {"name": name, "error": str(exc)}
 
     np_mod = _lazy_import("numpy")
     if np_mod is not None and isinstance(obj, np_mod.ndarray):  # type: ignore[attr-defined]
         try:
+            ndim = int(getattr(obj, "ndim", 0))
+            total_shape = list(getattr(obj, "shape", []))
             info: Dict[str, Any] = {
                 "name": name,
                 "kind": "ndarray",
                 "dtype": str(obj.dtype),
                 "shape": list(obj.shape),
+                "row_offset": row_offset,
+                "col_offset": col_offset,
+                "max_rows": rows_limit,
+                "max_cols": cols_limit,
             }
-            if getattr(obj, "ndim", 0) == 1:
-                info["values1d"] = obj[:max_rows].tolist()
-            elif getattr(obj, "ndim", 0) == 2:
-                info["rows"] = obj[:max_rows, :max_cols].tolist()
+            if ndim == 1:
+                row_base = row_offset
+                total_rows = int(total_shape[0]) if total_shape else None
+                if total_rows is not None and total_rows > 0 and row_base >= total_rows:
+                    row_base = max(total_rows - rows_limit, 0)
+                end = row_base + rows_limit if rows_limit > 0 else None
+                info["row_offset"] = row_base
+                info["values1d"] = obj[row_base:end].tolist()
+                info["total_shape"] = total_shape
+            elif ndim == 2:
+                row_base = row_offset
+                col_base = col_offset
+                total_rows = int(total_shape[0]) if len(total_shape) >= 1 else None
+                total_cols = int(total_shape[1]) if len(total_shape) >= 2 else None
+                if total_rows is not None and total_rows > 0 and row_base >= total_rows:
+                    row_base = max(total_rows - rows_limit, 0)
+                if total_cols is not None and total_cols > 0 and col_base >= total_cols:
+                    col_base = max(total_cols - cols_limit, 0)
+                row_end = row_base + rows_limit if rows_limit > 0 else None
+                col_end = col_base + cols_limit if cols_limit > 0 else None
+                info["row_offset"] = row_base
+                info["col_offset"] = col_base
+                info["rows"] = obj[row_base:row_end, col_base:col_end].tolist()
+                info["total_shape"] = total_shape
             else:
                 info["repr"] = _safe_repr(obj, 300)
+                if total_shape:
+                    info["total_shape"] = total_shape
             return info
         except Exception as exc:
             return {"name": name, "error": str(exc)}

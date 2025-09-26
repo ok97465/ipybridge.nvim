@@ -41,7 +41,13 @@ class BootstrapPayload:
     def build(self, enable_debug: bool) -> str:
         prelude = self._template.replace("__MODULE_B64__", self._module_b64)
         flag = "True" if enable_debug else "False"
-        return f"{prelude}\n_myipy_set_debug_logging({flag})\n"
+        prelude = (
+            f"{prelude}\n"
+            f"_myipy_set_debug_logging({flag})\n"
+            "__IPYBRIDGE_DEBUG_PORT__ = _DEBUG_PREVIEW.ensure_running()\n"
+            "print('__IPYBRIDGE_DEBUG_PORT__:' + str(__IPYBRIDGE_DEBUG_PORT__))\n"
+        )
+        return prelude
 
 
 class KernelChannel:
@@ -51,12 +57,17 @@ class KernelChannel:
         self._client_factory = client_factory
         self._logger = logger
         self._client = None
+        self._debug_port: Optional[int] = None
 
     @property
     def client(self):  # type: ignore[override]
         if self._client is None:
             raise RuntimeError("kernel client is not initialised")
         return self._client
+
+    @property
+    def debug_port(self) -> Optional[int]:
+        return self._debug_port
 
     def connect(self, conn_file: str, prelude: str) -> None:
         client = self._client_factory()
@@ -73,6 +84,7 @@ class KernelChannel:
             allow_stdin=False,
             stop_on_error=False,
         )
+        stdout_chunks = ""
         try:
             self.client.get_shell_msg(timeout=5)
         except Exception:
@@ -87,6 +99,21 @@ class KernelChannel:
                 and io_msg.get("content", {}).get("execution_state") == "idle"
             ):
                 break
+            if (
+                io_msg.get("msg_type") == "stream"
+                and io_msg.get("content", {}).get("name") == "stdout"
+            ):
+                stdout_chunks += io_msg.get("content", {}).get("text", "")
+        if stdout_chunks:
+            for line in stdout_chunks.splitlines():
+                if line.startswith("__IPYBRIDGE_DEBUG_PORT__:"):
+                    try:
+                        self._debug_port = int(line.split(":", 1)[1])
+                        self._logger.log(
+                            f"debug preview port captured {self._debug_port}"
+                        )
+                    except Exception:
+                        self._logger.log("failed to parse debug preview port from prelude")
         self._logger.log("prelude ready")
 
     @staticmethod
@@ -235,6 +262,10 @@ class DebugPreviewClient:
     def ensure_port(self) -> Optional[int]:
         if self._port:
             return self._port
+        channel_port = getattr(self._channel, "debug_port", None)
+        if isinstance(channel_port, int) and channel_port > 0:
+            self._port = channel_port
+            return self._port
         ok, data, err = self._channel.run_and_collect("__mi_debug_server_info()")
         if not ok or not isinstance(data, dict):
             self._logger.log(f"debug server info failed: {err}")
@@ -247,12 +278,18 @@ class DebugPreviewClient:
         self._logger.log("debug preview port unavailable")
         return None
 
-    def request(self, name: str, rows: int, cols: int) -> Tuple[bool, Optional[dict], Optional[str]]:
+    def request(self, name: str, rows: int, cols: int, row_offset: int, col_offset: int) -> Tuple[bool, Optional[dict], Optional[str]]:
         port = self.ensure_port()
         if not port:
             return False, None, "debug preview server unavailable"
         payload = json.dumps(
-            {"name": name, "max_rows": rows, "max_cols": cols},
+            {
+                "name": name,
+                "max_rows": rows,
+                "max_cols": cols,
+                "row_offset": row_offset,
+                "col_offset": col_offset,
+            },
             ensure_ascii=False,
         ).encode("utf-8") + b"\n"
         try:
@@ -339,17 +376,31 @@ class RequestProcessor:
 
     def _handle_preview(self, req_id, args: dict) -> dict:
         name = args.get("name") or ""
-        max_rows = int(args.get("max_rows", 30))
-        max_cols = int(args.get("max_cols", 20))
         debug_mode = bool(args.get("debug"))
+        def _int(value, default=0):
+            try:
+                if value is None:
+                    return default
+                return int(value)
+            except Exception:
+                return default
+
+        max_rows = _int(args.get("max_rows"), 30)
+        max_cols = _int(args.get("max_cols"), 20)
+        row_offset = _int(args.get("row_offset"), 0)
+        col_offset = _int(args.get("col_offset"), 0)
+        if row_offset < 0:
+            row_offset = 0
+        if col_offset < 0:
+            col_offset = 0
         name_esc = str(name).replace("'", "\\'")
         if debug_mode:
-            ok, data, err = self._preview.request(name, max_rows, max_cols)
+            ok, data, err = self._preview.request(name, max_rows, max_cols, row_offset, col_offset)
             if not ok:
                 self._logger.log(f"debug preview socket fallback err={err}")
                 code = (
                     f"__mi_debug_preview('{name_esc}', max_rows={max_rows}, "
-                    f"max_cols={max_cols})"
+                    f"max_cols={max_cols}, row_offset={row_offset}, col_offset={col_offset})"
                 )
                 ok, data, err = self._channel.run_and_collect(code)
             response = {"id": req_id, "ok": bool(ok), "tag": "preview"}
@@ -360,7 +411,7 @@ class RequestProcessor:
             return response
 
         code = (
-            f"__mi_preview('{name_esc}', max_rows={max_rows}, max_cols={max_cols})"
+            f"__mi_preview('{name_esc}', max_rows={max_rows}, max_cols={max_cols}, row_offset={row_offset}, col_offset={col_offset})"
         )
         self._logger.log(
             f"preview exec code={KernelChannel._shorten(code)} debug={debug_mode}"
