@@ -4,12 +4,22 @@ import base64
 import io
 import json
 import os
+import socket
 import sys
+import threading
 import types
 from IPython import get_ipython
 
 
 _PREVIEW_LIMITS = {"rows": 30, "cols": 20}
+
+# Stores the most recent debug namespace so previews can be served on demand.
+_DEBUG_CONTEXT = {"namespace": None, "frame_id": None, "scoped": False, "rows": None, "cols": None}
+
+# Lightweight TCP server used for on-demand debug previews when the kernel is paused.
+_DEBUG_SERVER = {"port": None, "socket": None, "thread": None}
+
+_MAX_CHILD_PREVIEWS = 40
 
 MODULE_B64 = "__MODULE_B64__"
 
@@ -66,26 +76,27 @@ def _cache_preview(name, namespace, rows, cols, visited, cache):
     return preview
 
 
-def _child_preview_paths(name, preview):
-    if not isinstance(preview, dict):
+def _child_preview_paths(name, preview, remaining):
+    if remaining <= 0 or not isinstance(preview, dict):
         return []
     base = name
     out = []
     kind = preview.get("kind")
-    if kind == "ctypes":
+    if kind in {"ctypes", "dataclass"}:
         for field in preview.get("fields") or []:
             fname = field.get("name")
             if isinstance(fname, str) and fname:
                 out.append(f"{base}.{fname}")
-    elif kind == "dataclass":
-        for field in preview.get("fields") or []:
-            fname = field.get("name")
-            if isinstance(fname, str) and fname:
-                out.append(f"{base}.{fname}")
+                if len(out) >= remaining:
+                    break
     elif kind == "dataframe":
-        for col in preview.get("columns") or []:
-            if isinstance(col, str) and col:
-                out.append(f"{base}['{col}']")
+        cols = preview.get("columns") or []
+        for col in cols:
+            if not isinstance(col, str) or not col:
+                continue
+            out.append(f"{base}['{col}']")
+            if len(out) >= remaining:
+                break
     return out
 
 
@@ -121,6 +132,92 @@ def _myipy_write_json(path, obj):
             json.dump(obj, handle, ensure_ascii=False)
     except Exception as exc:
         _myipy_emit("preview", {"name": obj.get("name") if isinstance(obj, dict) else None, "error": str(exc)})
+
+
+def _debug_preview_compute(name, max_rows=None, max_cols=None):
+    rows = int(max_rows) if max_rows else int(_PREVIEW_LIMITS.get("rows") or 30)
+    cols = int(max_cols) if max_cols else int(_PREVIEW_LIMITS.get("cols") or 20)
+    ctx = _DEBUG_CONTEXT if isinstance(_DEBUG_CONTEXT, dict) else {}
+    namespace = ctx.get("namespace") if isinstance(ctx.get("namespace"), dict) else None
+    frame_id = ctx.get("frame_id")
+    if not namespace:
+        payload = {"name": name, "error": "debug namespace unavailable"}
+        _ipy_log_debug(
+            f"debug preview compute skipped name={name} frame_id={frame_id} reason=no-context"
+        )
+        return payload
+    try:
+        data = _ipy_preview_data(name, namespace=namespace, max_rows=rows, max_cols=cols)
+    except Exception as exc:
+        data = {"name": name, "error": f"preview error: {exc}"}
+    status = "error" if isinstance(data, dict) and data.get("error") else "ok"
+    _ipy_log_debug(
+        f"debug preview compute name={name} frame_id={frame_id} status={status} rows={rows} cols={cols}"
+    )
+    return data
+
+
+def _debug_preview_loop(server):
+    while True:
+        try:
+            conn, _ = server.accept()
+        except Exception as exc:
+            _ipy_log_debug(f"debug preview server accept failed: {exc}")
+            break
+        try:
+            raw = b""
+            while True:
+                chunk = conn.recv(4096)
+                if not chunk:
+                    break
+                raw += chunk
+                if b"\n" in chunk:
+                    break
+            if not raw:
+                continue
+            try:
+                request = json.loads(raw.decode("utf-8").strip())
+            except Exception as exc:
+                response = {"ok": False, "error": f"decode error: {exc}"}
+            else:
+                name = request.get("name")
+                rows = request.get("max_rows")
+                cols = request.get("max_cols")
+                payload = _debug_preview_compute(name, rows, cols)
+                response = {"ok": True, "data": payload}
+            conn.sendall(json.dumps(response, ensure_ascii=False).encode("utf-8") + b"\n")
+        except Exception as exc:
+            _ipy_log_debug(f"debug preview server error: {exc}")
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+def _ensure_debug_preview_server():
+    global _DEBUG_SERVER
+    if isinstance(_DEBUG_SERVER, dict) and _DEBUG_SERVER.get("port"):
+        return _DEBUG_SERVER.get("port")
+    try:
+        server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        server.bind(("127.0.0.1", 0))
+        server.listen(5)
+    except Exception as exc:
+        _ipy_log_debug(f"debug preview server start failed: {exc}")
+        return None
+    port = server.getsockname()[1]
+    thread = threading.Thread(
+        target=_debug_preview_loop,
+        args=(server,),
+        name="ipybridge-debug-preview",
+        daemon=True,
+    )
+    thread.start()
+    _DEBUG_SERVER = {"port": port, "socket": server, "thread": thread}
+    _ipy_log_debug(f"debug preview server listening port={port}")
+    return port
 
 
 def _myipy_get_conn_file(__path=None):
@@ -264,22 +361,46 @@ def _myipy_emit_debug_vars(frame=None):
                 entry["_preview_cache"] = preview
                 if isinstance(preview, dict) and not preview.get("error"):
                     previewable += 1
+                remaining = _MAX_CHILD_PREVIEWS
                 child_map = {}
-                queue = list(_child_preview_paths(name, preview))
-                while queue:
+                queue = list(_child_preview_paths(name, preview, remaining))
+                while queue and remaining > 0:
                     child = queue.pop(0)
                     child_preview = _cache_preview(child, namespace, rows, cols, visited, cache)
                     if child_preview is None:
                         continue
                     child_map[child] = child_preview
-                    for grand in _child_preview_paths(child, child_preview):
-                        if grand not in visited:
+                    remaining -= 1
+                    extra = _child_preview_paths(child, child_preview, remaining)
+                    for grand in extra:
+                        if grand not in visited and grand not in queue:
                             queue.append(grand)
                 if child_map:
                     entry["_preview_children"] = child_map
 
         enrich(locals_data)
         enrich(globals_data)
+        global _DEBUG_CONTEXT
+        if frame is not None and isinstance(namespace, dict):
+            _DEBUG_CONTEXT = {
+                "namespace": namespace,
+                "frame_id": id(frame),
+                "scoped": True,
+                "rows": rows,
+                "cols": cols,
+            }
+            ns_size = len(namespace)
+            _ipy_log_debug(
+                f"debug context stored frame_id={id(frame)} namespace_items={ns_size} cache_entries={len(cache)}"
+            )
+        else:
+            _DEBUG_CONTEXT = {
+                "namespace": namespace if isinstance(namespace, dict) else None,
+                "frame_id": None,
+                "scoped": False,
+                "rows": rows,
+                "cols": cols,
+            }
         snapshot = {
             "__locals__": locals_data,
             "__globals__": globals_data,
@@ -291,6 +412,19 @@ def _myipy_emit_debug_vars(frame=None):
         _myipy_emit("vars", snapshot)
     except Exception as exc:
         _ipy_log_debug(f"emit debug vars failed: {exc}")
+
+
+def __mi_debug_preview(name, max_rows=50, max_cols=20):
+    data = _debug_preview_compute(name, max_rows, max_cols)
+    print(json.dumps(data, ensure_ascii=False))
+    _myipy_purge_last_history()
+
+
+def __mi_debug_server_info():
+    port = _ensure_debug_preview_server()
+    payload = {"port": int(port) if port else None}
+    print(json.dumps(payload, ensure_ascii=False))
+    _myipy_purge_last_history()
 
 
 def __mi_set_filters(names=None, types=None, max_repr=None):
@@ -324,3 +458,6 @@ def __mi_preview(name, max_rows=50, max_cols=20):
     data = _ipy_preview_data(name, namespace=namespace, max_rows=max_rows, max_cols=max_cols)
     print(json.dumps(data, ensure_ascii=False))
     _myipy_purge_last_history()
+
+
+_ensure_debug_preview_server()

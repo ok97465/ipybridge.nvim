@@ -1055,17 +1055,82 @@ function M.request_preview(name)
   local debug_mode = M._debug_active == true
   if debug_mode then
     local payload = get_debug_preview_payload(name)
-    vim.schedule(function()
-      local ok, dv = pcall(require, 'ipybridge.data_viewer')
-      if not (ok and dv and dv.on_preview) then
+    if payload then
+      vim.schedule(function()
+        local ok, dv = pcall(require, 'ipybridge.data_viewer')
+        if ok and dv and dv.on_preview then
+          dv.on_preview(payload)
+        end
+      end)
+      return
+    end
+    if not M.config.use_zmq then
+      vim.schedule(function()
+        local ok, dv = pcall(require, 'ipybridge.data_viewer')
+        if ok and dv and dv.on_preview then
+          dv.on_preview({ name = name, error = 'ZMQ backend disabled for debug preview' })
+        end
+      end)
+      return
+    end
+    local function dispatch_response(msg)
+      if msg and msg.ok and msg.tag == 'preview' then
+        local ok, dv = pcall(require, 'ipybridge.data_viewer')
+        if ok and dv and dv.on_preview then
+          vim.schedule(function()
+            dv.on_preview(msg.data or {})
+          end)
+        end
         return
       end
-      if payload then
-        dv.on_preview(payload)
+      vim.schedule(function()
+        local ok, dv = pcall(require, 'ipybridge.data_viewer')
+        if ok and dv and dv.on_preview then
+          dv.on_preview({ name = name, error = 'Debug preview request failed' })
+        end
+      end)
+      if msg and msg.error then
+        vim.notify('ipybridge: ZMQ debug preview failed - ' .. tostring(msg.error), vim.log.levels.WARN)
       else
-        dv.on_preview({ name = name, error = 'Preview data not ready yet' })
+        vim.notify('ipybridge: ZMQ debug preview failed', vim.log.levels.WARN)
       end
-    end)
+    end
+    local function send_debug_request()
+      local z = require('ipybridge.zmq_client')
+      local payload_dbg = {
+        name = name,
+        max_rows = M.config.viewer_max_rows,
+        max_cols = M.config.viewer_max_cols,
+        debug = true,
+      }
+      local ok_req = z.request('preview', payload_dbg, dispatch_response)
+      if not ok_req then
+        vim.schedule(function()
+          local ok, dv = pcall(require, 'ipybridge.data_viewer')
+          if ok and dv and dv.on_preview then
+            dv.on_preview({ name = name, error = 'Failed to send debug preview request' })
+          end
+        end)
+        vim.notify('ipybridge: failed to send ZMQ debug preview request', vim.log.levels.WARN)
+      end
+    end
+    if M._zmq_ready then
+      send_debug_request()
+    else
+      M.ensure_zmq(function(ok)
+        if ok then
+          send_debug_request()
+        else
+          vim.schedule(function()
+            local ok_mod, dv = pcall(require, 'ipybridge.data_viewer')
+            if ok_mod and dv and dv.on_preview then
+              dv.on_preview({ name = name, error = 'ZMQ backend unavailable in debug' })
+            end
+          end)
+          vim.notify('ipybridge: ZMQ backend not available; debug preview unavailable', vim.log.levels.WARN)
+        end
+      end)
+    end
     return
   else
     M._sync_var_filters()

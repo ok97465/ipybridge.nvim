@@ -7,6 +7,7 @@ import ast
 import json
 from typing import Optional
 import contextlib
+import socket
 import sys
 import time
 from pathlib import Path
@@ -69,6 +70,8 @@ def main() -> int:
         except Exception:
             break
     dbg("prelude ready")
+
+    debug_preview_port: Optional[int] = None
 
     def _shorten(src: str, limit: int = 80) -> str:
         src = src.replace('\n', ' ')
@@ -179,6 +182,59 @@ def main() -> int:
             dbg(f'parse error: {exc}; payload={stdout_chunks[:120]!r}')
             return False, None, f'parse error: {exc}'
 
+    def fetch_debug_preview_port():
+        nonlocal debug_preview_port
+        ok, data, err = run_and_collect("__mi_debug_server_info()")
+        if not ok or not isinstance(data, dict):
+            dbg(f'debug server info failed: {err}')
+            return
+        port = data.get('port')
+        if isinstance(port, int) and port > 0:
+            debug_preview_port = port
+            dbg(f'debug preview port set to {port}')
+        else:
+            dbg('debug preview port unavailable')
+
+    def request_debug_preview(name: str, rows: int, cols: int):
+        if not debug_preview_port or debug_preview_port <= 0:
+            return False, None, 'debug preview server unavailable'
+        payload = json.dumps(
+            {
+                'name': name,
+                'max_rows': rows,
+                'max_cols': cols,
+            },
+            ensure_ascii=False,
+        ).encode('utf-8') + b'\n'
+        try:
+            with socket.create_connection(('127.0.0.1', debug_preview_port), timeout=2.0) as sock:
+                sock.sendall(payload)
+                sock.shutdown(socket.SHUT_WR)
+                chunks = b''
+                sock.settimeout(2.0)
+                while True:
+                    chunk = sock.recv(4096)
+                    if not chunk:
+                        break
+                    chunks += chunk
+                    if b'\n' in chunk:
+                        break
+        except Exception as exc:
+            dbg(f'debug preview socket error: {exc}')
+            return False, None, f'socket error: {exc}'
+        if not chunks:
+            return False, None, 'empty response'
+        try:
+            resp = json.loads(chunks.decode('utf-8').strip())
+        except Exception as exc:
+            return False, None, f'decode error: {exc}'
+        ok = bool(resp.get('ok'))
+        data = resp.get('data')
+        err = resp.get('error')
+        return ok, data, err
+
+    fetch_debug_preview_port()
+
     for line in sys.stdin:
         line = line.strip()
         if not line:
@@ -214,9 +270,29 @@ def main() -> int:
             name = args.get('name') or ''
             max_rows = int(args.get('max_rows', 30))
             max_cols = int(args.get('max_cols', 20))
+            debug_preview = bool(args.get('debug'))
             name_esc = str(name).replace("'", "\\'")
-            code = f"__mi_preview('{name_esc}', max_rows={max_rows}, max_cols={max_cols})"
-            dbg(f'preview exec code={_shorten(code)}')
+            if debug_preview:
+                ok, data, err = request_debug_preview(name, max_rows, max_cols)
+                if not ok and debug_preview_port:
+                    dbg(f'debug preview socket fallback err={err}')
+                if not ok:
+                    code = f"__mi_debug_preview('{name_esc}', max_rows={max_rows}, max_cols={max_cols})"
+                    dbg(f'preview exec fallback code={_shorten(code)} debug=True')
+                    ok, data, err = run_and_collect(code)
+                response = {'id': req_id, 'ok': bool(ok), 'tag': 'preview'}
+                if ok and data is not None:
+                    response['data'] = data
+                elif err:
+                    response['error'] = err
+                else:
+                    response['error'] = 'debug preview failed'
+                sys.stdout.write(json.dumps(response, ensure_ascii=False) + "\n")
+                sys.stdout.flush()
+                continue
+            else:
+                code = f"__mi_preview('{name_esc}', max_rows={max_rows}, max_cols={max_cols})"
+            dbg(f'preview exec code={_shorten(code)} debug={debug_preview}')
             ok, data, err = run_and_collect(code)
             dbg(f'preview name={name!r} ok={ok} err={bool(err)} data_none={data is None}')
             if data is not None:
