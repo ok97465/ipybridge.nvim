@@ -12,8 +12,8 @@
 - `bootstrap_helpers.py`
   - `_PREVIEW_LIMITS`에 현재 설정된 행·열 제한을 보관합니다.
   - `_cache_preview()`가 네임스페이스와 경로를 기반으로 `preview_data()`를 호출해 JSON 호환 구조를 만들고, 스냅샷 동안 재사용하기 위한 로컬 캐시에 저장합니다.
-  - `_myipy_emit_debug_vars()`는 현재 프레임의 로컬·글로벌 네임스페이스를 분리해 각각 `_cache_preview()`로 채우고, 최대 `_MAX_CHILD_PREVIEWS`만큼 하위 경로를 BFS로 확장해 `_preview_children`에 적재합니다. 동시에 `_DEBUG_CONTEXT`에 병합된 네임스페이스와 프레임 정보를 저장해 이후 요청에 재사용합니다.
-  - `_ensure_debug_preview_server()`는 모듈 로드 시 127.0.0.1에 소켓 서버를 열어 두고, `_debug_preview_loop()` 스레드가 `_DEBUG_CONTEXT`를 사용해 온디맨드 프리뷰를 계산합니다.
+  - `_myipy_emit_debug_vars()`는 현재 프레임의 로컬·글로벌 네임스페이스를 분리해 각각 `_cache_preview()`로 채우고, 최대 `_MAX_CHILD_PREVIEWS`만큼 하위 경로를 BFS로 확장해 `_preview_children`에 적재합니다. 동시에 `_DebugPreviewContext.capture()`로 최신 네임스페이스와 프리뷰 한계를 기록합니다.
+  - `_DebugPreviewServer.ensure_running()`는 모듈 로드 시 127.0.0.1에 소켓 서버를 열고, 전용 스레드에서 `_DebugPreviewContext.compute()`를 호출해 온디맨드 프리뷰를 제공합니다.
   - `__mi_debug_preview()`와 `__mi_debug_server_info()`는 각각 JSON 응답으로 프리뷰/서버 포트를 반환하며, 백엔드가 부하 없이 상태를 확인할 수 있습니다.
 
 ## Neovim 쪽 처리
@@ -36,6 +36,6 @@
 - DataFrame 열 등 키 수가 매우 많은 객체는 하위 경로가 많아질 수 있으니 `viewer_max_rows`, `viewer_max_cols`를 적절히 조절해 주는 것이 좋습니다.
 
 ## 로깅 체크 포인트
-- `_myipy_emit_debug_vars()`가 실행되면 `_ipy_log_debug`에 `debug context stored ...` 메시지가 남습니다. 프레임 이동 시 컨텍스트가 정상적으로 갱신됐는지 확인할 수 있습니다.
-- `_debug_preview_compute()`가 호출되면 `debug preview compute name=... status=...` 로그가 추가로 남습니다. 소켓 서버가 제어 프롬프트를 중단시키지 않고 호출되는지 추적할 때 사용합니다.
+- `_DebugPreviewContext.capture()`가 실행되면 `_ipy_log_debug`에 `debug context stored ...` 메시지가 남습니다. 프레임 이동 시 컨텍스트가 정상적으로 갱신됐는지 확인할 수 있습니다.
+- `_DebugPreviewContext.compute()`가 호출되면 `debug preview compute name=... status=...` 로그가 추가로 남습니다. 소켓 서버가 제어 프롬프트를 중단시키지 않고 호출되는지 추적할 때 사용합니다.
 - 소켓 서버는 시작 시 `debug preview server listening port=...` 로그를, 예외 발생 시 `debug preview server ...` 로그를 남깁니다.
