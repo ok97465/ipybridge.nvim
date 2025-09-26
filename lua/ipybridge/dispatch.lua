@@ -65,7 +65,15 @@ end
 
 -- Default handlers
 M.register('vars', lazy_method('ipybridge.var_explorer', 'on_vars', function(message)
-  return message.data or {}
+  local payload = message.data or {}
+  local ok, bridge = pcall(require, 'ipybridge')
+  if ok and bridge and type(bridge._digest_vars_snapshot) == 'function' then
+    local ok_digest, result = pcall(bridge._digest_vars_snapshot, payload)
+    if ok_digest then
+      return result or {}
+    end
+  end
+  return payload
 end))
 
 M.register('preview', lazy_method('ipybridge.data_viewer', 'on_preview', function(message)

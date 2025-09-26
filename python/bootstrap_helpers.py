@@ -203,41 +203,92 @@ def _myipy_emit_debug_vars(frame=None):
     try:
         filters = _ipy_get_var_filters()
         namespace = _myipy_current_namespace(frame)
-        data = _ipy_list_variables(
-            namespace=namespace,
-            max_repr=filters.get("max_repr") or 120,
-            hide_names=filters.get("names"),
-            hide_types=filters.get("types"),
+        globals_ns = None
+        locals_ns = None
+        locals_data = {}
+        globals_data = {}
+        max_repr = filters.get("max_repr") or 120
+        hide_names = filters.get("names")
+        hide_types = filters.get("types")
+        frame_locals = None
+        frame_globals = None
+        if frame is not None:
+            try:
+                frame_locals = getattr(frame, "f_locals", None)
+            except Exception:
+                frame_locals = None
+            try:
+                frame_globals = getattr(frame, "f_globals", None)
+            except Exception:
+                frame_globals = None
+        if frame_locals:
+            try:
+                frame_locals = dict(frame_locals)
+            except Exception:
+                pass
+            locals_ns = _ipy_collect_namespace(None, frame_locals)
+            locals_data = _ipy_list_variables(
+                namespace=locals_ns,
+                max_repr=max_repr,
+                hide_names=hide_names,
+                hide_types=hide_types,
+            )
+        _ipy_log_debug(
+            "debug locals size=%d globals size=%d frame=%s" % (
+                len(locals_data),
+                len(globals_data),
+                'yes' if frame is not None else 'no',
+            )
         )
+        globals_ns = _ipy_collect_namespace((frame_globals and dict(frame_globals)) or globals())
+        globals_data = _ipy_list_variables(
+            namespace=globals_ns,
+            max_repr=max_repr,
+            hide_names=hide_names,
+            hide_types=hide_types,
+        )
+        if frame is not None:
+            globals_data = {}
         rows = int(_PREVIEW_LIMITS.get("rows") or 30)
         cols = int(_PREVIEW_LIMITS.get("cols") or 20)
         previewable = 0
         visited = set()
         cache = {}
-        for name, entry in list(data.items()):
-            preview = _cache_preview(name, namespace, rows, cols, visited, cache)
-            if preview is None:
-                continue
-            entry["_preview_cache"] = preview
-            if isinstance(preview, dict) and not preview.get("error"):
-                previewable += 1
-            child_map = {}
-            queue = list(_child_preview_paths(name, preview))
-            while queue:
-                child = queue.pop(0)
-                child_preview = _cache_preview(child, namespace, rows, cols, visited, cache)
-                if child_preview is None:
+
+        def enrich(scope_map):
+            nonlocal previewable
+            for name, entry in list(scope_map.items()):
+                preview = _cache_preview(name, namespace, rows, cols, visited, cache)
+                if preview is None:
                     continue
-                child_map[child] = child_preview
-                for grand in _child_preview_paths(child, child_preview):
-                    if grand not in visited:
-                        queue.append(grand)
-            if child_map:
-                entry["_preview_children"] = child_map
+                entry["_preview_cache"] = preview
+                if isinstance(preview, dict) and not preview.get("error"):
+                    previewable += 1
+                child_map = {}
+                queue = list(_child_preview_paths(name, preview))
+                while queue:
+                    child = queue.pop(0)
+                    child_preview = _cache_preview(child, namespace, rows, cols, visited, cache)
+                    if child_preview is None:
+                        continue
+                    child_map[child] = child_preview
+                    for grand in _child_preview_paths(child, child_preview):
+                        if grand not in visited:
+                            queue.append(grand)
+                if child_map:
+                    entry["_preview_children"] = child_map
+
+        enrich(locals_data)
+        enrich(globals_data)
+        snapshot = {
+            "__locals__": locals_data,
+            "__globals__": globals_data,
+            "__scoped__": bool(frame is not None),
+        }
         _ipy_log_debug(
-            f"debug vars snapshot count={len(data)} previewable={previewable}"
+            f"debug vars snapshot count={len(locals_data) + len(globals_data)} previewable={previewable}"
         )
-        _myipy_emit("vars", data)
+        _myipy_emit("vars", snapshot)
     except Exception as exc:
         _ipy_log_debug(f"emit debug vars failed: {exc}")
 

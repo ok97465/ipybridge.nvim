@@ -55,7 +55,6 @@ local function render()
     local ty = tostring(it.type or ''):gsub('[\r\n]', ' ')
     local shp = fmt_shape(it.shape)
     local pv = tostring(it.repr or ''):gsub('[\r\n]', ' ')
-    -- Simple padding; keep to reasonable widths
     local l = string.format('%-20s %-14s %-9s %s', name, ty, shp, pv)
     table.insert(lines, l)
     M._line2name[#lines] = name
@@ -89,7 +88,6 @@ local function ensure_win()
   api.nvim_set_option_value('swapfile', false, { buf = M.buf })
   api.nvim_set_option_value('filetype', 'ipybridge-vars', { buf = M.buf })
   api.nvim_buf_set_option(M.buf, 'modifiable', false)
-  -- Keymaps
   local function map(lhs, rhs, desc)
     vim.keymap.set('n', lhs, rhs, { buffer = M.buf, silent = true, nowait = true, desc = desc })
   end
@@ -128,10 +126,6 @@ end
 
 function M.on_vars(tbl)
   M.vars = tbl or {}
-  local ok, bridge = pcall(require, 'ipybridge')
-  if ok and bridge and type(bridge._update_latest_vars) == 'function' then
-    pcall(bridge._update_latest_vars, M.vars)
-  end
   render()
 end
 

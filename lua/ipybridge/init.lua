@@ -18,7 +18,7 @@ local fs = vim.fs
 local uv = vim.uv
 
 -- Core state for the plugin. Comments are in English; see README for usage.
-local M = { term_instance = nil, _helpers_sent = false, _conn_file = nil, _kernel_job = nil, _helpers_path = nil, _runcell_sent = false, _runcell_path = nil, _last_cwd_sent = nil, _debug_active = false, _breakpoints = {}, _breakpoint_signs = {}, _breakpoint_seq = 0, _breakpoint_support_ready = false, _latest_vars = nil }
+local M = { term_instance = nil, _helpers_sent = false, _conn_file = nil, _kernel_job = nil, _helpers_path = nil, _runcell_sent = false, _runcell_path = nil, _last_cwd_sent = nil, _debug_active = false, _breakpoints = {}, _breakpoint_signs = {}, _breakpoint_seq = 0, _breakpoint_support_ready = false, _latest_vars = {}, _debug_locals_snapshot = nil, _debug_globals_snapshot = nil, _debug_scope = 'globals' }
 -- Cell markers must be exactly: start of line '#', one space, then at least '%%'.
 -- Examples matched: '# %%', '# %% Import'. Examples NOT matched: '  # %%', '#%%'.
 local CELL_PATTERN = [[^# %%\+]]
@@ -90,26 +90,49 @@ local function get_debug_preview_payload(name)
   if not name or name == '' then
     return nil
   end
-  local vars = M._latest_vars
-  if type(vars) ~= 'table' then
-    return nil
-  end
-  local entry = vars[name]
-  if type(entry) == 'table' then
-    local cache = entry._preview_cache
-    if cache then
-      return cache
+  local function lookup(scope_tbl)
+    if type(scope_tbl) ~= 'table' then
+      return nil
     end
-  end
-  for _, item in pairs(vars) do
-    if type(item) == 'table' then
-      local children = item._preview_children
-      if type(children) == 'table' then
-        local payload = children[name]
-        if payload then
-          return payload
+    local entry = scope_tbl[name]
+    if type(entry) == 'table' then
+      local cache = entry._preview_cache
+      if cache then
+        return cache
+      end
+    end
+    for _, item in pairs(scope_tbl) do
+      if type(item) == 'table' then
+        local children = item._preview_children
+        if type(children) == 'table' then
+          local payload = children[name]
+          if payload then
+            return payload
+          end
         end
       end
+    end
+    return nil
+  end
+  local scopes = {}
+  if type(M._debug_locals_snapshot) == 'table' and type(M._debug_locals_snapshot.__locals__) == 'table' then
+    table.insert(scopes, M._debug_locals_snapshot.__locals__)
+  end
+  if type(M._debug_globals_snapshot) == 'table' then
+    local gscope = M._debug_globals_snapshot.__globals__
+    if type(gscope) == 'table' then
+      table.insert(scopes, gscope)
+    else
+      table.insert(scopes, M._debug_globals_snapshot)
+    end
+  end
+  if type(M._latest_vars) == 'table' then
+    table.insert(scopes, M._latest_vars)
+  end
+  for _, scope in ipairs(scopes) do
+    local payload = lookup(scope)
+    if payload then
+      return payload
     end
   end
   return nil
@@ -504,8 +527,74 @@ function M._sync_var_filters()
   -- This function remains for API compatibility but intentionally performs no action.
 end
 
+local function sanitize_scope(scope)
+  if type(scope) ~= 'table' then
+    return {}
+  end
+  local out = {}
+  for name, value in pairs(scope) do
+    if type(name) == 'string' and not name:match('^__') then
+      out[name] = value
+    end
+  end
+  return out
+end
+
+local function current_debug_scope(prefer_locals)
+  if prefer_locals then
+    if type(M._debug_locals_snapshot) == 'table' then
+      local scope = M._debug_locals_snapshot.__locals__
+      if type(scope) == 'table' and next(scope) then
+        return sanitize_scope(scope)
+      end
+    end
+  end
+  if type(M._debug_globals_snapshot) == 'table' then
+    local scope = M._debug_globals_snapshot.__globals__
+    if type(scope) == 'table' and next(scope) then
+      return sanitize_scope(scope)
+    end
+    if next(M._debug_globals_snapshot) then
+      return sanitize_scope(M._debug_globals_snapshot)
+    end
+  end
+  if type(M._debug_locals_snapshot) == 'table' then
+    local scope = M._debug_locals_snapshot.__locals__
+    if type(scope) == 'table' and next(scope) then
+      return sanitize_scope(scope)
+    end
+  end
+  return {}
+end
+
+function M._digest_vars_snapshot(snapshot)
+  if type(snapshot) ~= 'table' then
+    M._latest_vars = {}
+    return M._latest_vars
+  end
+  local has_debug_meta = snapshot.__scoped__ ~= nil or snapshot.__locals__ ~= nil or snapshot.__globals__ ~= nil
+  if not has_debug_meta then
+    M._debug_locals_snapshot = nil
+    M._debug_globals_snapshot = nil
+    M._latest_vars = sanitize_scope(snapshot)
+    return M._latest_vars
+  end
+  local scoped_flag = snapshot.__scoped__
+  local locals_scope = snapshot.__locals__
+  local globals_scope = snapshot.__globals__
+  if scoped_flag == true or (type(locals_scope) == 'table' and next(locals_scope)) then
+    M._debug_locals_snapshot = snapshot
+  end
+  if scoped_flag == false or type(globals_scope) == 'table' or (not scoped_flag and snapshot.__locals__ == nil) then
+    M._debug_globals_snapshot = snapshot
+  end
+  local prefer_locals = (M._debug_scope == 'locals')
+  M._latest_vars = current_debug_scope(prefer_locals)
+  return M._latest_vars
+end
+
 function M._update_latest_vars(data)
-  M._latest_vars = data or {}
+  return M._digest_vars_snapshot(data)
 end
 
 -- Ensure a standalone Jupyter kernel is running and return its connection file.
@@ -875,6 +964,19 @@ function M.on_debug_location(info)
   M._debug_active = true
   if not was_debug then
     M._sync_var_filters()
+  end
+  local func_name = info['function'] or info.func
+  if type(func_name) == 'string' and func_name ~= '' and func_name ~= '<module>' then
+    M._debug_scope = 'locals'
+  else
+    M._debug_scope = 'globals'
+  end
+  if M._debug_active then
+    M._latest_vars = current_debug_scope(M._debug_scope == 'locals')
+    local ok, vx = pcall(require, 'ipybridge.var_explorer')
+    if ok and vx and vx.on_vars then
+      vx.on_vars(M._latest_vars)
+    end
   end
 end
 
