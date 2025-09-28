@@ -245,7 +245,7 @@ M.config = {
     -- Use a rich prompt (colors, toolbar) by default; set true to simplify.
     simple_prompt = false,
     -- Optional color scheme for ZMQTerminalInteractiveShell (e.g., 'Linux', 'LightBG', 'NoColor').
-    ipython_colors = nil,
+    ipython_colors = 'Linux',
     -- Variable explorer: hide variables by exact name or type name (supports '*' suffix as prefix wildcard)
     hidden_var_names = { 'pi', 'newaxis', 'MODULE_B64' },
     hidden_type_names = { 'ZMQInteractiveShell', 'Axes', 'Figure', 'AxesSubplot' },
@@ -382,7 +382,26 @@ M.open = function(go_back, cb)
         local extra = ''
         if M.config.simple_prompt then extra = extra .. ' --simple-prompt' end
         local cmd_console = string.format("jupyter console --existing %s%s", conn_file, extra)
-        M.term_instance = term_helper.TermIpy:new(cmd_console, cwd, { on_message = dispatch.handle })
+        local env = { IPYBRIDGE_CONSOLE_PATCH = '1' }
+        local ok_py_path, py_module_path = pcall(py_module.path, 'bootstrap_helpers.py')
+        if ok_py_path and type(py_module_path) == 'string' and #py_module_path > 0 then
+            local py_root = vim.fs.dirname(py_module_path)
+            if py_root and #py_root > 0 then
+                local sep = vim.loop.os_uname().sysname == 'Windows_NT' and ';' or ':'
+                local current = vim.loop.os_getenv('PYTHONPATH') or ''
+                if current:find(py_root, 1, true) then
+                    env.PYTHONPATH = current
+                elseif current ~= '' then
+                    env.PYTHONPATH = py_root .. sep .. current
+                else
+                    env.PYTHONPATH = py_root
+                end
+            end
+        end
+        M.term_instance = term_helper.TermIpy:new(cmd_console, cwd, {
+            on_message = dispatch.handle,
+            env = env,
+        })
         -- Reset helper state and cached paths for new session
         M._helpers_sent = false
         if M._helpers_path then pcall(os.remove, M._helpers_path); M._helpers_path = nil end

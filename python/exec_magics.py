@@ -145,6 +145,32 @@ def _mi_emit_vars_snapshot(frame=None):
         _ipy_log_debug(f"debug vars emit failed: {exc}")
 
 
+def _mi_print_exception(shell=None, exc_info=None):
+    if exc_info is None:
+        exc_info = sys.exc_info()
+    etype, evalue, tb = exc_info
+    if shell is None:
+        try:
+            from IPython import get_ipython
+
+            shell = get_ipython()
+        except Exception:
+            shell = None
+    try:
+        if shell is not None:
+            try:
+                shell.showtraceback(exc_info)
+                return
+            except Exception as exc:
+                _ipy_log_debug(f"shell.showtraceback failed: {exc}")
+        try:
+            traceback.print_exception(etype, evalue, tb)
+        except Exception:
+            pass
+    finally:
+        tb = None
+
+
 _MI_QT_BACKENDS = ("qt", "qt5", "qt6")
 _mi_qt_pump_thread = None
 _mi_gui_enabled = False
@@ -490,7 +516,7 @@ def runfile(filename, cwd=None):
             except SystemExit:
                 pass
             except Exception:
-                traceback.print_exc()
+                _mi_print_exception()
 
 
 @register_line_magic("runfile")
@@ -547,6 +573,43 @@ def debugfile(filename, cwd=None):
     glbs = globals()
     dbg = pdb_cls()
     try:
+        shell = getattr(dbg, "shell", None)
+        colors = None
+        if shell is not None:
+            try:
+                colors = getattr(shell, "colors", None)
+            except Exception:
+                colors = None
+        target = "linux"
+        if isinstance(colors, str) and colors:
+            target = colors.strip().lower() or target
+        if target == "nocolor":
+            target = "linux"
+        applied = False
+        if hasattr(dbg, "set_theme_name"):
+            try:
+                dbg.set_theme_name(target)
+                _ipy_log_debug(f"debug theme applied: {target}")
+                applied = True
+            except Exception as exc:
+                _ipy_log_debug(f"debug theme apply failed: {exc}")
+        if not applied and hasattr(dbg, "set_colors"):
+            try:
+                dbg.set_colors(target)
+                _ipy_log_debug(f"debug colors legacy apply: {target}")
+            except Exception as exc:
+                _ipy_log_debug(f"debug legacy colors failed: {exc}")
+        if shell is not None:
+            try:
+                color_map = {"linux": "Linux", "lightbg": "LightBG", "neutral": "Neutral", "nocolor": "NoColor"}
+                magic_value = color_map.get(target, target)
+                shell.run_line_magic('colors', magic_value)
+                _ipy_log_debug(f"debug colors magic sent: {magic_value}")
+            except Exception as exc:
+                _ipy_log_debug(f"debug colors magic failed: {exc}")
+    except Exception as exc:
+        _ipy_log_debug(f"debug theme setup error: {exc}")
+    try:
         dbg.clear_all_breaks()
     except Exception:
         pass
@@ -581,7 +644,7 @@ def debugfile(filename, cwd=None):
     except SystemExit:
         pass
     except Exception:
-        traceback.print_exc()
+        _mi_print_exception(getattr(dbg, "shell", None))
     finally:
         if _mi_plt is not None and hasattr(_mi_plt, "_myipy_orig_show"):
             try:

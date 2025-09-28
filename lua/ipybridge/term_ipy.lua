@@ -46,6 +46,11 @@ function TermIpy:new(cmd, cwd, opts)
   else
     tb._on_message = default_on_message
   end
+  if opts and type(opts.env) == 'table' then
+    tb._env = opts.env
+  else
+    tb._env = nil
+  end
   tb:__spawn(cmd, cwd)
   return tb
 end
@@ -171,6 +176,7 @@ function TermIpy:__spawn(cmd, cwd)
   self.job_id = fn.termopen(cmd, {
     detach = false,
     cwd = cwd,
+    env = self._env,
     on_exit = __handle_exit(self),
     on_stdout = function(job_id, data, event)
       -- Forward to instance parser. `data` is an array of lines.
