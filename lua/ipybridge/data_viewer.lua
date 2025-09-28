@@ -221,7 +221,6 @@ local function render_df(data)
   local col_end = col_offset + window_cols - 1
   if col_end < col_offset then col_end = col_offset end
   table.insert(lines, string.format('window rows %d-%d cols %d-%d', row_offset, row_end, col_offset, col_end))
-  table.insert(lines, string.rep('-', 80))
   local cols = data.columns or {}
   local header, rows = build_labeled_table(cols, data.rows or {}, row_offset, col_offset)
   append_tabular(lines, header, rows)

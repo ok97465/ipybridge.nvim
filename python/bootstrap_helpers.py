@@ -16,6 +16,50 @@ _PREVIEW_LIMITS = {"rows": 30, "cols": 20}
 # Number of nested previews to pre-cache per variable; keeps snapshots bounded.
 _MAX_CHILD_PREVIEWS = 40
 
+# Track baseline object ids captured at debug start so stale globals stay hidden.
+_DEBUG_BASELINE = {}
+
+
+def _debug_baseline_snapshot(namespace):
+    if not isinstance(namespace, dict):
+        return {}
+    snapshot = {}
+    for name, value in namespace.items():
+        if not isinstance(name, str):
+            continue
+        try:
+            snapshot[name] = id(value)
+        except Exception:
+            continue
+    return snapshot
+
+
+def _filter_debug_baseline(namespace):
+    if not _DEBUG_BASELINE or not isinstance(namespace, dict):
+        return namespace
+    filtered = {}
+    for name, value in namespace.items():
+        baseline_id = _DEBUG_BASELINE.get(name)
+        if baseline_id is not None:
+            try:
+                if id(value) == baseline_id:
+                    continue
+            except Exception:
+                pass
+        filtered[name] = value
+    return filtered
+
+
+def _myipy_reset_debug_baseline(frame=None):
+    try:
+        namespace = _myipy_current_namespace(frame)
+    except Exception:
+        namespace = {}
+    if not isinstance(namespace, dict):
+        namespace = {}
+    _DEBUG_BASELINE.clear()
+    _DEBUG_BASELINE.update(_debug_baseline_snapshot(namespace))
+
 
 def _coerce_int(value, default):
     try:
@@ -557,6 +601,7 @@ def _myipy_emit_debug_vars(frame=None):
             except Exception:
                 pass
             locals_ns = _ipy_collect_namespace(None, frame_locals)
+            locals_ns = _filter_debug_baseline(locals_ns)
             locals_data = _ipy_list_variables(
                 namespace=locals_ns,
                 max_repr=max_repr,
@@ -571,6 +616,7 @@ def _myipy_emit_debug_vars(frame=None):
             )
         )
         globals_ns = _ipy_collect_namespace((frame_globals and dict(frame_globals)) or globals())
+        globals_ns = _filter_debug_baseline(globals_ns)
         globals_data = _ipy_list_variables(
             namespace=globals_ns,
             max_repr=max_repr,

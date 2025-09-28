@@ -18,7 +18,7 @@ local fs = vim.fs
 local uv = vim.uv
 
 -- Core state for the plugin. Comments are in English; see README for usage.
-local M = { term_instance = nil, _helpers_sent = false, _conn_file = nil, _kernel_job = nil, _helpers_path = nil, _runcell_sent = false, _runcell_path = nil, _last_cwd_sent = nil, _debug_active = false, _breakpoints = {}, _breakpoint_signs = {}, _breakpoint_seq = 0, _breakpoint_support_ready = false, _latest_vars = {}, _debug_locals_snapshot = nil, _debug_globals_snapshot = nil, _debug_scope = 'globals' }
+local M = { term_instance = nil, _helpers_sent = false, _conn_file = nil, _kernel_job = nil, _helpers_path = nil, _runcell_sent = false, _runcell_path = nil, _last_cwd_sent = nil, _debug_active = false, _breakpoints = {}, _breakpoint_signs = {}, _breakpoint_seq = 0, _breakpoint_support_ready = false, _latest_vars = {}, _debug_locals_snapshot = nil, _debug_globals_snapshot = nil, _debug_scope = 'globals', _last_filters_signature = nil }
 -- Cell markers must be exactly: start of line '#', one space, then at least '%%'.
 -- Examples matched: '# %%', '# %% Import'. Examples NOT matched: '  # %%', '#%%'.
 local CELL_PATTERN = [[^# %%\+]]
@@ -245,7 +245,7 @@ M.config = {
     -- Optional color scheme for ZMQTerminalInteractiveShell (e.g., 'Linux', 'LightBG', 'NoColor').
     ipython_colors = nil,
     -- Variable explorer: hide variables by exact name or type name (supports '*' suffix as prefix wildcard)
-    hidden_var_names = { 'pi', 'newaxis' },
+    hidden_var_names = { 'pi', 'newaxis', 'MODULE_B64' },
     hidden_type_names = { 'ZMQInteractiveShell', 'Axes', 'Figure', 'AxesSubplot' },
     -- ZMQ backend debug logs (Python client prints to stderr)
     zmq_debug = false,
@@ -388,6 +388,7 @@ M.open = function(go_back, cb)
         if M._runcell_path then pcall(os.remove, M._runcell_path); M._runcell_path = nil end
         M._last_cwd_sent = nil
         M._zmq_ready = false
+        M._last_filters_signature = nil
         -- Start ZMQ backend for programmatic requests
         M.ensure_zmq(function(ok2)
             if not ok2 then
@@ -523,8 +524,30 @@ local function encode_json(value)
 end
 
 function M._sync_var_filters()
-  -- Filters are supplied directly with each ZMQ request; no terminal command needed.
-  -- This function remains for API compatibility but intentionally performs no action.
+  if not M.is_open() then return end
+  M._send_helpers_if_needed()
+  local names = M.config.hidden_var_names
+  if type(names) ~= 'table' then names = {} end
+  local types = M.config.hidden_type_names
+  if type(types) ~= 'table' then types = {} end
+  local max_repr = tonumber(M.config.var_repr_limit) or 120
+  if max_repr <= 0 then max_repr = 120 end
+  local enable_logs = M.config.zmq_debug and true or false
+  local names_json = encode_json(names)
+  local types_json = encode_json(types)
+  local signature = table.concat({ names_json, '\0', types_json, '\0', tostring(max_repr), '\0', enable_logs and '1' or '0' })
+  if M._last_filters_signature == signature then
+    return
+  end
+  local template = py_module.source('sync_filters.py')
+  local script = template
+    :gsub('__NAMES_JSON__', names_json)
+    :gsub('__TYPES_JSON__', types_json)
+    :gsub('__MAX_REPR__', tostring(max_repr))
+    :gsub('__ENABLE_LOGS__', enable_logs and 'True' or 'False')
+  local payload = utils.send_exec_block(script)
+  M.term_instance:send(payload)
+  M._last_filters_signature = signature
 end
 
 local function sanitize_scope(scope)
@@ -759,7 +782,9 @@ M.debug_file = function()
 	local function after()
 		if not M.is_open() then return end
 		M._ensure_runcell_helpers()
+		M._send_helpers_if_needed()
 		push_breakpoints()
+		M.term_instance:send("_myipy_reset_debug_baseline()\n")
 		local cwd_arg = nil
 		local mode = M.config.exec_cwd_mode or 'pwd'
 		if mode == 'file' then
