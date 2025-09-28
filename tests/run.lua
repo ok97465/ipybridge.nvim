@@ -10,6 +10,11 @@ package.path = table.concat({
 local specs = {
   'tests.spec.dispatch_spec',
   'tests.spec.term_ipy_spec',
+  'tests.spec.utils_spec',
+  'tests.spec.kernel_spec',
+  'tests.spec.zmq_client_spec',
+  'tests.spec.data_viewer_spec',
+  'tests.spec.var_explorer_spec',
 }
 
 local any_fail = false
