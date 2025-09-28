@@ -67,6 +67,147 @@ local function to_str(v)
   return tostring(v)
 end
 
+-- Measure on-screen width while tolerating fallback when UI helpers are missing.
+local function display_width(text)
+  local s = text
+  if type(s) ~= 'string' then s = tostring(s or '') end
+  if vim.fn and vim.fn.strdisplaywidth then
+    local ok, width = pcall(vim.fn.strdisplaywidth, s)
+    if ok and type(width) == 'number' then
+      return width
+    end
+  end
+  return #s
+end
+
+-- Generate a long horizontal separator sized after the current header row.
+local function separator_line(reference)
+  local width = 80
+  if reference and reference ~= '' then
+    local w = display_width(reference)
+    if w > width then width = w end
+  end
+  return string.rep('-', width)
+end
+
+-- Pad data so ASCII tables stay aligned regardless of cell width.
+local function format_tabular(header, rows)
+  local all_rows = {}
+  local str_rows = {}
+  local widths = {}
+
+  if header and #header > 0 then
+    table.insert(all_rows, header)
+  end
+
+  for _, row in ipairs(rows or {}) do
+    table.insert(all_rows, row)
+  end
+
+  for r_idx, row in ipairs(all_rows) do
+    local str_row = {}
+    for c_idx, cell in ipairs(row or {}) do
+      local s = to_str(cell)
+      local w = display_width(s)
+      if not widths[c_idx] or w > widths[c_idx] then
+        widths[c_idx] = w
+      end
+      str_row[c_idx] = s
+    end
+    str_rows[r_idx] = str_row
+  end
+
+  local formatted = {}
+  for r_idx, row in ipairs(str_rows) do
+    local padded = {}
+    for c_idx, cell in ipairs(row) do
+      local w = display_width(cell)
+      local target = widths[c_idx] or w
+      if w < target then
+        padded[c_idx] = cell .. string.rep(' ', target - w)
+      else
+        padded[c_idx] = cell
+      end
+    end
+    formatted[r_idx] = table.concat(padded, ' | ')
+  end
+
+  if header and #header > 0 then
+    local head = formatted[1]
+    local data_rows = {}
+    for i = 2, #formatted do data_rows[#data_rows + 1] = formatted[i] end
+    return head, data_rows
+  end
+
+  return nil, formatted
+end
+
+-- Build formatted lines with bracketed indices so they are easy to spot.
+local function build_labeled_table(col_labels, rows, row_offset, col_offset)
+  local prepared = {}
+  local cols = {}
+  local col_count = 0
+
+  if type(rows) == 'table' then
+    for _, r in ipairs(rows) do
+      if type(r) == 'table' and #r > col_count then
+        col_count = #r
+      end
+    end
+  end
+
+  if type(col_labels) == 'table' then
+    for idx, label in ipairs(col_labels) do
+      cols[idx] = to_str(label)
+      if idx > col_count then col_count = idx end
+    end
+  end
+
+  local header = { '[ ]' }
+  for i = 1, col_count do
+    local label = cols[i]
+    if not label or label == '' then
+      label = string.format('[%d]', (col_offset or 0) + i - 1)
+    end
+    header[#header + 1] = label
+  end
+
+  for idx, raw in ipairs(rows or {}) do
+    local display = { string.format('[%d]', (row_offset or 0) + idx - 1) }
+    if type(raw) == 'table' then
+      for i = 1, col_count do
+        display[#display + 1] = raw[i]
+      end
+    end
+    table.insert(prepared, display)
+  end
+
+  return format_tabular(header, prepared)
+end
+
+-- Append preformatted header/data rows with consistent separators.
+local function append_tabular(lines, header, rows)
+  local has_rows = type(rows) == 'table' and #rows > 0
+  if not header and not has_rows then
+    return
+  end
+  local ref = header
+  if (not ref or ref == '') and has_rows then
+    ref = rows[1]
+  end
+  local sep = separator_line(ref)
+  table.insert(lines, sep)
+  if header and header ~= '' then
+    table.insert(lines, header)
+    table.insert(lines, sep)
+  end
+  if has_rows then
+    for _, row in ipairs(rows) do
+      table.insert(lines, row)
+    end
+  end
+end
+
 local function render_df(data)
   local lines = {}
   local shape = data.total_shape or data.shape or {}
@@ -82,16 +223,8 @@ local function render_df(data)
   table.insert(lines, string.format('window rows %d-%d cols %d-%d', row_offset, row_end, col_offset, col_end))
   table.insert(lines, string.rep('-', 80))
   local cols = data.columns or {}
-  if #cols > 0 then
-    table.insert(lines, table.concat(vim.tbl_map(tostring, cols), ' | '))
-    table.insert(lines, string.rep('-', 80))
-  end
-  for idx, row in ipairs(data.rows or {}) do
-    local strs = {}
-    for _, v in ipairs(row) do table.insert(strs, to_str(v)) end
-    local row_index = row_offset + idx - 1
-    table.insert(lines, string.format('%6d | %s', row_index, table.concat(strs, ' | ')))
-  end
+  local header, rows = build_labeled_table(cols, data.rows or {}, row_offset, col_offset)
+  append_tabular(lines, header, rows)
   return lines
 end
 
@@ -111,23 +244,17 @@ local function render_nd(data)
     local col_end = col_offset + window_cols - 1
     if col_end < col_offset then col_end = col_offset end
     table.insert(lines, string.format('window rows %d-%d cols %d-%d', row_offset, row_end, col_offset, col_end))
-    table.insert(lines, string.rep('-', 80))
-    for idx, row in ipairs(data.rows) do
-      local strs = {}
-      for _, v in ipairs(row) do table.insert(strs, to_str(v)) end
-      local row_index = row_offset + idx - 1
-      table.insert(lines, string.format('%6d | %s', row_index, table.concat(strs, ' | ')))
-    end
+    local header, rows = build_labeled_table(nil, data.rows, row_offset, col_offset)
+    append_tabular(lines, header, rows)
   elseif type(data.values1d) == 'table' then
     window_rows = #data.values1d
     local row_end = row_offset + window_rows - 1
     if row_end < row_offset then row_end = row_offset end
     table.insert(lines, string.format('window rows %d-%d', row_offset, row_end))
-    table.insert(lines, string.rep('-', 80))
-    for i, v in ipairs(data.values1d) do
-      local row_index = row_offset + i - 1
-      table.insert(lines, string.format('%6d: %s', row_index, to_str(v)))
-    end
+    local header, rows = build_labeled_table({ 'value' }, vim.tbl_map(function(v)
+      return { v }
+    end, data.values1d), row_offset, 0)
+    append_tabular(lines, header, rows)
   else
     table.insert(lines, tostring(data.repr or ''))
   end
