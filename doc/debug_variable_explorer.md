@@ -20,6 +20,7 @@
 - `lua/ipybridge/init.lua`
   - `_digest_vars_snapshot()`이 로컬·글로벌 스냅샷을 별도로 저장하고, `on_debug_location()`에서 받은 함수 정보(`info.function`)로 “현재는 로컬/글로벌” 상태를 판단합니다.
   - `M._latest_vars`는 현재 보여줄 스코프(함수 내부라면 로컬, 아니면 글로벌)를 골라낸 사본만 유지합니다.
+  - `debug_scope.lua` 모듈이 전역 스냅샷이 비어 있어도 로컬 값을 안전하게 반환하도록 우선순위를 처리하며, `M._latest_vars` 갱신 시 재사용합니다.
   - `get_debug_preview_payload()`는 로컬·글로벌 스냅샷의 `_preview_cache` 및 `_preview_children`에서 즉시 제공 가능한 데이터를 우선 찾습니다. 캐시에 없으면 `M.request_preview()`가 ZMQ 백엔드에 `debug = true` 요청을 보내어 소켓 서버를 통해 프리뷰를 가져옵니다.
 - `lua/ipybridge/dispatch.lua`
   - Python에서 넘어온 스냅샷을 `M._digest_vars_snapshot()`에 먼저 통과시켜 로컬/글로벌 상태를 갱신하고, 변수 탐색기에는 화면에 필요한 데이터만 전달합니다.

@@ -14,6 +14,7 @@ local utils = require("ipybridge.utils")
 local keymaps = require("ipybridge.keymaps")
 local kernel = require("ipybridge.kernel")
 local py_module = require("ipybridge.py_module")
+local debug_scope = require("ipybridge.debug_scope")
 local fs = vim.fs
 local uv = vim.uv
 
@@ -25,6 +26,7 @@ local CELL_PATTERN = [[^# %%\+]]
 local CELL_RE = vim.regex(CELL_PATTERN)
 local BP_SIGN_GROUP = 'IpybridgeBreakpoints'
 local BP_SIGN_NAME = 'IpybridgeBreakpoint'
+local sanitize_scope = debug_scope.sanitize_scope
 
 local function normalize_path(path)
   if not path or path == '' then return nil end
@@ -550,44 +552,8 @@ function M._sync_var_filters()
   M._last_filters_signature = signature
 end
 
-local function sanitize_scope(scope)
-  if type(scope) ~= 'table' then
-    return {}
-  end
-  local out = {}
-  for name, value in pairs(scope) do
-    if type(name) == 'string' and not name:match('^__') then
-      out[name] = value
-    end
-  end
-  return out
-end
-
 local function current_debug_scope(prefer_locals)
-  if prefer_locals then
-    if type(M._debug_locals_snapshot) == 'table' then
-      local scope = M._debug_locals_snapshot.__locals__
-      if type(scope) == 'table' and next(scope) then
-        return sanitize_scope(scope)
-      end
-    end
-  end
-  if type(M._debug_globals_snapshot) == 'table' then
-    local scope = M._debug_globals_snapshot.__globals__
-    if type(scope) == 'table' and next(scope) then
-      return sanitize_scope(scope)
-    end
-    if next(M._debug_globals_snapshot) then
-      return sanitize_scope(M._debug_globals_snapshot)
-    end
-  end
-  if type(M._debug_locals_snapshot) == 'table' then
-    local scope = M._debug_locals_snapshot.__locals__
-    if type(scope) == 'table' and next(scope) then
-      return sanitize_scope(scope)
-    end
-  end
-  return {}
+  return debug_scope.resolve_scope(prefer_locals, M._debug_locals_snapshot, M._debug_globals_snapshot)
 end
 
 function M._digest_vars_snapshot(snapshot)

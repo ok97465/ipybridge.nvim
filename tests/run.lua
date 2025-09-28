@@ -15,6 +15,7 @@ local specs = {
   'tests.spec.zmq_client_spec',
   'tests.spec.data_viewer_spec',
   'tests.spec.var_explorer_spec',
+  'tests.spec.debug_scope_spec',
 }
 
 local any_fail = false
