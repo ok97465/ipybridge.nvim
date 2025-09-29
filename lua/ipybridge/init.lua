@@ -34,6 +34,7 @@ local M = {
   _debug_locals_snapshot = nil,
   _debug_globals_snapshot = nil,
   _debug_scope = 'globals',
+  _debug_window = nil,
   _last_filters_signature = nil,
   _pending_exec = {},
   _helpers_waiters = {},
@@ -838,6 +839,7 @@ M.run_file = function()
 			M.term_instance:send(string.format("%%run \"%s\"\n", safe))
 		end
 		M._debug_active = false
+		M._debug_window = nil
 	end
 	if not M.is_open() then
 		M.open(true, function(ok) if ok then after() end end)
@@ -849,6 +851,12 @@ end
 ---Run the current file under IPython debugger via %debugfile.
 M.debug_file = function()
 	local abs_path = fn.expand('%:p')
+	local win = api.nvim_get_current_win()
+	if win and api.nvim_win_is_valid(win) then
+		M._debug_window = win
+	else
+		M._debug_window = nil
+	end
 	if vim.bo.modified and M.config.debugfile_save_before_run ~= false then
 		pcall(vim.cmd, 'write')
 	end
@@ -893,6 +901,7 @@ M.send_lines = function(line_start, line_stop)
 	if not tb_lines or #tb_lines == 0 then return end
 
 	M._debug_active = false
+	M._debug_window = nil
 
   local function do_send()
     if not M.is_open() then return end
@@ -938,6 +947,7 @@ M.run_line = function()
 			api.nvim_win_set_cursor(0, { idx_line_cursor + 1, 0 })
 		end
 		M._debug_active = false
+		M._debug_window = nil
 	end
 
 	if not M.is_open() then
@@ -973,6 +983,7 @@ local function send_debug_command(cmd, opts)
   M.term_instance:send(cmd .. '\n')
   if opts and opts.deactivate then
     M._debug_active = false
+    M._debug_window = nil
   end
 end
 
@@ -1039,29 +1050,44 @@ function M.on_debug_location(info)
     return
   end
   fn.bufload(bufnr)
+  -- Make sure the buffer stays listed so UI extensions can display it.
+  if api.nvim_buf_is_valid(bufnr) then
+    pcall(api.nvim_buf_set_option, bufnr, 'buflisted', true)
+    pcall(api.nvim_buf_set_option, bufnr, 'bufhidden', 'hide')
+  end
   line = clamp_cursor_line(bufnr, line)
   local col = calc_column_from_source(info.source)
-  local target_win = nil
-  for _, win in ipairs(api.nvim_list_wins()) do
-    if api.nvim_win_is_valid(win) and api.nvim_win_get_buf(win) == bufnr then
-      target_win = win
-      break
+  local preferred = M._debug_window
+  if preferred and not api.nvim_win_is_valid(preferred) then
+    preferred = nil
+  end
+  local target_win = preferred
+  if not target_win then
+    for _, win in ipairs(api.nvim_list_wins()) do
+      if api.nvim_win_is_valid(win) and api.nvim_win_get_buf(win) == bufnr then
+        target_win = win
+        break
+      end
+    end
+    if not target_win then
+      target_win = api.nvim_get_current_win()
     end
   end
-  if not target_win then
-    target_win = api.nvim_get_current_win()
-    if not api.nvim_win_is_valid(target_win) then
-      return
-    end
-    if api.nvim_win_get_buf(target_win) ~= bufnr then
-      pcall(api.nvim_win_set_buf, target_win, bufnr)
-    end
+  if not target_win or not api.nvim_win_is_valid(target_win) then
+    return
+  end
+  if api.nvim_win_get_buf(target_win) ~= bufnr then
+    pcall(api.nvim_win_set_buf, target_win, bufnr)
+  end
+  if api.nvim_get_current_win() ~= target_win then
+    pcall(api.nvim_set_current_win, target_win)
   end
   api.nvim_win_call(target_win, function()
     pcall(api.nvim_win_set_cursor, target_win, { line, col })
     pcall(vim.cmd, 'normal! zv')
     pcall(vim.cmd, 'normal! zz')
   end)
+  M._debug_window = target_win
   local was_debug = M._debug_active
   M._debug_active = true
   if not was_debug then
