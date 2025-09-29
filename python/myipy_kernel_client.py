@@ -250,6 +250,64 @@ class KernelChannel:
             self._logger.log(f"parse error: {exc}; payload={snippet!r}")
             return False, None, f"parse error: {exc}"
 
+    def execute_silent(self, code: str) -> Tuple[bool, Optional[str]]:
+        """Execute code without expecting structured stdout payload."""
+        if not isinstance(code, str) or not code.strip():
+            return True, None
+        msg_id = self.client.execute(
+            code,
+            store_history=False,
+            allow_stdin=False,
+            stop_on_error=True,
+            silent=True,
+        )
+        error_text: Optional[str] = None
+        idle = False
+        start = time.time()
+        try:
+            while not idle and (time.time() - start) < 5.0:
+                msg = self.client.get_iopub_msg(timeout=0.5)
+                if msg.get("parent_header", {}).get("msg_id") != msg_id:
+                    continue
+                msg_type = msg.get("msg_type")
+                if msg_type == "status" and msg.get("content", {}).get("execution_state") == "idle":
+                    idle = True
+                    break
+                if msg_type == "error":
+                    content = msg.get("content") or {}
+                    ename = content.get("ename") or ""
+                    evalue = content.get("evalue") or ""
+                    frames = "\n".join(content.get("traceback") or [])
+                    if ename or evalue:
+                        error_text = f"{ename}: {evalue}"
+                    else:
+                        error_text = frames or "error"
+                    idle = True
+                    break
+        except Exception as exc:
+            self._logger.log(f"silent exec iopub loop error: {exc}")
+            return False, str(exc)
+
+        try:
+            reply = self.client.get_shell_msg(timeout=5)
+        except Exception as exc:
+            self._logger.log(f"silent exec shell timeout: {exc}")
+            return False, f"shell timeout: {exc}"
+
+        content = reply.get("content") or {}
+        status = content.get("status") or "ok"
+        if status != "ok":
+            ename = content.get("ename") or ""
+            evalue = content.get("evalue") or ""
+            if ename or evalue:
+                return False, f"{ename}: {evalue}"
+            return False, "error"
+
+        if error_text:
+            return False, error_text
+
+        return True, None
+
 
 class DebugPreviewClient:
     """Handle debug preview requests with socket fallback."""
@@ -353,6 +411,8 @@ class RequestProcessor:
             return self._handle_vars(req_id, args)
         if op == "preview":
             return self._handle_preview(req_id, args)
+        if op == "exec":
+            return self._handle_exec(req_id, args)
         return {"id": req_id, "ok": False, "error": "unknown op"}
 
     def _handle_vars(self, req_id, args: dict) -> dict:
@@ -371,6 +431,16 @@ class RequestProcessor:
         if ok:
             response["data"] = data
         else:
+            response["error"] = err or "error"
+        return response
+
+    def _handle_exec(self, req_id, args: dict) -> dict:
+        code = args.get("code")
+        if not isinstance(code, str):
+            return {"id": req_id, "ok": False, "error": "missing code"}
+        ok, err = self._channel.execute_silent(code)
+        response = {"id": req_id, "ok": ok, "tag": "exec"}
+        if not ok:
             response["error"] = err or "error"
         return response
 

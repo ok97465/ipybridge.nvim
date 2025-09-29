@@ -10,11 +10,13 @@ import traceback
 
 
 _PATCH_FLAG = os.environ.get("IPYBRIDGE_CONSOLE_PATCH")
+_PATCH_SILENT_VALUE = os.environ.get("IPYBRIDGE_CONSOLE_PATCH_SILENT") or ""
+_PATCH_SILENT = _PATCH_SILENT_VALUE.lower() in {"1", "true", "yes", "on"}
 
 
 def _log(message: str) -> None:
     """Emit a short diagnostic to stderr when console patching is requested."""
-    if not _PATCH_FLAG:
+    if not _PATCH_FLAG or _PATCH_SILENT:
         return
     try:
         sys.stderr.write(f"[ipybridge.console] {message}\n")

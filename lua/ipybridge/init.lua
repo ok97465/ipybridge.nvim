@@ -26,6 +26,7 @@ local M = {
   _conn_file = nil,
   _kernel_job = nil,
   _helpers_path = nil,
+  _helpers_pending = false,
   _runcell_sent = false,
   _runcell_path = nil,
   _last_cwd_sent = nil,
@@ -35,6 +36,8 @@ local M = {
   _debug_globals_snapshot = nil,
   _debug_scope = 'globals',
   _last_filters_signature = nil,
+  _pending_exec = {},
+  _helpers_waiters = {},
 }
 -- Cell markers must be exactly: start of line '#', one space, then at least '%%'.
 -- Examples matched: '# %%', '# %% Import'. Examples NOT matched: '  # %%', '#%%'.
@@ -100,6 +103,9 @@ local function get_debug_preview_payload(name)
   end
   return nil
 end
+
+local queue_exec_request -- forward declaration for deferred ZMQ exec
+local after_helpers      -- forward declaration for helper gating
 
 ---Toggle a breakpoint at the current cursor line for the active Python buffer.
 function M.toggle_breakpoint()
@@ -289,7 +295,10 @@ M.open = function(go_back, cb)
         if M.config.simple_prompt then extra = extra .. ' --simple-prompt' end
         local cmd_console = string.format("jupyter console --existing %s%s", conn_file, extra)
         local bp_file = breakpoints.get_file_path()
-        local env = { IPYBRIDGE_CONSOLE_PATCH = '1' }
+        local env = {
+          IPYBRIDGE_CONSOLE_PATCH = '1',
+          IPYBRIDGE_CONSOLE_PATCH_SILENT = '1',
+        }
         if bp_file and #bp_file > 0 then
           env.IPYBRIDGE_BREAKPOINT_FILE = bp_file
         end
@@ -314,17 +323,34 @@ M.open = function(go_back, cb)
         })
         -- Reset helper state and cached paths for new session
         M._helpers_sent = false
+        M._helpers_pending = false
         if M._helpers_path then pcall(os.remove, M._helpers_path); M._helpers_path = nil end
         M._runcell_sent = false
         if M._runcell_path then pcall(os.remove, M._runcell_path); M._runcell_path = nil end
         M._last_cwd_sent = nil
         M._zmq_ready = false
         M._last_filters_signature = nil
+        M._pending_exec = {}
+        M._helpers_waiters = {}
         breakpoints.attach_session({
           send = function(payload)
-            if M.term_instance then
-              M.term_instance:send(payload)
+            if type(payload) ~= 'string' or payload == '' then
+              return
             end
+            after_helpers(function(ok_helpers)
+              if not ok_helpers then
+                if M.term_instance then
+                  M.term_instance:send(payload)
+                end
+                return
+              end
+              queue_exec_request(payload, {
+                fallback = function()
+                  if not M.term_instance then return end
+                  M.term_instance:send(payload)
+                end,
+              })
+            end)
           end,
           ensure_helpers = function()
             M._send_helpers_if_needed()
@@ -432,30 +458,184 @@ local function _runcell_py_code()
   return require('ipybridge.exec_magics').build()
 end
 
+local function default_exec_fallback(code)
+  if not M.term_instance then return end
+  M.term_instance:send(code)
+end
+
+local function dispatch_exec_request(code, opts)
+  opts = opts or {}
+  local fallback = opts.fallback or function()
+    default_exec_fallback(code)
+  end
+  local function handle_error(reason)
+    if fallback then fallback(reason) end
+    if opts.on_error then opts.on_error(reason) end
+  end
+  local ok, z = pcall(require, 'ipybridge.zmq_client')
+  if not ok or not z then
+    handle_error('zmq_client_unavailable')
+    return
+  end
+  local dispatched = z.request('exec', { code = code }, function(msg)
+    if msg and msg.ok then
+      if opts.on_success then opts.on_success() end
+    else
+      local err = (msg and msg.error) or 'exec_failed'
+      handle_error(err)
+    end
+  end)
+  if not dispatched then
+    handle_error('dispatch_failed')
+  end
+end
+
+queue_exec_request = function(code, opts)
+  opts = opts or {}
+  if M._zmq_ready then
+    dispatch_exec_request(code, opts)
+    return
+  end
+  table.insert(M._pending_exec, { code = code, opts = opts })
+  M.ensure_zmq(function(ok)
+    if ok then
+      M._flush_pending_exec()
+    else
+      M._fail_pending_exec('zmq_unavailable')
+    end
+  end)
+end
+
+function M._flush_pending_exec()
+  if not M._zmq_ready then return end
+  if not M._pending_exec or #M._pending_exec == 0 then return end
+  local queue = M._pending_exec
+  M._pending_exec = {}
+  for _, entry in ipairs(queue) do
+    dispatch_exec_request(entry.code, entry.opts or {})
+  end
+end
+
+function M._fail_pending_exec(reason)
+  if not M._pending_exec or #M._pending_exec == 0 then return end
+  local queue = M._pending_exec
+  M._pending_exec = {}
+  for _, entry in ipairs(queue) do
+    local opts = entry.opts or {}
+    local fallback = opts.fallback
+    if fallback then
+      fallback(reason)
+    else
+      default_exec_fallback(entry.code)
+    end
+    if opts.on_error then opts.on_error(reason) end
+  end
+end
+
+local function send_helpers_via_console(script)
+  if not M.term_instance then return false end
+  if not M._helpers_path then
+    M._helpers_path = fn.tempname() .. '.myipy_helpers.py'
+    local ok = pcall(fn.writefile, vim.split(script, "\n", { plain = true }), M._helpers_path)
+    if not ok then
+      M._helpers_path = nil
+      return false
+    end
+  end
+  M.term_instance:send(utils.exec_file_stmt(M._helpers_path))
+  return true
+end
+
+local function run_helper_waiters(success)
+  if not M._helpers_waiters or #M._helpers_waiters == 0 then return end
+  local waiters = M._helpers_waiters
+  M._helpers_waiters = {}
+  for _, cb in ipairs(waiters) do
+    local ok, err = pcall(cb, success)
+    if not ok then
+      vim.schedule(function()
+        vim.notify('ipybridge: helper callback failed: ' .. tostring(err), vim.log.levels.WARN)
+      end)
+    end
+  end
+end
+
+after_helpers = function(cb)
+  if M._helpers_sent then
+    local ok, err = pcall(cb, true)
+    if not ok then
+      vim.schedule(function()
+        vim.notify('ipybridge: helper callback failed: ' .. tostring(err), vim.log.levels.WARN)
+      end)
+    end
+    return
+  end
+  table.insert(M._helpers_waiters, cb)
+  M._send_helpers_if_needed()
+end
+
 function M._ensure_runcell_helpers()
   if M._runcell_sent then return end
   if not M.is_open() then return end
   local code = _runcell_py_code()
-  if not M._runcell_path then
-    M._runcell_path = fn.tempname() .. '.myipy_runcell.py'
-    pcall(fn.writefile, vim.split(code, "\n", { plain = true }), M._runcell_path)
+  local function fallback()
+    if M._runcell_sent then return end
+    if not M.term_instance then return end
+    if not M._runcell_path then
+      M._runcell_path = fn.tempname() .. '.myipy_runcell.py'
+      pcall(fn.writefile, vim.split(code, "\n", { plain = true }), M._runcell_path)
+    end
+    M.term_instance:send(utils.exec_file_stmt(M._runcell_path))
+    M._runcell_sent = true
   end
-  M.term_instance:send(utils.exec_file_stmt(M._runcell_path))
-  M._runcell_sent = true
+  after_helpers(function(ok_helpers)
+    if not ok_helpers then
+      fallback()
+      return
+    end
+    queue_exec_request(code, {
+      on_success = function()
+        M._runcell_sent = true
+      end,
+      on_error = fallback,
+      fallback = fallback,
+    })
+  end)
 end
 
 function M._send_helpers_if_needed()
-  if M._helpers_sent then return end
+  if M._helpers_sent or M._helpers_pending then return end
   if not M.is_open() then return end
   local code = _helpers_py_code()
-  -- Write helpers to a temp file and exec it to avoid huge one-liners.
-  -- Keep the file until session close to avoid race with console reading.
-  if not M._helpers_path then
-    M._helpers_path = fn.tempname() .. '.myipy_helpers.py'
-    pcall(fn.writefile, vim.split(code, "\n", { plain = true }), M._helpers_path)
+  M._helpers_pending = true
+  local handled = false
+  local function finalize_ok()
+    handled = true
+    M._helpers_pending = false
+    M._helpers_sent = true
+    run_helper_waiters(true)
   end
-  M.term_instance:send(utils.exec_file_stmt(M._helpers_path))
-  M._helpers_sent = true
+  local function do_fallback()
+    if handled then return end
+    handled = true
+    M._helpers_pending = false
+    if M._helpers_sent then return end
+    local ok_console = send_helpers_via_console(code)
+    if ok_console then
+      M._helpers_sent = true
+      run_helper_waiters(true)
+    else
+      run_helper_waiters(false)
+      vim.schedule(function()
+        vim.notify('ipybridge: failed to load helper script', vim.log.levels.WARN)
+      end)
+    end
+  end
+  queue_exec_request(code, {
+    on_success = finalize_ok,
+    on_error = do_fallback,
+    fallback = do_fallback,
+  })
 end
 
 local function encode_json(value)
@@ -488,8 +668,23 @@ function M._sync_var_filters()
     :gsub('__TYPES_JSON__', types_json)
     :gsub('__MAX_REPR__', tostring(max_repr))
     :gsub('__ENABLE_LOGS__', enable_logs and 'True' or 'False')
-  local payload = utils.send_exec_block(script)
-  M.term_instance:send(payload)
+  after_helpers(function(ok_helpers)
+    if not ok_helpers then
+      local payload = utils.send_exec_block(script)
+      if M.term_instance then
+        M.term_instance:send(payload)
+      end
+      return
+    end
+    queue_exec_request(script, {
+      fallback = function()
+        local payload = utils.send_exec_block(script)
+        if M.term_instance then
+          M.term_instance:send(payload)
+        end
+      end,
+    })
+  end)
   M._last_filters_signature = signature
 end
 
@@ -580,6 +775,8 @@ M.close = function()
         pcall(os.remove, M._helpers_path)
         M._helpers_path = nil
     end
+    M._helpers_pending = false
+    M._helpers_sent = false
     if M._runcell_path then
         pcall(os.remove, M._runcell_path)
         M._runcell_path = nil
@@ -587,6 +784,8 @@ M.close = function()
     breakpoints.on_session_close()
     M._last_cwd_sent = nil
     M._latest_vars = nil
+    M._pending_exec = {}
+    M._helpers_waiters = {}
 end
 
 ---Toggle the IPython terminal split.
@@ -1129,10 +1328,22 @@ end
 
 -- Ensure ZMQ client: fetch connection file and spawn backend.
 function M.ensure_zmq(cb)
-  if not M.config.use_zmq then if cb then cb(false) end; return end
-  if M._zmq_ready then if cb then cb(true) end; return end
+  if not M.config.use_zmq then
+    M._fail_pending_exec('zmq_disabled')
+    if cb then cb(false) end
+    return
+  end
+  if M._zmq_ready then
+    M._flush_pending_exec()
+    if cb then cb(true) end
+    return
+  end
   M._ensure_conn_file(function(ok, conn_file)
-    if not ok or not conn_file then if cb then cb(false) end; return end
+    if not ok or not conn_file then
+      M._fail_pending_exec('conn_file_unavailable')
+      if cb then cb(false) end
+      return
+    end
     local z = require('ipybridge.zmq_client')
     -- Resolve backend path relative to repo root: ../../ -> python/myipy_kernel_client.py
     local this = debug.getinfo(1, 'S').source:sub(2)
@@ -1140,15 +1351,24 @@ function M.ensure_zmq(cb)
     local repo_root = fn.fnamemodify(plugin_dir, ':h:h')     -- /repo
     local backend = repo_root .. '/python/myipy_kernel_client.py'
     local ok_start = z.start(M.config.python_cmd, conn_file, backend, M.config.zmq_debug)
-    if not ok_start then if cb then cb(false) end; return end
+    if not ok_start then
+      M._fail_pending_exec('zmq_start_failed')
+      if cb then cb(false) end
+      return
+    end
     -- Probe readiness with a ping
     local tried = 0
     local function try_ping()
       tried = tried + 1
-      if tried > 20 then if cb then cb(false) end; return end
+      if tried > 20 then
+        M._fail_pending_exec('zmq_ping_timeout')
+        if cb then cb(false) end
+        return
+      end
       local sent = z.request('ping', {}, function(msg)
         if msg and msg.ok and msg.tag == 'pong' then
           M._zmq_ready = true
+          M._flush_pending_exec()
           if cb then cb(true) end
         else
           vim.defer_fn(try_ping, 100)

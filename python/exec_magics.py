@@ -172,8 +172,35 @@ def _mi_print_exception(shell=None, exc_info=None):
 
 
 _MI_QT_BACKENDS = ("qt", "qt5", "qt6")
+_PDB_ALIAS_MAP = {
+    "!next": "next",
+    "!step": "step",
+    "!continue": "continue",
+}
 _mi_qt_pump_thread = None
 _mi_gui_enabled = False
+
+
+def _mi_read_text(path, label):
+    try:
+        with io.open(path, "r", encoding="utf-8") as handle:
+            return handle.read()
+    except Exception as exc:
+        print(f"{label}: cannot read {path}: {exc}")
+        return None
+
+
+def _mi_exec_source(source, filename, cwd=None):
+    if source is None:
+        return
+    with _mi_cwd(cwd):
+        with _mi_exec_env(filename):
+            try:
+                exec(compile(source, filename, "exec"), globals(), globals())
+            except SystemExit:
+                pass
+            except Exception:
+                _mi_print_exception()
 
 
 def _mi_get_qapp():
@@ -398,11 +425,6 @@ class _MiQtAwarePdb:
             return None
 
         class QtAwarePdb(Pdb):
-            _mi_alias_map = {
-                "!next": "next",
-                "!step": "step",
-                "!continue": "continue",
-            }
 
             def interaction(self, *args, **kwargs):
                 self._mi_autoprint = True
@@ -444,17 +466,24 @@ class _MiQtAwarePdb:
                 return super().print_stack_entry(frame_lineno, prompt_prefix, context)
 
             def default(self, line):
+                handled = self._mi_apply_alias(line)
+                if handled is not None:
+                    return handled
+                return super().default(line)
+
+            def _mi_apply_alias(self, line):
                 try:
                     cmd = line.strip().split()[0]
                 except Exception:
-                    cmd = ""
-                target = self._mi_alias_map.get(cmd)
-                if target:
-                    method = getattr(self, "do_" + target, None)
-                    if method is not None:
-                        arg = line[len(cmd):].lstrip()
-                        return method(arg)
-                return super().default(line)
+                    return None
+                target = _PDB_ALIAS_MAP.get(cmd)
+                if not target:
+                    return None
+                method = getattr(self, "do_" + target, None)
+                if method is None:
+                    return None
+                arg = line[len(cmd):].lstrip()
+                return method(arg)
 
             def postcmd(self, stop, line):
                 result = super().postcmd(stop, line)
@@ -502,21 +531,71 @@ def _mi_exec_env(filename):
             g["__file__"] = prev_file
 
 
-def runfile(filename, cwd=None):
+def _mi_resolve_cell(lines, index):
+    markers = [lineno for lineno, text in enumerate(lines) if _CELL_RE.match(text)]
+    if not markers:
+        return None, None, 0
     try:
-        with io.open(filename, "r", encoding="utf-8") as handle:
-            src = handle.read()
-    except Exception as exc:
-        print(f"runfile: cannot read {filename}: {exc}")
+        idx = int(index)
+    except Exception:
+        return None, None, len(markers)
+    if idx < 0 or idx >= len(markers):
+        return None, None, len(markers)
+    start = markers[idx] + 1
+    end = len(lines)
+    if idx + 1 < len(markers):
+        end = markers[idx + 1]
+    return (start, end), start, len(markers)
+
+
+def runcell(cell_index, filename, cwd=None):
+    text = _mi_read_text(filename, "runcell")
+    if text is None:
         return
-    with _mi_cwd(cwd):
-        with _mi_exec_env(filename):
+    lines = text.splitlines()
+
+    region, start_line, total = _mi_resolve_cell(lines, cell_index)
+    if region is None:
+        if total == 0:
+            print(f"runcell: no cell markers found in {filename}")
+        else:
             try:
-                exec(compile(src, filename, "exec"), globals(), globals())
-            except SystemExit:
-                pass
+                idx = int(cell_index)
             except Exception:
-                _mi_print_exception()
+                idx = cell_index
+            print(f"runcell: cell {idx} out of range (total {total})")
+        return
+
+    start, end = region
+    cell_lines = lines[start:end]
+    if not cell_lines:
+        return
+    prefix = "\n" * start_line
+    source = prefix + "\n".join(cell_lines)
+    _mi_exec_source(source, filename, cwd)
+
+
+@register_line_magic("runcell")
+def _runcell_magic(line):
+    try:
+        parts = shlex.split(line)
+    except Exception:
+        print("Usage: %runcell <index> <path> [cwd]")
+        return
+    if len(parts) < 2:
+        print("Usage: %runcell <index> <path> [cwd]")
+        return
+    idx = parts[0]
+    path = parts[1]
+    cwd = parts[2] if len(parts) > 2 else None
+    runcell(idx, path, cwd)
+
+
+def runfile(filename, cwd=None):
+    source = _mi_read_text(filename, "runfile")
+    if source is None:
+        return
+    _mi_exec_source(source, filename, cwd)
 
 
 @register_line_magic("runfile")
@@ -539,11 +618,8 @@ def debugfile(filename, cwd=None):
     if pdb_cls is None:
         print("debugfile: IPython debugger is unavailable")
         return
-    try:
-        with io.open(filename, "r", encoding="utf-8") as handle:
-            src = handle.read()
-    except Exception as exc:
-        print(f"debugfile: cannot read {filename}: {exc}")
+    source = _mi_read_text(filename, "debugfile")
+    if source is None:
         return
     try:
         if _mi_plt is not None:
@@ -646,7 +722,7 @@ def debugfile(filename, cwd=None):
     try:
         with _mi_cwd(cwd):
             with _mi_exec_env(filename):
-                code = compile(src, filename, "exec")
+                code = compile(source, filename, "exec")
                 dbg.reset()
                 dbg.runctx(code, glbs, glbs)
     except SystemExit:
