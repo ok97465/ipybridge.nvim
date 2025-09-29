@@ -797,6 +797,10 @@ M.run_cmd = function(cmd)
 end
 
 local function send_debug_command(cmd, opts)
+  if not M._debug_active then
+    vim.notify('ipybridge: Debugger is not active', vim.log.levels.WARN)
+    return
+  end
   if not M.is_open() then
     vim.notify('ipybridge: IPython terminal is not open', vim.log.levels.WARN)
     return
