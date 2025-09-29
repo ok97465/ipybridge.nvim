@@ -7,6 +7,7 @@ import os
 import socket
 import sys
 import threading
+import time
 import types
 from IPython import get_ipython
 
@@ -18,6 +19,11 @@ _MAX_CHILD_PREVIEWS = 40
 
 # Track baseline object ids captured at debug start so stale globals stay hidden.
 _DEBUG_BASELINE = {}
+
+_BREAKPOINT_FILE_ENV = "IPYBRIDGE_BREAKPOINT_FILE"
+_BREAKPOINT_STATE = {"path": None, "signature": None, "data": {}}
+_BREAKPOINT_STATE_LOCK = threading.Lock()
+_BREAKPOINT_WATCHER_STARTED = False
 
 
 def _debug_baseline_snapshot(namespace):
@@ -59,6 +65,198 @@ def _myipy_reset_debug_baseline(frame=None):
         namespace = {}
     _DEBUG_BASELINE.clear()
     _DEBUG_BASELINE.update(_debug_baseline_snapshot(namespace))
+
+
+def _myipy_normalize_breakpoints(raw):
+    result = {}
+    if isinstance(raw, dict):
+        for raw_path, lines in raw.items():
+            if not isinstance(raw_path, str):
+                continue
+            try:
+                norm_path = os.path.abspath(raw_path)
+            except Exception:
+                norm_path = raw_path
+            collected = []
+            if isinstance(lines, (list, tuple, set)):
+                for entry in lines:
+                    try:
+                        value = int(entry)
+                    except Exception:
+                        continue
+                    if value > 0:
+                        collected.append(value)
+            if collected:
+                result[norm_path] = sorted(set(collected))
+    return result
+
+
+def _myipy_read_breakpoint_payload(path):
+    try:
+        with io.open(path, "r", encoding="utf-8") as handle:
+            text = handle.read()
+    except FileNotFoundError:
+        text = ""
+    except Exception as exc:
+        _ipy_log_debug(f"breakpoint file read failed: {exc}")
+        with _BREAKPOINT_STATE_LOCK:
+            current = dict(_BREAKPOINT_STATE.get("data") or {})
+        return current, False
+    raw_obj = {}
+    if text:
+        try:
+            raw_obj = json.loads(text)
+        except Exception as exc:
+            _ipy_log_debug(f"breakpoint file decode failed: {exc}")
+            with _BREAKPOINT_STATE_LOCK:
+                current = dict(_BREAKPOINT_STATE.get("data") or {})
+            return current, False
+    normalized = _myipy_normalize_breakpoints(raw_obj)
+    signature = json.dumps(
+        normalized,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+    with _BREAKPOINT_STATE_LOCK:
+        changed = signature != _BREAKPOINT_STATE.get("signature")
+        _BREAKPOINT_STATE["signature"] = signature
+        _BREAKPOINT_STATE["data"] = normalized
+    globals()["__ipybridge_breakpoints__"] = normalized
+    return normalized, changed
+
+
+def _myipy_capture_breakpoints():
+    path = os.environ.get(_BREAKPOINT_FILE_ENV)
+    if not path:
+        return {}
+    with _BREAKPOINT_STATE_LOCK:
+        _BREAKPOINT_STATE["path"] = path
+    data, _ = _myipy_read_breakpoint_payload(path)
+    return data
+
+
+def _myipy_apply_breakpoints(payload=None, dbg=None):
+    if dbg is None:
+        dbg = globals().get("_mi_active_debugger")
+    if payload is None:
+        with _BREAKPOINT_STATE_LOCK:
+            payload = dict(_BREAKPOINT_STATE.get("data") or {})
+    if not isinstance(payload, dict):
+        payload = {}
+    if dbg is None:
+        return False
+    set_break = getattr(dbg, "set_break", None)
+    clear = getattr(dbg, "clear_all_breaks", None)
+    success = True
+    if callable(clear):
+        try:
+            clear()
+        except Exception as exc:
+            _ipy_log_debug(f"debug break clear failed: {exc}")
+            success = False
+    if not payload:
+        return success
+    if not callable(set_break):
+        return success
+    for bp_file, bp_lines in payload.items():
+        if not isinstance(bp_lines, (list, tuple, set)):
+            continue
+        for bp_line in bp_lines:
+            try:
+                line_no = int(bp_line)
+            except Exception:
+                continue
+            try:
+                set_break(bp_file, line_no)
+            except Exception as exc:
+                _ipy_log_debug(
+                    f"debug breakpoint set failed {bp_file}:{line_no}: {exc}"
+                )
+                success = False
+    return success
+
+
+def _myipy_breakpoint_watcher_loop(path):
+    last_mtime = None
+    while True:
+        try:
+            stat = os.stat(path)
+            mtime = getattr(stat, "st_mtime_ns", None)
+            if mtime is None:
+                mtime = int(stat.st_mtime * 1_000_000_000)
+        except FileNotFoundError:
+            time.sleep(0.25)
+            continue
+        except Exception as exc:
+            _ipy_log_debug(f"breakpoint stat failed: {exc}")
+            time.sleep(0.25)
+            continue
+        if last_mtime is not None and mtime == last_mtime:
+            time.sleep(0.15)
+            continue
+        last_mtime = mtime
+        data, changed = _myipy_read_breakpoint_payload(path)
+        if changed:
+            try:
+                _myipy_apply_breakpoints(payload=data)
+            except Exception as exc:
+                _ipy_log_debug(f"breakpoint watcher apply failed: {exc}")
+        time.sleep(0.15)
+
+
+def _myipy_start_breakpoint_watcher():
+    global _BREAKPOINT_WATCHER_STARTED
+    if _BREAKPOINT_WATCHER_STARTED:
+        return
+    path = _BREAKPOINT_STATE.get("path") or os.environ.get(_BREAKPOINT_FILE_ENV)
+    if not path:
+        return
+    with _BREAKPOINT_STATE_LOCK:
+        _BREAKPOINT_STATE["path"] = path
+    _myipy_read_breakpoint_payload(path)
+    try:
+        watcher = threading.Thread(
+            target=_myipy_breakpoint_watcher_loop,
+            args=(path,),
+            name="ipybridge-bp-watch",
+            daemon=True,
+        )
+        watcher.start()
+        _BREAKPOINT_WATCHER_STARTED = True
+    except Exception as exc:
+        _ipy_log_debug(f"breakpoint watcher start failed: {exc}")
+
+
+def _myipy_register_breakpoints_file(path):
+    if not path:
+        return False
+    try:
+        abs_path = os.path.abspath(path)
+    except Exception:
+        abs_path = path
+    try:
+        os.environ[_BREAKPOINT_FILE_ENV] = abs_path
+    except Exception:
+        pass
+    with _BREAKPOINT_STATE_LOCK:
+        _BREAKPOINT_STATE["path"] = abs_path
+    _myipy_read_breakpoint_payload(abs_path)
+    _myipy_start_breakpoint_watcher()
+    return True
+
+
+def _myipy_prepare_breakpoints_for_debug(dbg=None):
+    if dbg is not None:
+        globals()["_mi_active_debugger"] = dbg
+    else:
+        dbg = globals().get("_mi_active_debugger")
+    data = _myipy_capture_breakpoints()
+    try:
+        _myipy_apply_breakpoints(payload=data, dbg=dbg)
+    except Exception as exc:
+        _ipy_log_debug(f"debug breakpoint apply failed: {exc}")
+    return data
 
 
 def _coerce_int(value, default):
@@ -743,4 +941,9 @@ def __mi_preview(name, max_rows=50, max_cols=20, row_offset=0, col_offset=0):
     _myipy_purge_last_history()
 
 
+env_bp_path = os.environ.get(_BREAKPOINT_FILE_ENV)
+if env_bp_path:
+    _myipy_register_breakpoints_file(env_bp_path)
+else:
+    _myipy_start_breakpoint_watcher()
 _DEBUG_PREVIEW.ensure_running()

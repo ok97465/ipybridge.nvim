@@ -572,6 +572,7 @@ def debugfile(filename, cwd=None):
     _mi_enable_gui()
     glbs = globals()
     dbg = pdb_cls()
+    glbs["_mi_active_debugger"] = dbg
     try:
         shell = getattr(dbg, "shell", None)
         colors = None
@@ -609,27 +610,34 @@ def debugfile(filename, cwd=None):
                 _ipy_log_debug(f"debug colors magic failed: {exc}")
     except Exception as exc:
         _ipy_log_debug(f"debug theme setup error: {exc}")
-    try:
-        dbg.clear_all_breaks()
-    except Exception:
-        pass
-    try:
-        bp_map = glbs.get("__ipybridge_breakpoints__", {})
-    except Exception:
-        bp_map = {}
-    if isinstance(bp_map, dict):
-        for bp_file, bp_lines in bp_map.items():
-            if not isinstance(bp_lines, (list, tuple, set)):
-                continue
-            for bp_line in bp_lines:
-                try:
-                    line_no = int(bp_line)
-                except Exception:
+    helper_prepare = glbs.get("_myipy_prepare_breakpoints_for_debug")
+    if callable(helper_prepare):
+        try:
+            helper_prepare(dbg)
+        except Exception as exc:
+            _ipy_log_debug(f"debug breakpoint prepare failed: {exc}")
+    else:
+        try:
+            dbg.clear_all_breaks()
+        except Exception:
+            pass
+        try:
+            bp_map = glbs.get("__ipybridge_breakpoints__", {})
+        except Exception:
+            bp_map = {}
+        if isinstance(bp_map, dict):
+            for bp_file, bp_lines in bp_map.items():
+                if not isinstance(bp_lines, (list, tuple, set)):
                     continue
-                try:
-                    dbg.set_break(bp_file, line_no)
-                except Exception:
-                    pass
+                for bp_line in bp_lines:
+                    try:
+                        line_no = int(bp_line)
+                    except Exception:
+                        continue
+                    try:
+                        dbg.set_break(bp_file, line_no)
+                    except Exception:
+                        pass
     old_break_hook = getattr(sys, "breakpointhook", None)
     try:
         sys.breakpointhook = dbg.set_trace
@@ -667,6 +675,10 @@ def debugfile(filename, cwd=None):
                 pass
         try:
             dbg.quitting = True
+        except Exception:
+            pass
+        try:
+            glbs["_mi_active_debugger"] = None
         except Exception:
             pass
 
