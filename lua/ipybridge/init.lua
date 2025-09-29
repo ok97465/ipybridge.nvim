@@ -29,7 +29,6 @@ local M = {
   _helpers_pending = false,
   _runcell_sent = false,
   _runcell_path = nil,
-  _last_cwd_sent = nil,
   _debug_active = false,
   _latest_vars = {},
   _debug_locals_snapshot = nil,
@@ -203,26 +202,6 @@ local function get_stop_line_cell(idx_offset)
     return n_lines, false
 end
 
--- Quietly set IPython working directory according to config.
-local function set_exec_cwd_for(file_path)
-  if not M.is_open() then return end
-  local mode = M.config.exec_cwd_mode or 'pwd'
-  local dir = nil
-  if mode == 'file' and file_path and #file_path > 0 then
-    dir = fn.fnamemodify(file_path, ':p:h')
-  elseif mode == 'pwd' then
-    dir = fn.getcwd()
-  else
-    return
-  end
-  if not dir or #dir == 0 then return end
-  if M._last_cwd_sent == dir then return end
-  local safe = utils.py_quote_single(dir)
-  -- Use IPython magic with quiet flag; avoid extra output
-  M.term_instance:send(string.format("%%cd -q '%s'\n", safe))
-  M._last_cwd_sent = dir
-end
-
 M.setup = function(config)
     if config ~= nil then
         vim.validate({
@@ -327,7 +306,6 @@ M.open = function(go_back, cb)
         if M._helpers_path then pcall(os.remove, M._helpers_path); M._helpers_path = nil end
         M._runcell_sent = false
         if M._runcell_path then pcall(os.remove, M._runcell_path); M._runcell_path = nil end
-        M._last_cwd_sent = nil
         M._zmq_ready = false
         M._last_filters_signature = nil
         M._pending_exec = {}
@@ -382,15 +360,6 @@ M.open = function(go_back, cb)
             -- Enable interactive plotting and minimal numeric imports for convenience
             local cwd = fn.getcwd()
             local path_startup_script = fs.joinpath(cwd, M.config.startup_script)
-            -- Ensure the IPython working directory matches Neovim's CWD (or file dir per config)
-            -- This helps resolve package imports that rely on project root.
-            -- Apply before running any startup scripts/imports.
-            set_exec_cwd_for(fn.expand('%:p'))
-            -- Ensure current CWD is at the very front of sys.path.
-            -- Use a single-line statement to avoid IPython auto-indent issues.
-            M.term_instance:send(
-              "import sys, os; p=os.getcwd(); sys.path=[p]+[x for x in sys.path if x!=p]\n"
-            )
             -- Configure Matplotlib backend before importing pyplot
             if M.config.matplotlib_backend and #tostring(M.config.matplotlib_backend) > 0 then
               local b = tostring(M.config.matplotlib_backend)
@@ -782,7 +751,6 @@ M.close = function()
         M._runcell_path = nil
     end
     breakpoints.on_session_close()
-    M._last_cwd_sent = nil
     M._latest_vars = nil
     M._pending_exec = {}
     M._helpers_waiters = {}
@@ -866,8 +834,6 @@ M.run_file = function()
 				M.term_instance:send(string.format("runfile('%s')\n", safe))
 			end
 		else
-			-- Adjust working directory as configured and use %run
-			set_exec_cwd_for(abs_path)
 			local safe = utils.py_quote_double(abs_path)
 			M.term_instance:send(string.format("%%run \"%s\"\n", safe))
 		end
@@ -1431,7 +1397,6 @@ M.run_cell = function()
 	end
 
 	-- Fallback: send cell text directly.
-	set_exec_cwd_for(file_path)
 	local end_excl = has_next_cell and (line_stop - 1) or line_stop
 	M.send_lines(line_start - 1, end_excl)
 
