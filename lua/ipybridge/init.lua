@@ -18,6 +18,16 @@ local debug_scope = require("ipybridge.debug_scope")
 local breakpoints = require("ipybridge.breakpoints")
 local fs = vim.fs
 local uv = vim.uv
+local is_windows = uv.os_uname().sysname == 'Windows_NT'
+-- Normalize newline per platform because Windows terminals require CRLF.
+local newline = is_windows and '\r\n' or '\n'
+
+local function normalize_newlines(text)
+  if not is_windows or type(text) ~= 'string' then
+    return text
+  end
+  return text:gsub('\r?\n', '\r\n')
+end
 
 -- Core state for the plugin. Comments are in English; see README for usage.
 local M = {
@@ -39,6 +49,18 @@ local M = {
   _pending_exec = {},
   _helpers_waiters = {},
 }
+local function term_send(payload)
+  if not M.term_instance then return end
+  if type(payload) ~= 'string' or payload == '' then
+    return
+  end
+  M.term_instance:send(normalize_newlines(payload))
+end
+
+local function term_send_line(payload)
+  term_send((payload or '') .. newline)
+end
+
 -- Cell markers must be exactly: start of line '#', one space, then at least '%%'.
 -- Examples matched: '# %%', '# %% Import'. Examples NOT matched: '  # %%', '#%%'.
 local CELL_PATTERN = [[^# %%\+]]
@@ -318,15 +340,12 @@ M.open = function(go_back, cb)
             end
             after_helpers(function(ok_helpers)
               if not ok_helpers then
-                if M.term_instance then
-                  M.term_instance:send(payload)
-                end
+                term_send(payload)
                 return
               end
               queue_exec_request(payload, {
                 fallback = function()
-                  if not M.term_instance then return end
-                  M.term_instance:send(payload)
+                  term_send(payload)
                 end,
               })
             end)
@@ -367,18 +386,18 @@ M.open = function(go_back, cb)
               if b == 'qt' or b == 'tk' or b == 'macosx' or b == 'inline' then
                 -- Use IPython magic via API to avoid literal % in sent code
                 local stmt = string.format("from IPython import get_ipython; ip=get_ipython();\nif ip is not None: ip.run_line_magic('matplotlib','%s')\n", b)
-                M.term_instance:send(stmt)
+                term_send(stmt)
               else
                 -- Fallback to Matplotlib backend name
                 local stmt = string.format("import matplotlib as _mpl; _mpl.use('%s')\n", b)
-                M.term_instance:send(stmt)
+                term_send(stmt)
               end
             end
             -- Configure IPython color scheme via %colors magic (portable across jupyter-console versions)
             if M.config.ipython_colors and #tostring(M.config.ipython_colors) > 0 then
               local c = tostring(M.config.ipython_colors)
               local stmt = string.format("from IPython import get_ipython; ip=get_ipython();\nif ip is not None: ip.run_line_magic('colors','%s')\n", c)
-              M.term_instance:send(stmt)
+              term_send(stmt)
             end
             -- Configure autoreload extension per user config (default: 2)
             do
@@ -391,18 +410,18 @@ M.open = function(go_back, cb)
                   "if ip is not None: ip.run_line_magic('load_ext','autoreload'); ip.run_line_magic('autoreload','%s')\n",
                   mode
                 )
-                M.term_instance:send(stmt)
+                term_send(stmt)
               end
             end
             -- Optionally enable interactive mode
             if M.config.matplotlib_ion ~= false then
-              M.term_instance:send("import matplotlib.pyplot as plt; plt.ion()\n")
+              term_send("import matplotlib.pyplot as plt; plt.ion()\n")
             end
             if utils.file_exists(path_startup_script) then
-              M.term_instance:send(utils.exec_file_stmt(path_startup_script))
+              term_send(utils.exec_file_stmt(path_startup_script))
             else
               -- Common numerics so user snippets like `array([...])` work
-              M.term_instance:send("import numpy as np; from numpy import array\n")
+              term_send("import numpy as np; from numpy import array\n")
             end
             -- Optionally seed runcell helpers for Spyder-like behavior
             if M.config.prefer_runcell_magic then
@@ -429,8 +448,7 @@ local function _runcell_py_code()
 end
 
 local function default_exec_fallback(code)
-  if not M.term_instance then return end
-  M.term_instance:send(code)
+  term_send(code)
 end
 
 local function dispatch_exec_request(code, opts)
@@ -512,7 +530,7 @@ local function send_helpers_via_console(script)
       return false
     end
   end
-  M.term_instance:send(utils.exec_file_stmt(M._helpers_path))
+  term_send(utils.exec_file_stmt(M._helpers_path))
   return true
 end
 
@@ -555,7 +573,7 @@ function M._ensure_runcell_helpers()
       M._runcell_path = fn.tempname() .. '.myipy_runcell.py'
       pcall(fn.writefile, vim.split(code, "\n", { plain = true }), M._runcell_path)
     end
-    M.term_instance:send(utils.exec_file_stmt(M._runcell_path))
+    term_send(utils.exec_file_stmt(M._runcell_path))
     M._runcell_sent = true
   end
   after_helpers(function(ok_helpers)
@@ -641,17 +659,13 @@ function M._sync_var_filters()
   after_helpers(function(ok_helpers)
     if not ok_helpers then
       local payload = utils.send_exec_block(script)
-      if M.term_instance then
-        M.term_instance:send(payload)
-      end
+      term_send(payload)
       return
     end
     queue_exec_request(script, {
       fallback = function()
         local payload = utils.send_exec_block(script)
-        if M.term_instance then
-          M.term_instance:send(payload)
-        end
+        term_send(payload)
       end,
     })
   end)
@@ -830,13 +844,13 @@ M.run_file = function()
 			local safe = utils.py_quote_single(abs_path)
 			if cwd_arg and #cwd_arg > 0 then
 				local safecwd = utils.py_quote_single(cwd_arg)
-				M.term_instance:send(string.format("runfile('%s','%s')\n", safe, safecwd))
+				term_send(string.format("runfile('%s','%s')\n", safe, safecwd))
 			else
-				M.term_instance:send(string.format("runfile('%s')\n", safe))
+				term_send(string.format("runfile('%s')\n", safe))
 			end
 		else
 			local safe = utils.py_quote_double(abs_path)
-			M.term_instance:send(string.format("%%run \"%s\"\n", safe))
+			term_send(string.format("%%run \"%s\"\n", safe))
 		end
 		M._debug_active = false
 		M._debug_window = nil
@@ -865,7 +879,7 @@ M.debug_file = function()
 		M._ensure_runcell_helpers()
 		M._send_helpers_if_needed()
 		breakpoints.push()
-		M.term_instance:send("_myipy_reset_debug_baseline()\n")
+		term_send("_myipy_reset_debug_baseline()\n")
 		local cwd_arg = nil
 		local mode = M.config.exec_cwd_mode or 'pwd'
 		if mode == 'file' then
@@ -876,9 +890,9 @@ M.debug_file = function()
 		local safe = utils.py_quote_single(abs_path)
 		if cwd_arg and #cwd_arg > 0 then
 			local safecwd = utils.py_quote_single(cwd_arg)
-			M.term_instance:send(string.format("debugfile('%s','%s')\n", safe, safecwd))
+			term_send(string.format("debugfile('%s','%s')\n", safe, safecwd))
 		else
-			M.term_instance:send(string.format("debugfile('%s')\n", safe))
+			term_send(string.format("debugfile('%s')\n", safe))
 		end
 		local was_debug = M._debug_active
 		M._debug_active = true
@@ -911,12 +925,12 @@ M.send_lines = function(line_start, line_stop)
     if mode == 'paste' then
       -- Use bracketed paste so IPython displays the pasted block with prompts.
       local payload = utils.paste_block(tb_lines)
-      M.term_instance:send(payload)
+      term_send(payload)
     else
       -- Default: ship as hex-encoded Python and execute via exec().
       local block = table.concat(tb_lines, "\n") .. "\n"
       local payload = utils.send_exec_block(block)
-      M.term_instance:send(payload)
+      term_send(payload)
     end
   end
 
@@ -942,7 +956,7 @@ M.run_line = function()
 
 	local function after()
 		if not M.is_open() then return end
-		M.term_instance:send(line .. "\n")
+		term_send_line(line)
 		if idx_line_cursor < n_lines then
 			api.nvim_win_set_cursor(0, { idx_line_cursor + 1, 0 })
 		end
@@ -962,7 +976,7 @@ end
 M.run_cmd = function(cmd)
 	local function after()
 		if not M.is_open() then return end
-		M.term_instance:send(cmd .. "\n")
+		term_send_line(cmd)
 	end
 	if not M.is_open() then
 		M.open(true, function(ok) if ok then after() end end)
@@ -980,7 +994,7 @@ local function send_debug_command(cmd, opts)
     vim.notify('ipybridge: IPython terminal is not open', vim.log.levels.WARN)
     return
   end
-  M.term_instance:send(cmd .. '\n')
+  term_send_line(cmd)
   if opts and opts.deactivate then
     M._debug_active = false
     M._debug_window = nil
@@ -1409,9 +1423,9 @@ M.run_cell = function()
 				local safe = utils.py_quote_single(path)
 				if cwd_arg and #cwd_arg > 0 then
 					local safecwd = utils.py_quote_single(cwd_arg)
-					M.term_instance:send(string.format("runcell(%d, '%s', '%s')\n", idx, safe, safecwd))
+					term_send(string.format("runcell(%d, '%s', '%s')\n", idx, safe, safecwd))
 				else
-					M.term_instance:send(string.format("runcell(%d, '%s')\n", idx, safe))
+					term_send(string.format("runcell(%d, '%s')\n", idx, safe))
 				end
 				if has_next_cell then
 					local idx_line = math.min(line_stop + 1, api.nvim_buf_line_count(0))
