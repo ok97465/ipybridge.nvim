@@ -48,6 +48,8 @@ local M = {
   _last_filters_signature = nil,
   _pending_exec = {},
   _helpers_waiters = {},
+  -- Guard against double-cleanup when the user types `exit` inside IPython.
+  _term_exit_expected = false,
 }
 local function term_send(payload)
   if not M.term_instance then return end
@@ -281,6 +283,18 @@ M.is_open = function()
     return M.term_instance ~= nil and type(M.term_instance.job_id) == 'number' and M.term_instance.job_id > 0
 end
 
+-- IPython terminal exit handler invoked by term_ipy.lua callback.
+-- Distinguish between plugin-initiated shutdown (jobstop) and in-REPL `exit`.
+function M._handle_term_exit()
+  if M._term_exit_expected then
+    M._term_exit_expected = false
+    M.term_instance = nil
+    return
+  end
+  M.term_instance = nil
+  M.close()
+end
+
 ---Open the IPython terminal split.
 ---@param go_back boolean|nil # if true, jump back to previous window after init
 M.open = function(go_back, cb)
@@ -322,7 +336,11 @@ M.open = function(go_back, cb)
         M.term_instance = term_helper.TermIpy:new(cmd_console, cwd, {
             on_message = dispatch.handle,
             env = env,
+            -- Ensure we clean up correctly when IPython terminates on its own.
+            on_exit = M._handle_term_exit,
         })
+        -- Opening a fresh terminal means no pending jobstop callbacks.
+        M._term_exit_expected = false
         -- Reset helper state and cached paths for new session
         M._helpers_sent = false
         M._helpers_pending = false
@@ -749,7 +767,10 @@ end
 ---Close the IPython terminal if running.
 M.close = function()
 	if M.is_open() then
+		M._term_exit_expected = true
 		fn.jobstop(M.term_instance.job_id)
+	else
+		M._term_exit_expected = false
 	end
     M._zmq_ready = false
     pcall(function() require('ipybridge.zmq_client').stop() end)

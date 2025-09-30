@@ -24,17 +24,24 @@ local OSC_PREFIX_LEN = #OSC_PREFIX
 local OSC_SUFFIX = "\7"
 
 local function __handle_exit(term)
-	return function(...)
+	return function(job_id, code, event)
 		if term:isshow() then
 			api.nvim_win_close(term.win_id, true)
 		end
 		term:stopinsert()
-		if api.nvim_buf_is_loaded(term.buf_id) then
+		if term.buf_id and api.nvim_buf_is_loaded(term.buf_id) then
 			api.nvim_buf_delete(term.buf_id, {force=true})
 		end
 		term.buf_id = nil
 		term.win_id = nil
 		term.job_id = nil
+		local cb = term._on_exit
+		if type(cb) == 'function' then
+			-- Defer to main loop so plugin cleanup runs outside termopen callback.
+			vim.schedule(function()
+				pcall(cb, job_id, code, event)
+			end)
+		end
 	end
 end
 
@@ -50,6 +57,12 @@ function TermIpy:new(cmd, cwd, opts)
     tb._env = opts.env
   else
     tb._env = nil
+  end
+  if opts and type(opts.on_exit) == 'function' then
+    -- Allow callers to react when the terminal job terminates (e.g. user typed exit).
+    tb._on_exit = opts.on_exit
+  else
+    tb._on_exit = nil
   end
   tb:__spawn(cmd, cwd)
   return tb
