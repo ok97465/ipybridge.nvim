@@ -402,9 +402,9 @@ M.open = function(go_back, cb)
             if M.config.matplotlib_backend and #tostring(M.config.matplotlib_backend) > 0 then
               local b = tostring(M.config.matplotlib_backend)
               if b == 'qt' or b == 'tk' or b == 'macosx' or b == 'inline' then
-                -- Use IPython magic via API to avoid literal % in sent code
-                local stmt = string.format("from IPython import get_ipython; ip=get_ipython();\nif ip is not None: ip.run_line_magic('matplotlib','%s')\n", b)
-                term_send(stmt)
+                -- Use IPython magic directly for interactive backends
+                local stmt = string.format("%%matplotlib %s", b)
+                term_send_line(stmt)
               else
                 -- Fallback to Matplotlib backend name
                 local stmt = string.format("import matplotlib as _mpl; _mpl.use('%s')\n", b)
@@ -414,8 +414,8 @@ M.open = function(go_back, cb)
             -- Configure IPython color scheme via %colors magic (portable across jupyter-console versions)
             if M.config.ipython_colors and #tostring(M.config.ipython_colors) > 0 then
               local c = tostring(M.config.ipython_colors)
-              local stmt = string.format("from IPython import get_ipython; ip=get_ipython();\nif ip is not None: ip.run_line_magic('colors','%s')\n", c)
-              term_send(stmt)
+              local stmt = string.format("%%colors %s", c)
+              term_send_line(stmt)
             end
             -- Configure autoreload extension per user config (default: 2)
             do
@@ -423,12 +423,9 @@ M.open = function(go_back, cb)
               if ar == nil then ar = 2 end
               local mode = tostring(ar)
               if mode == '1' or mode == '2' then
-                local stmt = string.format(
-                  "from IPython import get_ipython; ip=get_ipython();\n" ..
-                  "if ip is not None: ip.run_line_magic('load_ext','autoreload'); ip.run_line_magic('autoreload','%s')\n",
-                  mode
-                )
-                term_send(stmt)
+                term_send_line("%load_ext autoreload")
+                local stmt = string.format("%%autoreload %s", mode)
+                term_send_line(stmt)
               end
             end
             -- Optionally enable interactive mode
