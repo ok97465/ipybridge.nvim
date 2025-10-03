@@ -33,8 +33,6 @@ end
 local M = {
   term_instance = nil,
   _helpers_sent = false,
-  _conn_file = nil,
-  _kernel_job = nil,
   _helpers_path = nil,
   _helpers_pending = false,
   _runcell_sent = false,
@@ -51,6 +49,29 @@ local M = {
   -- Guard against double-cleanup when the user types `exit` inside IPython.
   _term_exit_expected = false,
 }
+
+-- Reset debugger bookkeeping so UI can return to normal execution state.
+local function clear_debug_state()
+  M._debug_active = false
+  M._debug_window = nil
+end
+
+-- Ensure the IPython terminal exists before executing the provided callback.
+local function with_terminal(go_back, cb)
+  if type(cb) ~= 'function' then
+    return
+  end
+  if M.is_open() then
+    cb(true)
+    return
+  end
+  M.open(go_back, function(ok)
+    if ok then
+      cb(true)
+    end
+  end)
+end
+
 local function term_send(payload)
   if not M.term_instance then return end
   if type(payload) ~= 'string' or payload == '' then
@@ -130,6 +151,7 @@ end
 
 local queue_exec_request -- forward declaration for deferred ZMQ exec
 local after_helpers      -- forward declaration for helper gating
+local exec_with_pipeline -- forward declaration for unified execution path
 
 ---Toggle a breakpoint at the current cursor line for the active Python buffer.
 function M.toggle_breakpoint()
@@ -139,18 +161,6 @@ end
 M.config = {
 	profile_name = "vim",
 	startup_script = "import_in_console.py",
-	startup_cmd = "\"import numpy as np;" ..
-		"import matplotlib.pyplot as plt;" ..
-		"from scipy.special import sindg, cosdg, tandg;" ..
-		"from matplotlib.pyplot import plot, subplots, figure, hist;" ..
-		"from numpy import (" ..
-		"pi, deg2rad, rad2deg, unwrap, angle, zeros, array, ones, linspace, cumsum," ..
-		"diff, arange, interp, conj, exp, sqrt, vstack, hstack, dot, cross, newaxis);" ..
-		"from numpy import cos, sin, tan, arcsin, arccos, arctan;" ..
-		"from numpy import amin, amax, argmin, argmax, mean;" ..
-		"from numpy.linalg import svd, norm;" ..
-		"from numpy.fft import fftshift, ifftshift, fft, ifft, fft2, ifft2;" ..
-		"from numpy.random import randn, standard_normal, randint, choice, uniform;\"",
 	sleep_ms_after_open = 1000,
 	set_default_keymaps = true,
 	viewer_max_rows = 30,
@@ -232,7 +242,6 @@ M.setup = function(config)
         vim.validate({
             profile_name = { config.profile_name, 's', true },
             startup_script = { config.startup_script, 's', true },
-            startup_cmd = { config.startup_cmd, 's', true },
             sleep_ms_after_open = { config.sleep_ms_after_open, 'n', true },
             set_default_keymaps = { config.set_default_keymaps, 'b', true },
             viewer_max_rows = { config.viewer_max_rows, 'n', true },
@@ -356,20 +365,19 @@ M.open = function(go_back, cb)
             if type(payload) ~= 'string' or payload == '' then
               return
             end
-            after_helpers(function(ok_helpers)
-              if not ok_helpers then
-                term_send(payload)
-                return
-              end
-              queue_exec_request(payload, {
-                fallback = function()
-                  term_send(payload)
-                end,
-              })
-            end)
+            term_send(payload)
           end,
-          ensure_helpers = function()
-            M._send_helpers_if_needed()
+          exec = function(payload, opts)
+            if type(payload) ~= 'string' or payload == '' then
+              return
+            end
+            local merged = vim.tbl_extend('force', {
+              require_helpers = true,
+              fallback = function()
+                term_send(payload)
+              end,
+            }, opts or {})
+            exec_with_pipeline(payload, merged)
           end,
           is_term_open = M.is_open,
         })
@@ -509,6 +517,32 @@ queue_exec_request = function(code, opts)
   end)
 end
 
+exec_with_pipeline = function(code, opts)
+  opts = opts or {}
+  local require_helpers = opts.require_helpers == true
+  local queue_opts = {
+    on_success = opts.on_success,
+    on_error = opts.on_error,
+    fallback = opts.fallback,
+  }
+  local function dispatch()
+    queue_exec_request(code, queue_opts)
+  end
+  if require_helpers then
+    after_helpers(function(ok_helpers)
+      if not ok_helpers then
+        if opts.fallback then
+          opts.fallback('helpers_failed')
+        end
+        return
+      end
+      dispatch()
+    end)
+    return
+  end
+  dispatch()
+end
+
 function M._flush_pending_exec()
   if not M._zmq_ready then return end
   if not M._pending_exec or #M._pending_exec == 0 then return end
@@ -591,19 +625,14 @@ function M._ensure_runcell_helpers()
     term_send(utils.exec_file_stmt(M._runcell_path))
     M._runcell_sent = true
   end
-  after_helpers(function(ok_helpers)
-    if not ok_helpers then
-      fallback()
-      return
-    end
-    queue_exec_request(code, {
-      on_success = function()
-        M._runcell_sent = true
-      end,
-      on_error = fallback,
-      fallback = fallback,
-    })
-  end)
+  exec_with_pipeline(code, {
+    require_helpers = true,
+    on_success = function()
+      M._runcell_sent = true
+    end,
+    on_error = fallback,
+    fallback = fallback,
+  })
 end
 
 function M._send_helpers_if_needed()
@@ -671,19 +700,14 @@ function M._sync_var_filters()
     :gsub('__TYPES_JSON__', types_json)
     :gsub('__MAX_REPR__', tostring(max_repr))
     :gsub('__ENABLE_LOGS__', enable_logs and 'True' or 'False')
-  after_helpers(function(ok_helpers)
-    if not ok_helpers then
-      local payload = utils.send_exec_block(script)
-      term_send(payload)
-      return
-    end
-    queue_exec_request(script, {
-      fallback = function()
-        local payload = utils.send_exec_block(script)
-        term_send(payload)
-      end,
-    })
-  end)
+  local function fallback()
+    local payload = utils.send_exec_block(script)
+    term_send(payload)
+  end
+  exec_with_pipeline(script, {
+    require_helpers = true,
+    fallback = fallback,
+  })
   M._last_filters_signature = signature
 end
 
@@ -721,40 +745,6 @@ function M._update_latest_vars(data)
   return M._digest_vars_snapshot(data)
 end
 
--- Ensure a standalone Jupyter kernel is running and return its connection file.
-function M._ensure_kernel(cb)
-  if M._kernel_job and M._conn_file and uv.fs_stat(M._conn_file) then
-    if cb then cb(true, M._conn_file) end
-    return
-  end
-  local cf = fn.tempname() .. '.json'
-  local cmd = { M.config.python_cmd or 'python3', '-m', 'ipykernel_launcher', '-f', cf }
-  local job = fn.jobstart(cmd, {
-    on_exit = function() M._kernel_job = nil end,
-  })
-  if job <= 0 then
-    if cb then cb(false) end
-    return
-  end
-  M._kernel_job = job
-  M._conn_file = cf
-  local timer = uv.new_timer()
-  local start = uv.now()
-  local function tick()
-    if (uv.now() - start) > 5000 then
-      pcall(timer.stop, timer); pcall(timer.close, timer)
-      if cb then cb(false) end
-      return
-    end
-    local st = uv.fs_stat(cf)
-    if st and st.type == 'file' and st.size and st.size > 0 then
-      pcall(timer.stop, timer); pcall(timer.close, timer)
-      if cb then cb(true, cf) end
-    end
-  end
-  timer:start(50, 100, vim.schedule_wrap(tick))
-end
-
 -- Request the kernel connection file path once and cache it.
 function M._ensure_conn_file(cb)
   -- Delegate to kernel manager: it owns the lifecycle of the kernel process.
@@ -769,6 +759,7 @@ M.close = function()
 	else
 		M._term_exit_expected = false
 	end
+    clear_debug_state()
     M._zmq_ready = false
     pcall(function() require('ipybridge.zmq_client').stop() end)
     -- Stop the background kernel process
@@ -794,8 +785,8 @@ M.toggle = function()
 	if M.is_open() then
 		M.close()
 	else
-		M.open(false, function(ok)
-			if ok and M.term_instance then
+		with_terminal(false, function()
+			if M.term_instance then
 				M.term_instance:startinsert()
 			end
 		end)
@@ -807,20 +798,13 @@ M.goto_ipy = function()
 	if M.term_instance and api.nvim_win_get_buf(0) == M.term_instance.buf_id then
 		return
 	end
-	local function focus()
+	with_terminal(false, function()
 		if not M.term_instance then return end
 		M.term_instance:show()
 		api.nvim_set_current_win(M.term_instance.win_id)
 		M.term_instance:scroll_to_bottom()
 		M.term_instance:startinsert()
-	end
-	if not M.is_open() then
-		M.open(false, function(ok)
-			if ok then focus() end
-		end)
-	else
-		focus()
-	end
+	end)
 end
 
 ---Return focus from IPython split to previous window.
@@ -847,7 +831,7 @@ M.run_file = function()
 	if vim.bo.modified and M.config.runfile_save_before_run ~= false then
 		pcall(vim.cmd, 'write')
 	end
-	local function after()
+	with_terminal(true, function()
 		if not M.is_open() then return end
 		if M.config.prefer_runcell_magic then
 			-- Use runfile helper with optional cwd argument; avoid global %cd
@@ -870,14 +854,8 @@ M.run_file = function()
 			local safe = utils.py_quote_double(abs_path)
 			term_send(string.format("%%run \"%s\"\n", safe))
 		end
-		M._debug_active = false
-		M._debug_window = nil
-	end
-	if not M.is_open() then
-		M.open(true, function(ok) if ok then after() end end)
-	else
-		after()
-	end
+		clear_debug_state()
+	end)
 end
 
 ---Run the current file under IPython debugger via %debugfile.
@@ -892,7 +870,7 @@ M.debug_file = function()
 	if vim.bo.modified and M.config.debugfile_save_before_run ~= false then
 		pcall(vim.cmd, 'write')
 	end
-	local function after()
+	with_terminal(true, function()
 		if not M.is_open() then return end
 		M._ensure_runcell_helpers()
 		M._send_helpers_if_needed()
@@ -917,12 +895,7 @@ M.debug_file = function()
 		if not was_debug then
 			M._sync_var_filters()
 		end
-	end
-	if not M.is_open() then
-		M.open(true, function(ok) if ok then after() end end)
-	else
-		after()
-	end
+	end)
 end
 
 ---Send lines [line_start, line_stop) to IPython.
@@ -932,31 +905,24 @@ M.send_lines = function(line_start, line_stop)
 	local tb_lines = api.nvim_buf_get_lines(0, line_start, line_stop, false)
 	if not tb_lines or #tb_lines == 0 then return end
 
-	M._debug_active = false
-	M._debug_window = nil
+	clear_debug_state()
 
-  local function do_send()
-    if not M.is_open() then return end
-    -- Choose how to deliver multi-line code to IPython.
-    -- 'exec' ensures reliability across terminals; 'paste' mirrors typed input.
-    local mode = tostring(M.config.multiline_send_mode or 'exec')
-    if mode == 'paste' then
-      -- Use bracketed paste so IPython displays the pasted block with prompts.
-      local payload = utils.paste_block(tb_lines)
-      term_send(payload)
-    else
-      -- Default: ship as hex-encoded Python and execute via exec().
-      local block = table.concat(tb_lines, "\n") .. "\n"
-      local payload = utils.send_exec_block(block)
-      term_send(payload)
-    end
-  end
-
-	if not M.is_open() then
-		M.open(true, function(ok) if ok then do_send() end end)
-	else
-		do_send()
-	end
+	with_terminal(true, function()
+		if not M.is_open() then return end
+		-- Choose how to deliver multi-line code to IPython.
+		-- 'exec' ensures reliability across terminals; 'paste' mirrors typed input.
+		local mode = tostring(M.config.multiline_send_mode or 'exec')
+		if mode == 'paste' then
+			-- Use bracketed paste so IPython displays the pasted block with prompts.
+			local payload = utils.paste_block(tb_lines)
+			term_send(payload)
+		else
+			-- Default: ship as hex-encoded Python and execute via exec().
+			local block = table.concat(tb_lines, "\n") .. "\n"
+			local payload = utils.send_exec_block(block)
+			term_send(payload)
+		end
+	end)
 end
 
 ---Send the current visual selection (linewise) to IPython.
@@ -972,35 +938,23 @@ M.run_line = function()
 	local line = api.nvim_get_current_line()
 	local idx_line_cursor = api.nvim_win_get_cursor(0)[1]
 
-	local function after()
+	with_terminal(true, function()
 		if not M.is_open() then return end
 		term_send_line(line)
 		if idx_line_cursor < n_lines then
 			api.nvim_win_set_cursor(0, { idx_line_cursor + 1, 0 })
 		end
-		M._debug_active = false
-		M._debug_window = nil
-	end
-
-	if not M.is_open() then
-		M.open(true, function(ok) if ok then after() end end)
-	else
-		after()
-	end
+		clear_debug_state()
+	end)
 end
 
 ---Send an arbitrary command string to IPython.
 ---@param cmd string
 M.run_cmd = function(cmd)
-	local function after()
+	with_terminal(true, function()
 		if not M.is_open() then return end
 		term_send_line(cmd)
-	end
-	if not M.is_open() then
-		M.open(true, function(ok) if ok then after() end end)
-	else
-		after()
-	end
+	end)
 end
 
 local function send_debug_command(cmd, opts)
@@ -1014,8 +968,7 @@ local function send_debug_command(cmd, opts)
   end
   term_send_line(cmd)
   if opts and opts.deactivate then
-    M._debug_active = false
-    M._debug_window = nil
+    clear_debug_state()
   end
 end
 
@@ -1411,7 +1364,6 @@ M.run_cell = function()
 	local idx_line_cursor = api.nvim_win_get_cursor(0)[1]
 	local line_start = get_start_line_cell(idx_line_cursor)
 	local line_stop, has_next_cell = get_stop_line_cell(idx_line_cursor + 1)
-	local file_path = fn.expand('%:p')
 
 	-- Prefer IPython runcell helper when configured and viable.
 	if M.config.prefer_runcell_magic then
@@ -1437,18 +1389,22 @@ M.run_cell = function()
 					local s = CELL_RE:match_str(ln)
 					if s ~= nil then idx = idx + 1 end
 				end
-				M._ensure_runcell_helpers()
-				local safe = utils.py_quote_single(path)
-				if cwd_arg and #cwd_arg > 0 then
-					local safecwd = utils.py_quote_single(cwd_arg)
-					term_send(string.format("runcell(%d, '%s', '%s')\n", idx, safe, safecwd))
-				else
-					term_send(string.format("runcell(%d, '%s')\n", idx, safe))
-				end
-				if has_next_cell then
-					local idx_line = math.min(line_stop + 1, api.nvim_buf_line_count(0))
-					api.nvim_win_set_cursor(0, { idx_line, 0 })
-				end
+				with_terminal(true, function()
+					if not M.is_open() then return end
+					M._ensure_runcell_helpers()
+					local safe = utils.py_quote_single(path)
+					if cwd_arg and #cwd_arg > 0 then
+						local safecwd = utils.py_quote_single(cwd_arg)
+						term_send(string.format("runcell(%d, '%s', '%s')\n", idx, safe, safecwd))
+					else
+						term_send(string.format("runcell(%d, '%s')\n", idx, safe))
+					end
+					clear_debug_state()
+					if has_next_cell then
+						local idx_line = math.min(line_stop + 1, api.nvim_buf_line_count(0))
+						api.nvim_win_set_cursor(0, { idx_line, 0 })
+					end
+				end)
 				return
 			end
 		end

@@ -69,7 +69,7 @@ function M.exec_file_stmt(path)
 end
 
 -- Build a bracketed-paste payload for multiple lines.
--- This function is unused currently, but kept for completeness.
+-- Used when multiline selections are sent in 'paste' mode so prompts stay aligned.
 function M.paste_block(lines_tbl)
   if not lines_tbl or #lines_tbl == 0 then return "" end
   return "\x1b[200~" .. table.concat(lines_tbl, "\n") .. "\n\x1b[201~\n"

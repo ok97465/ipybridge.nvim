@@ -49,8 +49,7 @@ Minimal helper to run IPython/Jupyter in a terminal split and send code from the
 
 ### Configuration
 - `profile_name` (string|nil): IPython profile passed as `--profile=<name>`. If `nil`, the flag is omitted.
-- `startup_script` (string): If this file exists under current working directory, `ipython -i <startup_script>` is used.
-- `startup_cmd` (string): Deprecated/unused. If `startup_script` is missing, the plugin sends minimal numeric imports instead.
+- `startup_script` (string): If this file exists under current working directory, `ipython -i <startup_script>` is used; otherwise the plugin sends a minimal set of numeric imports automatically.
 - `sleep_ms_after_open` (number): Milliseconds to wait (non-blocking) before running initial setup such as `plt.ion()`.
 - `set_default_keymaps` (boolean, default: `true`): Apply buffer-local keymaps for Python files only.
 

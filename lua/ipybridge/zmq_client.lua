@@ -12,6 +12,12 @@ local M = {
   next_id = 1,
 }
 
+local function notify_callback_error(err)
+  vim.schedule(function()
+    vim.notify('[ipybridge.zmq] callback failed: ' .. tostring(err), vim.log.levels.WARN)
+  end)
+end
+
 local function gen_id()
   local id = tostring(M.next_id)
   M.next_id = M.next_id + 1
@@ -35,7 +41,12 @@ local function on_stdout(job_id, data, _)
       if ok and type(msg) == 'table' and msg.id then
         local cb = M.pending[msg.id]
         M.pending[msg.id] = nil
-        if cb then pcall(cb, msg) end
+        if cb then
+          local ok_cb, err = pcall(cb, msg)
+          if not ok_cb then
+            notify_callback_error(err)
+          end
+        end
       end
     end
   end
@@ -53,7 +64,10 @@ end
 
 local function on_exit()
   for id, cb in pairs(M.pending) do
-    pcall(cb, { id = id, ok = false, error = 'zmq client exited' })
+    local ok_cb, err = pcall(cb, { id = id, ok = false, error = 'zmq client exited' })
+    if not ok_cb then
+      notify_callback_error(err)
+    end
   end
   M.pending = {}
   M.job = nil
@@ -94,8 +108,20 @@ end
 function M.request(op, args, cb)
   if not M.job then return false end
   local id = gen_id()
-  M.pending[id] = cb
-  return send_msg({ id = id, op = op, args = args or {} })
+  if cb then
+    M.pending[id] = cb
+  end
+  if not send_msg({ id = id, op = op, args = args or {} }) then
+    if cb then
+      M.pending[id] = nil
+      local ok_cb, err = pcall(cb, { id = id, ok = false, error = 'send_failed' })
+      if not ok_cb then
+        notify_callback_error(err)
+      end
+    end
+    return false
+  end
+  return true
 end
 
 return M
