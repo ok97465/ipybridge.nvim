@@ -31,16 +31,76 @@ if _PATCH_FLAG:
 
     try:
         import readline  # type: ignore
-
-        try:
-            readline.parse_and_bind("set editing-mode emacs")
-            readline.parse_and_bind("tab: complete")
-        except Exception as exc:
-            _log(f"readline configuration failed: {exc}")
-        else:
-            _log("readline editing enabled")
     except Exception as exc:
         _log(f"readline unavailable: {exc}")
+    else:
+        completion_state = {"allow": False}
+        original_parse_and_bind = getattr(readline, "parse_and_bind", None)
+        original_set_completer = getattr(readline, "set_completer", None)
+
+        if callable(original_parse_and_bind):
+
+            def _apply_tab_self_insert() -> None:
+                """Bind TAB to literal insertion across GNU readline and libedit."""
+                for binding in ("tab: self-insert", "bind ^I self-insert"):
+                    try:
+                        original_parse_and_bind(binding)
+                        return
+                    except Exception:
+                        continue
+
+            def _guarded_parse_and_bind(command) -> None:
+                """Prevent TAB from being rebound to readline's completer."""
+                if command is None:
+                    return original_parse_and_bind(command)
+                if isinstance(command, bytes):
+                    text = command.decode(errors="ignore")
+                else:
+                    text = str(command)
+                lowered = text.strip().lower()
+                if (
+                    ": complete" in lowered
+                    or " rl_complete" in lowered
+                    or lowered.startswith("bind ^i")
+                    or lowered.startswith("bind \\t")
+                ):
+                    _apply_tab_self_insert()
+                    return
+                original_parse_and_bind(command)
+
+            readline.parse_and_bind = _guarded_parse_and_bind  # type: ignore[assignment]
+            try:
+                original_parse_and_bind("set editing-mode emacs")
+                _apply_tab_self_insert()
+            except Exception as exc:
+                _log(f"readline baseline bindings failed: {exc}")
+            else:
+                _log("readline editing enabled with TAB suppression")
+        else:
+            _log("readline parse_and_bind unavailable; TAB suppression skipped")
+
+        if callable(original_set_completer):
+
+            def _guarded_set_completer(func):
+                if completion_state["allow"]:
+                    return original_set_completer(func)
+                return original_set_completer(None)
+
+            def _ipybridge_enable_completion(func) -> None:
+                """Allow ipybridge to install its own completer later."""
+                completion_state["allow"] = True
+                original_set_completer(func)
+
+            def _ipybridge_block_completion() -> None:
+                """Re-disable readline completion when needed."""
+                completion_state["allow"] = False
+                original_set_completer(None)
+
+            readline.set_completer = _guarded_set_completer  # type: ignore[assignment]
+            readline._ipybridge_enable_completion = _ipybridge_enable_completion  # type: ignore[attr-defined]
+            readline._ipybridge_block_completion = _ipybridge_block_completion  # type: ignore[attr-defined]
+        else:
+            _log("readline set_completer unavailable; TAB suppression incomplete")
 
     _session = None
     _input_failure_logged = False
