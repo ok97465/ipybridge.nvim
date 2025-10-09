@@ -308,6 +308,36 @@ class KernelChannel:
 
         return True, None
 
+    def complete(self, code: str, cursor_pos: int) -> Tuple[bool, Optional[dict], Optional[str]]:
+        """Request completions from the kernel."""
+        if not isinstance(code, str):
+            code = str(code or "")
+        try:
+            cursor = int(cursor_pos)
+        except Exception:
+            cursor = len(code)
+        try:
+            reply = self.client.complete(code=code, cursor_pos=cursor, reply=True, timeout=2.0)
+        except Exception as exc:
+            self._logger.log(f"complete request failed: {exc}")
+            return False, None, str(exc)
+        if not isinstance(reply, dict):
+            self._logger.log("complete reply missing payload")
+            return False, None, "invalid reply"
+        status = reply.get("status") or "ok"
+        if status != "ok":
+            self._logger.log(
+                f"complete status={status} ename={reply.get('ename')} evalue={reply.get('evalue')}"
+            )
+            err = reply.get("error") or reply.get("status") or "error"
+            return False, reply, err
+        matches = reply.get("matches")
+        match_count = len(matches) if isinstance(matches, list) else 0
+        self._logger.log(
+            f"complete reply matches={match_count} cursor_start={reply.get('cursor_start')}"
+        )
+        return True, reply, None
+
 
 class DebugPreviewClient:
     """Handle debug preview requests with socket fallback."""
@@ -413,6 +443,8 @@ class RequestProcessor:
             return self._handle_preview(req_id, args)
         if op == "exec":
             return self._handle_exec(req_id, args)
+        if op == "complete":
+            return self._handle_complete(req_id, args)
         return {"id": req_id, "ok": False, "error": "unknown op"}
 
     def _handle_vars(self, req_id, args: dict) -> dict:
@@ -498,6 +530,51 @@ class RequestProcessor:
         else:
             response["error"] = err or "error"
         return response
+
+    def _handle_complete(self, req_id, args: dict) -> dict:
+        raw_code = args.get("code")
+        if not isinstance(raw_code, str):
+            return {"id": req_id, "ok": False, "error": "missing code"}
+        cursor_pos = args.get("cursor_pos")
+        try:
+            cursor = int(cursor_pos)
+        except Exception:
+            cursor = len(raw_code)
+
+        def _strip_prompt(code: str, cursor: int) -> Tuple[str, int, int]:
+            prompts = ("ipdb> ", "ipdb>", "(Pdb) ", "(Pdb)")
+            for prompt in prompts:
+                if code.startswith(prompt) and cursor >= len(prompt):
+                    return code[len(prompt):], cursor - len(prompt), len(prompt)
+            return code, cursor, 0
+
+        code, cursor, prompt_len = _strip_prompt(raw_code, cursor)
+        ok, data, err = self._channel.complete(code, cursor)
+        result = {"id": req_id, "ok": ok, "tag": "complete"}
+        if ok and isinstance(data, dict):
+            if prompt_len:
+                try:
+                    if "cursor_start" in data:
+                        data["cursor_start"] = int(data["cursor_start"]) + prompt_len
+                except Exception:
+                    pass
+                try:
+                    if "cursor_end" in data:
+                        data["cursor_end"] = int(data["cursor_end"]) + prompt_len
+                except Exception:
+                    pass
+            result["data"] = data
+        else:
+            self._logger.log(f"complete handler error={err} data_keys={list(data.keys()) if isinstance(data, dict) else '?'}")
+            result["ok"] = False
+            result["error"] = err or "error"
+        match_count = 0
+        if isinstance(data, dict):
+            entries = data.get("matches")
+            if isinstance(entries, list):
+                match_count = len(entries)
+        self._logger.log(f"complete ok={ok} matches={match_count}")
+        return result
 
 
 def parse_args(argv: Optional[list] = None) -> argparse.Namespace:

@@ -9,6 +9,7 @@ import sys
 import threading
 import time
 import types
+from collections import namedtuple
 from IPython import get_ipython
 
 
@@ -874,6 +875,336 @@ def _myipy_emit_debug_vars(frame=None):
         _myipy_emit("vars", snapshot)
     except Exception as exc:
         _ipy_log_debug(f"emit debug vars failed: {exc}")
+
+
+def _mi_completion_result(matches, cursor_start, cursor_end, sources=None):
+    cursor_start = _coerce_int(cursor_start, cursor_end)
+    cursor_end = _coerce_int(cursor_end, cursor_start)
+    ordered = []
+    if isinstance(matches, (list, tuple)):
+        for entry in matches:
+            if isinstance(entry, str):
+                ordered.append(entry)
+    source_map = {}
+    if isinstance(sources, dict):
+        for key, value in sources.items():
+            if isinstance(key, str):
+                source_map[key] = value
+    items = []
+    for match in ordered:
+        items.append({
+            "text": match,
+            "source": source_map.get(match),
+        })
+    metadata = {}
+    if source_map:
+        counts = {}
+        for match in ordered:
+            src = source_map.get(match)
+            if not src:
+                continue
+            counts[src] = counts.get(src, 0) + 1
+        if counts:
+            metadata["source_counts"] = counts
+    return {
+        "matches": ordered,
+        "cursor_start": cursor_start,
+        "cursor_end": cursor_end,
+        "metadata": metadata,
+        "status": "ok",
+        "items": items,
+    }
+
+
+def _mi_pairs_to_result(pairs, cursor_start, cursor_end):
+    seen = set()
+    ordered = []
+    sources = {}
+    if isinstance(pairs, (list, tuple)):
+        for entry in pairs:
+            if not isinstance(entry, tuple) or len(entry) != 2:
+                continue
+            match, src = entry
+            if not isinstance(match, str):
+                continue
+            if match in seen:
+                continue
+            seen.add(match)
+            ordered.append(match)
+            if src:
+                sources[match] = src
+    return _mi_completion_result(ordered, cursor_start, cursor_end, sources)
+
+
+def _mi_is_name_or_composed(text):
+    if not text or text[0] == ".":
+        return False
+    try:
+        return text.replace(".", "").isidentifier()
+    except Exception:
+        return False
+
+
+def _mi_trim_completion_token(text, begidx):
+    if not isinstance(text, str):
+        return "", begidx
+    while text and not _mi_is_name_or_composed(text):
+        text = text[1:]
+        begidx += 1
+    return text, begidx
+
+
+def _mi_active_shell(dbg=None):
+    shell = None
+    if dbg is not None:
+        shell = getattr(dbg, "shell", None)
+    if shell is not None:
+        return shell
+    try:
+        return get_ipython()
+    except Exception:
+        return None
+
+
+def _mi_line_at_cursor(code, cursor_pos):
+    if not isinstance(code, str):
+        code = str(code or "")
+    try:
+        cursor = int(cursor_pos)
+    except Exception:
+        cursor = len(code)
+    if cursor < 0:
+        cursor = 0
+    if cursor > len(code):
+        cursor = len(code)
+    if not code:
+        return "", 0
+    start = code.rfind("\n", 0, cursor)
+    if start == -1:
+        start = 0
+    else:
+        start += 1
+    end = code.find("\n", cursor)
+    if end == -1:
+        end = len(code)
+    return code[start:end], start
+
+
+def _mi_ipython_complete(code, cursor_pos, dbg=None):
+    shell = _mi_active_shell(dbg)
+    if shell is None:
+        return None
+    if not isinstance(code, str):
+        code = str(code or "")
+    cursor_pos = _coerce_int(cursor_pos, len(code))
+    set_frame = getattr(shell, "set_completer_frame", None)
+    frame_payload = None
+    if dbg is not None and callable(set_frame):
+        frame = getattr(dbg, "curframe", None)
+        frame_locals = getattr(dbg, "curframe_locals", None)
+        if frame is not None:
+            try:
+                if frame_locals:
+                    Frame = namedtuple("Frame", ["f_locals", "f_globals"])
+                    frame_payload = Frame(frame_locals, getattr(frame, "f_globals", {}))
+                else:
+                    frame_payload = frame
+            except Exception:
+                frame_payload = frame
+    try:
+        if callable(set_frame):
+            set_frame(frame_payload)
+        line, offset = _mi_line_at_cursor(code, cursor_pos)
+        line_cursor = cursor_pos - offset
+        txt, matches = shell.complete("", line, line_cursor)
+        txt = txt or ""
+        matches = matches or []
+        sources = {}
+        for match in matches:
+            if isinstance(match, str):
+                sources[match] = "python"
+        return {
+            "matches": matches,
+            "cursor_start": cursor_pos - len(txt),
+            "cursor_end": cursor_pos,
+            "sources": sources,
+        }
+    except Exception as exc:
+        _ipy_log_debug(f"ipython complete failed: {exc}")
+        return None
+    finally:
+        if callable(set_frame):
+            try:
+                set_frame()
+            except Exception:
+                pass
+
+
+def _mi_pdb_complete_default(dbg, code, cursor_pos):
+    cursor_pos = _coerce_int(cursor_pos, len(code))
+    if not isinstance(code, str):
+        code = str(code or "")
+    text = code[:cursor_pos].split(" ")[-1]
+    origline = code
+    line = origline.lstrip()
+    if not line:
+        return _mi_pairs_to_result([], cursor_pos, cursor_pos)
+    stripped = len(origline) - len(line)
+    begidx = cursor_pos - len(text) - stripped
+    endidx = cursor_pos - stripped
+    compfunc = None
+    ipython_do_complete = True
+    if begidx > 0:
+        try:
+            cmd, _, _ = dbg.parseline(line)
+        except Exception:
+            cmd = ""
+        if cmd:
+            compfunc = getattr(dbg, f"complete_{cmd}", None)
+            if compfunc is not None:
+                ipython_do_complete = False
+    elif line and line[0] != "!":
+        compfunc = getattr(dbg, "completenames", None)
+    text, begidx = _mi_trim_completion_token(text, begidx)
+    pairs = []
+    if callable(compfunc):
+        try:
+            comp_matches = compfunc(text, line, begidx, endidx) or []
+        except Exception as exc:
+            _ipy_log_debug(f"pdb completion failed: {exc}")
+            comp_matches = []
+        for match in comp_matches:
+            if isinstance(match, str):
+                pairs.append((match, "pdb"))
+    cursor_start = cursor_pos - len(text)
+    if ipython_do_complete:
+        ipy_payload = _mi_ipython_complete(code, cursor_pos, dbg)
+        if ipy_payload is not None:
+            ipy_matches = ipy_payload.get("matches") or []
+            ipy_start = ipy_payload.get("cursor_start", cursor_start)
+            ipy_sources = ipy_payload.get("sources") or {}
+            if not callable(compfunc):
+                pairs = []
+                for match in ipy_matches:
+                    if isinstance(match, str):
+                        pairs.append((match, ipy_sources.get(match, "python")))
+                return _mi_pairs_to_result(pairs, ipy_start, cursor_pos)
+            if cursor_start < ipy_start:
+                missing_txt = code[cursor_start:ipy_start]
+                ipy_matches = [missing_txt + m for m in ipy_matches]
+            elif ipy_start < cursor_start:
+                missing_txt = code[ipy_start:cursor_start]
+                pairs = [(missing_txt + m, src) for (m, src) in pairs]
+                cursor_start = ipy_start
+            for match in ipy_matches:
+                if not isinstance(match, str):
+                    continue
+                src = ipy_sources.get(match, "python")
+                pairs.append((match, src))
+    return _mi_pairs_to_result(pairs, cursor_start, cursor_pos)
+
+
+def _mi_pdb_complete_exclamation(dbg, code, cursor_pos):
+    cursor_pos = _coerce_int(cursor_pos, len(code))
+    if not isinstance(code, str):
+        code = str(code or "")
+    text = code[:cursor_pos].split(" ")[-1]
+    origline = code
+    line = origline.lstrip()
+    if not line:
+        return _mi_pairs_to_result([], cursor_pos, cursor_pos)
+    is_pdb_command = line[0] == "!"
+    stripped = len(origline) - len(line)
+    begidx = cursor_pos - len(text) - stripped
+    endidx = cursor_pos - stripped
+    compfunc = None
+    line_body = line
+    if is_pdb_command:
+        line_body = line[1:]
+        begidx -= 1
+        endidx -= 1
+        if begidx == -1:
+            text = text[1:]
+            begidx += 1
+            compfunc = getattr(dbg, "completenames", None)
+        else:
+            try:
+                cmd, _, _ = dbg.parseline(line_body)
+            except Exception:
+                cmd = ""
+            if not cmd:
+                return _mi_pairs_to_result([], cursor_pos, cursor_pos)
+            compfunc = getattr(dbg, f"complete_{cmd}", None)
+            if compfunc is None:
+                return _mi_pairs_to_result([], cursor_pos, cursor_pos)
+    text, begidx = _mi_trim_completion_token(text, begidx)
+    cursor_start = cursor_pos - len(text)
+    if is_pdb_command and callable(compfunc):
+        try:
+            comp_matches = compfunc(text, line_body, begidx, endidx) or []
+        except Exception as exc:
+            _ipy_log_debug(f"pdb bang completion failed: {exc}")
+            comp_matches = []
+        pairs = []
+        for match in comp_matches:
+            if isinstance(match, str):
+                pairs.append((match, "pdb"))
+        return _mi_pairs_to_result(pairs, cursor_start, cursor_pos)
+    ipy_payload = _mi_ipython_complete(code, cursor_pos, dbg)
+    if ipy_payload is None:
+        return _mi_pairs_to_result([], cursor_start, cursor_pos)
+    matches = ipy_payload.get("matches") or []
+    ipy_start = ipy_payload.get("cursor_start", cursor_start)
+    ipy_sources = ipy_payload.get("sources") or {}
+    if cursor_start < ipy_start:
+        missing_txt = code[cursor_start:ipy_start]
+        matches = [missing_txt + m for m in matches]
+    elif ipy_start < cursor_start:
+        missing_txt = code[ipy_start:cursor_start]
+        matches = [missing_txt + m for m in matches]
+        cursor_start = ipy_start
+    pairs = []
+    for match in matches:
+        if isinstance(match, str):
+            pairs.append((match, ipy_sources.get(match, "python")))
+    return _mi_pairs_to_result(pairs, cursor_start, cursor_pos)
+
+
+def _mi_ipython_only_complete(code, cursor_pos, dbg=None):
+    payload = _mi_ipython_complete(code, cursor_pos, dbg)
+    if payload is None:
+        cursor = _coerce_int(cursor_pos, len(code))
+        return _mi_pairs_to_result([], cursor, cursor)
+    matches = payload.get("matches") or []
+    cursor_start = payload.get("cursor_start", cursor_pos)
+    cursor_end = payload.get("cursor_end", cursor_pos)
+    sources = payload.get("sources") or {}
+    return _mi_completion_result(matches, cursor_start, cursor_end, sources)
+
+
+def __mi_debug_complete(code, cursor_pos=None, debug=True):
+    if not isinstance(code, str):
+        code = str(code or "")
+    cursor_pos = _coerce_int(cursor_pos, len(code))
+    result = None
+    dbg = globals().get("_mi_active_debugger") if debug else None
+    if dbg is not None:
+        try:
+            use_bang = bool(getattr(dbg, "pdb_use_exclamation_mark", False))
+        except Exception:
+            use_bang = False
+        try:
+            if use_bang:
+                result = _mi_pdb_complete_exclamation(dbg, code, cursor_pos)
+            else:
+                result = _mi_pdb_complete_default(dbg, code, cursor_pos)
+        except Exception as exc:
+            _ipy_log_debug(f"debug completion failed: {exc}")
+            result = None
+    if result is None:
+        result = _mi_ipython_only_complete(code, cursor_pos, dbg)
+    print(json.dumps(result, ensure_ascii=False))
+    _myipy_purge_last_history()
 
 
 def __mi_debug_preview(name, max_rows=50, max_cols=20, row_offset=0, col_offset=0):

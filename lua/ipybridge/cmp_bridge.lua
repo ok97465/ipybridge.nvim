@@ -1,4 +1,4 @@
--- Provide a minimal completion source so ipdb TAB keeps the nvim-cmp menu alive.
+-- Provide debugger-aware completion candidates for nvim-cmp inside ipdb.
 local M = {}
 
 local SOURCE_NAME = 'ipybridge_debug_hint'
@@ -66,6 +66,96 @@ local function patch_cmp_api()
   return true
 end
 
+local cmp_kinds_cache = nil
+
+local function strip_prompt(prefix)
+  if type(prefix) ~= 'string' or prefix == '' then
+    return ''
+  end
+  local templates = { '^ipdb>[%s]*', '^%([Pp]db%)%s*' }
+  for _, pattern in ipairs(templates) do
+    local stripped = prefix:gsub(pattern, '', 1)
+    if stripped ~= prefix then
+      return stripped
+    end
+  end
+  return prefix
+end
+
+local ipdb_commands = {
+  'help', 'h', 'list', 'l', 'longlist', 'll', 'where', 'w',
+  'continue', 'cont', 'c', 'next', 'n', 'step', 's', 'return', 'ret',
+  'until', 'unt', 'jump', 'j', 'up', 'u', 'down', 'd',
+  'break', 'b', 'tbreak', 'clear', 'disable', 'enable', 'ignore',
+  'commands', 'alias', 'unalias', 'args', 'a', 'bt', 'stack',
+  'display', 'undisplay', 'whatis', 'source', 'p', 'pp',
+  'run', 'restart', 'quit', 'q', 'debug'
+}
+
+local function completion_kind(source)
+  if not cmp_kinds_cache then
+    local ok_types, types = pcall(require, 'cmp.types')
+    if ok_types and types and types.lsp and types.lsp.CompletionItemKind then
+      cmp_kinds_cache = types.lsp.CompletionItemKind
+    else
+      cmp_kinds_cache = {}
+    end
+  end
+  local kinds = cmp_kinds_cache or {}
+  local default = kinds.Text or 1
+  if source == 'pdb' then
+    return kinds.Keyword or default
+  end
+  if source == 'python' then
+    return kinds.Variable or default
+  end
+  return default
+end
+
+local function collect_debug_names()
+  local names = {}
+  local ok_bridge, bridge = pcall(require, 'ipybridge')
+  if not ok_bridge or type(bridge) ~= 'table' then
+    return names
+  end
+  local function collect(scope)
+    if type(scope) ~= 'table' then
+      return
+    end
+    for key, _ in pairs(scope) do
+      if type(key) == 'string' and key ~= '' and not key:match('^__') then
+        names[key] = true
+      end
+    end
+  end
+  collect(bridge._latest_vars)
+  local locals_snapshot = bridge._debug_locals_snapshot
+  if type(locals_snapshot) == 'table' then
+    collect(locals_snapshot.__locals__)
+  end
+  local globals_snapshot = bridge._debug_globals_snapshot
+  if type(globals_snapshot) == 'table' then
+    collect(globals_snapshot.__globals__)
+  end
+  return names
+end
+
+local function default_items(context)
+  local token = context.token
+  local label = token ~= '' and token or '[TAB]'
+  return {
+    {
+      label = label,
+      insertText = token,
+      filterText = token,
+      documentation = {
+        kind = 'plaintext',
+        value = 'TAB was redirected so nvim-cmp can render inside ipdb.',
+      },
+    },
+  }
+end
+
 local HintSource = {}
 HintSource.__index = HintSource
 
@@ -89,24 +179,107 @@ function HintSource:is_available()
   return is_ipybridge_terminal(buf)
 end
 
+local function build_context(request_context)
+  local before = request_context.cursor_before_line or ''
+  local stripped = strip_prompt(before)
+  if type(stripped) ~= 'string' then
+    stripped = tostring(stripped or '')
+  end
+  local token = stripped:match('([%w_%.]+)$') or ''
+  return {
+    before = before,
+    stripped = stripped,
+    token = token,
+  }
+end
+
+local function command_items(context)
+  local stripped = context.stripped
+  local token = context.token
+  if stripped:sub(1, 1) == '!' then
+    return {}
+  end
+  if token:find('%.', 1, true) and not token:match('^!') then
+    return {}
+  end
+  local target = token
+  if target:sub(1, 1) == '!' then
+    target = target:sub(2)
+  end
+  local items = {}
+  for _, cmd in ipairs(ipdb_commands) do
+    if target == '' or cmd:sub(1, #target) == target then
+      items[#items + 1] = {
+        label = cmd,
+        insertText = cmd,
+        filterText = cmd,
+        kind = completion_kind('pdb'),
+        detail = '[cmd]',
+        dup = 0,
+      }
+    end
+  end
+  return items
+end
+
+local function variable_items(context)
+  local token = context.token
+  local names = collect_debug_names()
+  if vim.tbl_isempty(names) then
+    return {}
+  end
+  local items = {}
+  for name, _ in pairs(names) do
+    if token == '' or name:sub(1, #token) == token then
+      items[#items + 1] = {
+        label = name,
+        insertText = name,
+        filterText = name,
+        kind = completion_kind('python'),
+        detail = '[var]',
+        dup = 0,
+      }
+    end
+  end
+  table.sort(items, function(a, b)
+    return (a and a.label or '') < (b and b.label or '')
+  end)
+  return items
+end
+
+local completion_providers = {
+  command_items,
+  variable_items,
+}
+
+local function collect_items(context)
+  local aggregate = {}
+  local seen = {}
+  for _, provider in ipairs(completion_providers) do
+    local ok, list = pcall(provider, context)
+    if ok and type(list) == 'table' then
+      for _, item in ipairs(list) do
+        local label = item and item.label
+        if label and not seen[label] then
+          seen[label] = true
+          aggregate[#aggregate + 1] = item
+        end
+      end
+    end
+  end
+  return aggregate
+end
+
 function HintSource:complete(request, callback)
   local ctx = request.context or {}
-  local prefix = ctx.cursor_before_line or ''
-  local token = prefix:match('([%w_%.]+)$') or ''
-  local label = token ~= '' and token or '[TAB]'
-  callback({
-    items = {
-      {
-        label = label,
-        insertText = token,
-        filterText = token,
-        documentation = {
-          kind = 'plaintext',
-          value = 'TAB was redirected so nvim-cmp can render inside ipdb.',
-        },
-      },
-    },
-  })
+  local context = build_context(ctx)
+  local items = collect_items(context)
+  if not items or #items == 0 then
+    items = default_items(context)
+  end
+  vim.schedule(function()
+    callback({ items = items })
+  end)
 end
 
 local function ensure_source(cmp)
