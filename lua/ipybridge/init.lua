@@ -16,6 +16,7 @@ local kernel = require("ipybridge.kernel")
 local py_module = require("ipybridge.py_module")
 local debug_scope = require("ipybridge.debug_scope")
 local breakpoints = require("ipybridge.breakpoints")
+local cmp_bridge = require("ipybridge.cmp_bridge")
 local fs = vim.fs
 local uv = vim.uv
 local is_windows = uv.os_uname().sysname == 'Windows_NT'
@@ -49,6 +50,22 @@ local M = {
   -- Guard against double-cleanup when the user types `exit` inside IPython.
   _term_exit_expected = false,
 }
+
+local function trigger_cmp_completion()
+  if not cmp_bridge.ensure() then
+    return false
+  end
+  return cmp_bridge.trigger()
+end
+
+-- Always try to surface nvim-cmp when TAB is pressed inside the terminal.
+local function handle_terminal_tab()
+  if trigger_cmp_completion() then
+    return
+  end
+  local literal_tab = api.nvim_replace_termcodes('<Tab>', true, false, true)
+  api.nvim_feedkeys(literal_tab, 'tn', false)
+end
 
 -- Reset debugger bookkeeping so UI can return to normal execution state.
 local function clear_debug_state()
@@ -396,6 +413,8 @@ M.open = function(go_back, cb)
             vim.keymap.set('t', '<leader>iv', function()
                 M.goto_vi()
             end, { buffer = buf, silent = true, desc = 'IPy: Back to editor' })
+            cmp_bridge.ensure()
+            vim.keymap.set('t', '<Tab>', handle_terminal_tab, { buffer = buf, silent = true, desc = 'IPy: Debug completion trigger' })
         end)
         -- Defer initial setup to avoid blocking UI while the terminal spins up.
         vim.defer_fn(function()

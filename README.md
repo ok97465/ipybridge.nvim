@@ -9,6 +9,7 @@ Minimal helper to run IPython/Jupyter in a terminal split and send code from the
 ## Requirements
 
 - Neovim 0.11 or newer
+- [`nvim-cmp`](https://github.com/hrsh7th/nvim-cmp) (used to render TAB completion inside ipdb)
 - Python with Jupyter/IPython
   - `jupyter` (for `jupyter console`)
   - `ipykernel`, `jupyter_client`, `pyzmq` (for variable explorer / preview)

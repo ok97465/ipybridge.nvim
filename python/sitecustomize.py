@@ -25,120 +25,156 @@ def _log(message: str) -> None:
         pass
 
 
-if _PATCH_FLAG:
-    _log("activating console patches")
-    _original_input = getattr(builtins, "input", None)
+class _ReadlineTabGuard:
+    """Force TAB to self-insert so Neovim can surface nvim-cmp during ipdb."""
 
+    def __init__(self, module) -> None:
+        self._module = module
+        self._original_parse_and_bind = getattr(module, "parse_and_bind", None)
+        self._original_set_completer = getattr(module, "set_completer", None)
+        self._completion_allowed = False
+
+    def install(self) -> None:
+        parse_ok = self._install_parse_guard()
+        completer_ok = self._install_completer_guard()
+        if not parse_ok and not completer_ok:
+            _log("readline hooks unavailable; TAB suppression skipped")
+
+    def _apply_tab_self_insert(self) -> None:
+        """Bind TAB to literal insertion across GNU readline and libedit."""
+        for binding in ("tab: self-insert", "bind ^I self-insert"):
+            try:
+                self._original_parse_and_bind(binding)
+                return
+            except Exception:
+                continue
+
+    def _install_parse_guard(self) -> bool:
+        """Keep third-party code from rebinding TAB to the readline completer."""
+        original = self._original_parse_and_bind
+        if not callable(original):
+            _log("readline parse_and_bind unavailable; TAB suppression skipped")
+            return False
+
+        def _guarded_parse_and_bind(command) -> None:
+            if command is None:
+                original(command)
+                return
+            try:
+                text = command.decode(errors="ignore") if isinstance(command, bytes) else str(command)
+            except Exception:
+                original(command)
+                return
+            lowered = text.strip().lower()
+            if (
+                ": complete" in lowered
+                or " rl_complete" in lowered
+                or lowered.startswith("bind ^i")
+                or lowered.startswith("bind \\t")
+            ):
+                self._apply_tab_self_insert()
+                return
+            original(command)
+
+        self._module.parse_and_bind = _guarded_parse_and_bind  # type: ignore[assignment]
+        try:
+            original("set editing-mode emacs")
+            self._apply_tab_self_insert()
+        except Exception as exc:
+            _log(f"readline baseline bindings failed: {exc}")
+        else:
+            _log("readline editing enabled with TAB suppression")
+        return True
+
+    def _install_completer_guard(self) -> bool:
+        """Allow ipybridge to opt-in to readline completion while keeping ipdb quiet."""
+        original = self._original_set_completer
+        if not callable(original):
+            _log("readline set_completer unavailable; TAB suppression incomplete")
+            return False
+
+        def _guarded_set_completer(func):
+            if self._completion_allowed:
+                if func is None:
+                    self._completion_allowed = False
+                return original(func)
+            return original(None)
+
+        def _enable(func) -> None:
+            self._completion_allowed = True
+            original(func)
+
+        def _block() -> None:
+            self._completion_allowed = False
+            original(None)
+
+        self._module.set_completer = _guarded_set_completer  # type: ignore[assignment]
+        self._module._ipybridge_enable_completion = _enable  # type: ignore[attr-defined]
+        self._module._ipybridge_block_completion = _block  # type: ignore[attr-defined]
+        return True
+
+
+def _install_readline_guard() -> None:
     try:
         import readline  # type: ignore
     except Exception as exc:
         _log(f"readline unavailable: {exc}")
-    else:
-        completion_state = {"allow": False}
-        original_parse_and_bind = getattr(readline, "parse_and_bind", None)
-        original_set_completer = getattr(readline, "set_completer", None)
+        return
+    guard = _ReadlineTabGuard(readline)
+    guard.install()
 
-        if callable(original_parse_and_bind):
 
-            def _apply_tab_self_insert() -> None:
-                """Bind TAB to literal insertion across GNU readline and libedit."""
-                for binding in ("tab: self-insert", "bind ^I self-insert"):
-                    try:
-                        original_parse_and_bind(binding)
-                        return
-                    except Exception:
-                        continue
-
-            def _guarded_parse_and_bind(command) -> None:
-                """Prevent TAB from being rebound to readline's completer."""
-                if command is None:
-                    return original_parse_and_bind(command)
-                if isinstance(command, bytes):
-                    text = command.decode(errors="ignore")
-                else:
-                    text = str(command)
-                lowered = text.strip().lower()
-                if (
-                    ": complete" in lowered
-                    or " rl_complete" in lowered
-                    or lowered.startswith("bind ^i")
-                    or lowered.startswith("bind \\t")
-                ):
-                    _apply_tab_self_insert()
-                    return
-                original_parse_and_bind(command)
-
-            readline.parse_and_bind = _guarded_parse_and_bind  # type: ignore[assignment]
-            try:
-                original_parse_and_bind("set editing-mode emacs")
-                _apply_tab_self_insert()
-            except Exception as exc:
-                _log(f"readline baseline bindings failed: {exc}")
-            else:
-                _log("readline editing enabled with TAB suppression")
-        else:
-            _log("readline parse_and_bind unavailable; TAB suppression skipped")
-
-        if callable(original_set_completer):
-
-            def _guarded_set_completer(func):
-                if completion_state["allow"]:
-                    return original_set_completer(func)
-                return original_set_completer(None)
-
-            def _ipybridge_enable_completion(func) -> None:
-                """Allow ipybridge to install its own completer later."""
-                completion_state["allow"] = True
-                original_set_completer(func)
-
-            def _ipybridge_block_completion() -> None:
-                """Re-disable readline completion when needed."""
-                completion_state["allow"] = False
-                original_set_completer(None)
-
-            readline.set_completer = _guarded_set_completer  # type: ignore[assignment]
-            readline._ipybridge_enable_completion = _ipybridge_enable_completion  # type: ignore[attr-defined]
-            readline._ipybridge_block_completion = _ipybridge_block_completion  # type: ignore[attr-defined]
-        else:
-            _log("readline set_completer unavailable; TAB suppression incomplete")
-
-    _session = None
-    _input_failure_logged = False
-
+def _create_prompt_session():
     try:
-        from prompt_toolkit.shortcuts import PromptSession
         from prompt_toolkit.history import InMemoryHistory
-
-        _session = PromptSession(history=InMemoryHistory())
-        _log("prompt_toolkit session ready")
+        from prompt_toolkit.shortcuts import PromptSession
     except Exception as exc:
-        _session = None
         _log(f"prompt_toolkit unavailable: {exc}")
+        return None
+    try:
+        session = PromptSession(history=InMemoryHistory())
+    except Exception as exc:
+        _log(f"prompt_toolkit session init failed: {exc}")
+        return None
+    _log("prompt_toolkit session ready")
+    return session
+
+
+def _install_input_patch(original_input) -> None:
+    session = _create_prompt_session()
+    input_failure_logged = False
 
     def _patched_input(prompt_text: str = "") -> str:
         """Wrapper around input() that prefers prompt_toolkit for key handling."""
-        global _input_failure_logged
+        nonlocal input_failure_logged, session
         loop_running = False
         try:
             asyncio.get_running_loop()
             loop_running = True
         except RuntimeError:
             loop_running = False
-        if _session is not None and not loop_running:
+        if session is not None and not loop_running:
             try:
-                return _session.prompt(prompt_text)
+                return session.prompt(prompt_text)
             except (EOFError, KeyboardInterrupt):
                 raise
             except Exception:
-                if not _input_failure_logged:
+                if not input_failure_logged:
                     _log(f"prompt session failed:\n{traceback.format_exc().rstrip()}")
-                    _input_failure_logged = True
-        if callable(_original_input):
-            return _original_input(prompt_text)
+                    input_failure_logged = True
+        if callable(original_input):
+            return original_input(prompt_text)
         raise RuntimeError("builtins.input is not callable")
 
-    if callable(_original_input):
+    if callable(original_input):
         builtins.input = _patched_input  # type: ignore[assignment]
         _log("input() patched for enhanced console editing")
     else:
         _log("input() could not be patched; original is missing")
+
+
+if _PATCH_FLAG:
+    _log("activating console patches")
+    original_input = getattr(builtins, "input", None)
+    _install_readline_guard()
+    _install_input_patch(original_input)
