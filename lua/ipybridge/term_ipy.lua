@@ -14,6 +14,8 @@ local function default_on_message(msg)
   pcall(handler, msg)
 end
 
+local function noop() end
+
 -- Simple terminal wrapper for running IPython in a split.
 local TermIpy = {job_id = nil, buf_id = nil, win_id = nil}
 TermIpy.__index = TermIpy
@@ -63,6 +65,11 @@ function TermIpy:new(cmd, cwd, opts)
     tb._on_exit = opts.on_exit
   else
     tb._on_exit = nil
+  end
+  if opts and type(opts.on_stdout_chunk) == 'function' then
+    tb._on_stdout_chunk = opts.on_stdout_chunk
+  else
+    tb._on_stdout_chunk = noop
   end
   tb:__spawn(cmd, cwd)
   return tb
@@ -203,10 +210,21 @@ function TermIpy:__spawn(cmd, cwd)
   })
 end
 
+function TermIpy:__notify_stdout(text)
+  if type(self._on_stdout_chunk) ~= 'function' then return end
+  if type(text) ~= 'string' or text == '' then return end
+  local sanitized = text:gsub('\r', '')
+  if sanitized == '' then return end
+  pcall(self._on_stdout_chunk, sanitized)
+end
+
 function TermIpy:__on_stdout(data)
   for _, line in ipairs(data) do
     if line ~= nil and line ~= '' then
-      self:__extract_hidden(line)
+      local visible = self:__extract_hidden(line)
+      if visible and visible ~= '' then
+        self:__notify_stdout(visible)
+      end
     end
   end
 end

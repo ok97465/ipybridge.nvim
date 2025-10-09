@@ -22,6 +22,7 @@ local uv = vim.uv
 local is_windows = uv.os_uname().sysname == 'Windows_NT'
 -- Normalize newline per platform because Windows terminals require CRLF.
 local newline = is_windows and '\r\n' or '\n'
+local prompt_buffer = ''
 
 local function normalize_newlines(text)
   if not is_windows or type(text) ~= 'string' then
@@ -52,6 +53,9 @@ local M = {
 }
 
 local function trigger_cmp_completion()
+  if not M._debug_active then
+    return false
+  end
   if not cmp_bridge.ensure() then
     return false
   end
@@ -71,6 +75,38 @@ end
 local function clear_debug_state()
   M._debug_active = false
   M._debug_window = nil
+  prompt_buffer = ''
+end
+
+local function strip_ansi_sequences(text)
+  if type(text) ~= 'string' then
+    return ''
+  end
+  return text:gsub('\27%[[%d;?]*[%a~]', '')
+end
+
+local function observe_terminal_chunk(chunk)
+  if type(chunk) ~= 'string' or chunk == '' then
+    return
+  end
+  local cleaned = strip_ansi_sequences(chunk):gsub('\r', '')
+  if cleaned == '' then
+    return
+  end
+  prompt_buffer = prompt_buffer .. cleaned
+  local idx = prompt_buffer:match('.*\n()')
+  if idx then
+    prompt_buffer = prompt_buffer:sub(idx)
+  end
+  local trimmed = prompt_buffer:gsub('^%s+', '')
+  if trimmed:match('^In %[[0-9]+%]:%s*$') then
+    if M._debug_active then
+      clear_debug_state()
+    end
+    prompt_buffer = ''
+  elseif #prompt_buffer > 256 then
+    prompt_buffer = prompt_buffer:sub(-256)
+  end
 end
 
 -- Ensure the IPython terminal exists before executing the provided callback.
@@ -361,6 +397,7 @@ M.open = function(go_back, cb)
         end
         M.term_instance = term_helper.TermIpy:new(cmd_console, cwd, {
             on_message = dispatch.handle,
+            on_stdout_chunk = observe_terminal_chunk,
             env = env,
             -- Ensure we clean up correctly when IPython terminates on its own.
             on_exit = M._handle_term_exit,

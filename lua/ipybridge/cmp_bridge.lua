@@ -34,6 +34,14 @@ local function is_ipybridge_terminal(bufnr)
   return term and term.buf_id == bufnr or false
 end
 
+local function is_debug_session()
+  local bridge = package.loaded['ipybridge']
+  if type(bridge) ~= 'table' then
+    return false
+  end
+  return bridge._debug_active == true
+end
+
 local function is_active_ipy_terminal()
   local ok_mode, info = pcall(vim.api.nvim_get_mode)
   local mode = ok_mode and tostring(info.mode or ''):sub(1, 1) or ''
@@ -365,10 +373,18 @@ function HintSource:is_available()
   if buftype ~= 'terminal' then
     return false
   end
-  return is_ipybridge_terminal(buf)
+  if not is_ipybridge_terminal(buf) then
+    return false
+  end
+  return is_debug_session()
 end
 
 function HintSource:complete(request, callback)
+  if not is_debug_session() then
+    callback({ items = {}, isIncomplete = false })
+    close_menu()
+    return
+  end
   local context = build_context(request.context or {})
   local items = collect_items(context)
   state.last_context = context
