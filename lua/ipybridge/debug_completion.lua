@@ -57,6 +57,7 @@ function M.fetch(params, cb)
       code = code,
       cursor_pos = cursor_pos,
       debug = debug_mode,
+      debug_style = 'internal',
     }, function(msg)
       if M.generation ~= generation then
         return

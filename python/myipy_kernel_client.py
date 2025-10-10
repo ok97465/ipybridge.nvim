@@ -365,24 +365,17 @@ class DebugPreviewClient:
             return port
         self._logger.log("debug preview port unavailable")
         return None
-
-    def request(self, name: str, rows: int, cols: int, row_offset: int, col_offset: int) -> Tuple[bool, Optional[dict], Optional[str]]:
+    def _send(self, payload: dict) -> Tuple[bool, Optional[dict], Optional[str]]:
         port = self.ensure_port()
         if not port:
             return False, None, "debug preview server unavailable"
-        payload = json.dumps(
-            {
-                "name": name,
-                "max_rows": rows,
-                "max_cols": cols,
-                "row_offset": row_offset,
-                "col_offset": col_offset,
-            },
-            ensure_ascii=False,
-        ).encode("utf-8") + b"\n"
+        try:
+            blob = json.dumps(payload, ensure_ascii=False).encode("utf-8") + b"\n"
+        except Exception as exc:
+            return False, None, f"encode error: {exc}"
         try:
             with socket.create_connection(("127.0.0.1", port), timeout=2.0) as sock:
-                sock.sendall(payload)
+                sock.sendall(blob)
                 sock.shutdown(socket.SHUT_WR)
                 chunks = b""
                 sock.settimeout(2.0)
@@ -406,6 +399,28 @@ class DebugPreviewClient:
         data = response.get("data")
         err = response.get("error")
         return ok, data, err
+
+    def request(self, name: str, rows: int, cols: int, row_offset: int, col_offset: int) -> Tuple[bool, Optional[dict], Optional[str]]:
+        return self._send(
+            {
+                "op": "preview",
+                "name": name,
+                "max_rows": rows,
+                "max_cols": cols,
+                "row_offset": row_offset,
+                "col_offset": col_offset,
+            }
+        )
+
+    def complete(self, code: str, cursor_pos: int, debug: bool = True) -> Tuple[bool, Optional[dict], Optional[str]]:
+        return self._send(
+            {
+                "op": "complete",
+                "code": code,
+                "cursor_pos": cursor_pos,
+                "debug": bool(debug),
+            }
+        )
 
 
 class RequestProcessor:
@@ -531,6 +546,48 @@ class RequestProcessor:
             response["error"] = err or "error"
         return response
 
+    @staticmethod
+    def _strip_prompt(code: str, cursor: int) -> Tuple[str, int, int]:
+        """Remove a leading ipdb prompt and adjust the cursor position."""
+        prompts = ("ipdb> ", "ipdb>", "(Pdb) ", "(Pdb)")
+        for prompt in prompts:
+            if not code.startswith(prompt):
+                continue
+            adj_cursor = cursor - len(prompt)
+            if adj_cursor < 0:
+                adj_cursor = 0
+            return code[len(prompt):], adj_cursor, len(prompt)
+        return code, cursor, 0
+
+    def _debug_complete_internal(self, code: str, cursor: int) -> Tuple[bool, Optional[dict], Optional[str]]:
+        """Ask the side-car server for completions; fall back to the kernel on error."""
+        ok, data, err = self._preview.complete(code, cursor, True)
+        if ok:
+            return ok, data, err
+        self._logger.log(f"debug completion socket err={err}")
+        return self._channel.complete(code, cursor)
+
+    def _debug_complete_helper(self, code: str, cursor: int) -> Tuple[bool, Optional[dict], Optional[str]]:
+        """Execute __mi_debug_complete inside the kernel and fall back if needed."""
+        try:
+            code_expr = json.dumps(code)
+        except Exception:
+            code_expr = json.dumps(str(code))
+        request = f"__mi_debug_complete({code_expr}, {cursor}, debug=True)"
+        ok, data, err = self._channel.run_and_collect(request)
+        if ok:
+            return True, data, None
+        self._logger.log(f"debug completion helper err={err}")
+        return self._channel.complete(code, cursor)
+
+    def _resolve_completion(self, code: str, cursor: int, debug: bool, style: str) -> Tuple[bool, Optional[dict], Optional[str]]:
+        """Select the appropriate completion strategy for the request."""
+        if not debug:
+            return self._channel.complete(code, cursor)
+        if style == "internal":
+            return self._debug_complete_internal(code, cursor)
+        return self._debug_complete_helper(code, cursor)
+
     def _handle_complete(self, req_id, args: dict) -> dict:
         raw_code = args.get("code")
         if not isinstance(raw_code, str):
@@ -541,15 +598,10 @@ class RequestProcessor:
         except Exception:
             cursor = len(raw_code)
 
-        def _strip_prompt(code: str, cursor: int) -> Tuple[str, int, int]:
-            prompts = ("ipdb> ", "ipdb>", "(Pdb) ", "(Pdb)")
-            for prompt in prompts:
-                if code.startswith(prompt) and cursor >= len(prompt):
-                    return code[len(prompt):], cursor - len(prompt), len(prompt)
-            return code, cursor, 0
-
-        code, cursor, prompt_len = _strip_prompt(raw_code, cursor)
-        ok, data, err = self._channel.complete(code, cursor)
+        code, cursor, prompt_len = self._strip_prompt(raw_code, cursor)
+        debug_mode = bool(args.get("debug"))
+        debug_style = str(args.get("debug_style") or "")
+        ok, data, err = self._resolve_completion(code, cursor, debug_mode, debug_style)
         result = {"id": req_id, "ok": ok, "tag": "complete"}
         if ok and isinstance(data, dict):
             if prompt_len:

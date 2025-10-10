@@ -35,6 +35,9 @@ function M.apply_defaults()
     local name = (opts and opts.args) or ''
     if name ~= '' then require('ipybridge').request_preview(name) end
   end, { nargs = 1, complete = 'buffer' })
+  pcall(api.nvim_create_user_command, 'IpybridgeDebugCompletionProbe', function()
+    require('ipybridge').debug_completion_probe()
+  end, {})
 end
 
 -- Apply buffer-local keymaps for Python files.

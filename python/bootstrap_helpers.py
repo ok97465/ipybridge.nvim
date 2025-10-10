@@ -364,6 +364,15 @@ class _DebugPreviewContext:
         )
         return payload
 
+    def complete(self, code, cursor_pos=None, debug=True):
+        """Proxy debug completions through the in-kernel helper."""
+        try:
+            payload = _mi_debug_complete_payload(code, cursor_pos, bool(debug))
+        except Exception as exc:
+            _ipy_log_debug(f"debug completion compute failed: {exc}")
+            return False, None, str(exc)
+        return True, payload, None
+
 
 class _DebugPreviewServer:
     """Accept socket requests and serve debug previews on demand."""
@@ -453,13 +462,26 @@ class _DebugPreviewServer:
         if err:
             result = {"ok": False, "error": err}
         else:
-            name = request.get("name")
-            rows = request.get("max_rows")
-            cols = request.get("max_cols")
-            row_offset = request.get("row_offset")
-            col_offset = request.get("col_offset")
-            data = self._context.compute(name, rows, cols, row_offset, col_offset)
-            result = {"ok": True, "data": data}
+            op = request.get("op") if isinstance(request, dict) else None
+            if op in (None, "preview"):
+                name = request.get("name")
+                rows = request.get("max_rows")
+                cols = request.get("max_cols")
+                row_offset = request.get("row_offset")
+                col_offset = request.get("col_offset")
+                data = self._context.compute(name, rows, cols, row_offset, col_offset)
+                result = {"ok": True, "data": data}
+            elif op == "complete":
+                code = request.get("code") or ""
+                cursor = request.get("cursor_pos")
+                debug = request.get("debug")
+                ok, data, err = self._context.complete(code, cursor, debug)
+                if ok:
+                    result = {"ok": True, "data": data}
+                else:
+                    result = {"ok": False, "error": err or "debug completion failed"}
+            else:
+                result = {"ok": False, "error": f"unknown op: {op}"}
         return json.dumps(result, ensure_ascii=False).encode("utf-8") + b"\n"
 
     def compute(self, name, rows=None, cols=None, row_offset=None, col_offset=None):
@@ -1182,7 +1204,8 @@ def _mi_ipython_only_complete(code, cursor_pos, dbg=None):
     return _mi_completion_result(matches, cursor_start, cursor_end, sources)
 
 
-def __mi_debug_complete(code, cursor_pos=None, debug=True):
+def _mi_debug_complete_payload(code, cursor_pos=None, debug=True):
+    """Return the raw completion payload without sending it to stdout."""
     if not isinstance(code, str):
         code = str(code or "")
     cursor_pos = _coerce_int(cursor_pos, len(code))
@@ -1203,6 +1226,11 @@ def __mi_debug_complete(code, cursor_pos=None, debug=True):
             result = None
     if result is None:
         result = _mi_ipython_only_complete(code, cursor_pos, dbg)
+    return result
+
+
+def __mi_debug_complete(code, cursor_pos=None, debug=True):
+    result = _mi_debug_complete_payload(code, cursor_pos, debug)
     print(json.dumps(result, ensure_ascii=False))
     _myipy_purge_last_history()
 
