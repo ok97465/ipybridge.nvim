@@ -88,4 +88,12 @@ M.register('debug_location', function(message)
   handler(message.data or {})
 end)
 
+M.register('debug_status', function(message)
+  local bridge = package.loaded['ipybridge']
+  if not bridge then return end
+  local handler = bridge.on_debug_status
+  if type(handler) ~= 'function' then return end
+  handler(message.data or {})
+end)
+
 return M

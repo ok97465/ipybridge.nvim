@@ -42,6 +42,9 @@ local M = {
   _runcell_sent = false,
   _runcell_path = nil,
   _debug_active = false,
+  _debug_status_active = false,
+  _debug_generation = 0,
+  _debug_generation_complete = 0,
   _latest_vars = {},
   _debug_locals_snapshot = nil,
   _debug_globals_snapshot = nil,
@@ -75,7 +78,11 @@ end
 
 -- Reset debugger bookkeeping so UI can return to normal execution state.
 local function clear_debug_state()
+  if type(M._debug_generation) == 'number' and M._debug_generation > 0 then
+    M._debug_generation_complete = M._debug_generation
+  end
   M._debug_active = false
+  M._debug_status_active = false
   M._debug_window = nil
   prompt_buffer = ''
 end
@@ -949,7 +956,12 @@ M.debug_file = function()
 			term_send(string.format("debugfile('%s')\n", safe))
 		end
 		local was_debug = M._debug_active
+		M._debug_generation = (M._debug_generation or 0) + 1
+		if M._debug_generation > 0 then
+			M._debug_generation_complete = M._debug_generation - 1
+		end
 		M._debug_active = true
+		M._debug_status_active = true
 		if not was_debug then
 			M._sync_var_filters()
 		end
@@ -1067,10 +1079,40 @@ local function calc_column_from_source(source)
   return first - 1
 end
 
+---Handle explicit debugger status updates from the Python helpers.
+---@param info table
+function M.on_debug_status(info)
+  if type(info) ~= 'table' then
+    return
+  end
+  local active = info.active
+  if active == nil then
+    return
+  end
+  if active == true then
+    if M._debug_status_active ~= true then
+      M._debug_generation = (M._debug_generation or 0) + 1
+    end
+    M._debug_status_active = true
+    local was_debug = M._debug_active
+    M._debug_active = true
+    if not was_debug then
+      M._sync_var_filters()
+    end
+    return
+  end
+  clear_debug_state()
+end
+
 ---Handle debug location payload emitted from the embedded debugger.
 ---@param info table
 function M.on_debug_location(info)
   if type(info) ~= 'table' then
+    return
+  end
+  local generation = tonumber(M._debug_generation) or 0
+  local completed = tonumber(M._debug_generation_complete) or 0
+  if generation <= completed then
     return
   end
   local file = info.file or info.filename
@@ -1133,6 +1175,7 @@ function M.on_debug_location(info)
   M._debug_window = target_win
   local was_debug = M._debug_active
   M._debug_active = true
+  M._debug_status_active = true
   if not was_debug then
     M._sync_var_filters()
   end

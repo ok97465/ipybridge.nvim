@@ -111,6 +111,10 @@ def _mi_emit_debug_location(frame, lineno=None):
     _mi_emit_hidden_json("debug_location", data)
 
 
+def _mi_emit_debug_status(active):
+    _mi_emit_hidden_json("debug_status", {"active": bool(active)})
+
+
 try:
     import matplotlib.pyplot as _mi_plt
 except Exception:  # pragma: no cover
@@ -428,6 +432,7 @@ class _MiQtAwarePdb:
 
             def interaction(self, *args, **kwargs):
                 self._mi_autoprint = True
+                _mi_emit_debug_status(True)
                 with _mi_qt_events():
                     try:
                         _mi_emit_vars_snapshot(getattr(self, "curframe", None))
@@ -435,6 +440,11 @@ class _MiQtAwarePdb:
                     finally:
                         try:
                             _mi_emit_vars_snapshot(getattr(self, "curframe", None))
+                        except Exception:
+                            pass
+                        try:
+                            if getattr(self, "quitting", False):
+                                _mi_emit_debug_status(False)
                         except Exception:
                             pass
                         self._mi_autoprint = False
@@ -755,6 +765,10 @@ def debugfile(filename, cwd=None):
             pass
         try:
             glbs["_mi_active_debugger"] = None
+        except Exception:
+            pass
+        try:
+            _mi_emit_debug_status(False)
         except Exception:
             pass
 
