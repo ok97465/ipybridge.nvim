@@ -584,9 +584,13 @@ class RequestProcessor:
         """Select the appropriate completion strategy for the request."""
         if not debug:
             return self._channel.complete(code, cursor)
-        if style == "internal":
-            return self._debug_complete_internal(code, cursor)
-        return self._debug_complete_helper(code, cursor)
+        style = (style or "").strip().lower()
+        if style == "helper":
+            return self._debug_complete_helper(code, cursor)
+        if style == "kernel":
+            return self._channel.complete(code, cursor)
+        # Default to the internal side-car route so we do not interrupt the active debugger.
+        return self._debug_complete_internal(code, cursor)
 
     def _handle_complete(self, req_id, args: dict) -> dict:
         raw_code = args.get("code")

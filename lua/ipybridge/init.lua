@@ -1045,62 +1045,6 @@ M.debug_continue = function()
   send_debug_command('!continue', { deactivate = true })
 end
 
----Probe ipdb completions without invoking nvim-cmp.
-M.debug_completion_probe = function()
-  if not M._debug_active then
-    vim.notify('ipybridge: Debugger is not active', vim.log.levels.WARN)
-    return
-  end
-  if not M.term_instance or not api.nvim_buf_is_valid(M.term_instance.buf_id) then
-    vim.notify('ipybridge: Terminal buffer unavailable', vim.log.levels.WARN)
-    return
-  end
-  local buf = M.term_instance.buf_id
-  if api.nvim_get_current_buf() ~= buf then
-    vim.notify('ipybridge: Focus the ipdb terminal before probing completions', vim.log.levels.WARN)
-    return
-  end
-  local cursor = api.nvim_win_get_cursor(0)
-  local row = cursor[1]
-  local col = cursor[2]
-  local line = ''
-  local ok_lines, slice = pcall(api.nvim_buf_get_lines, buf, row - 1, row, false)
-  if ok_lines and type(slice) == 'table' and slice[1] then
-    line = slice[1]
-  end
-  debug_completion.fetch({
-    code = line,
-    cursor_pos = col,
-  }, function(payload, err)
-    if err then
-      vim.schedule(function()
-        vim.notify('ipybridge: debug completion error: ' .. tostring(err), vim.log.levels.WARN)
-      end)
-      return
-    end
-    vim.schedule(function()
-      if not payload then
-        vim.notify('ipybridge: debug completion returned no payload', vim.log.levels.INFO)
-        return
-      end
-      local matches = {}
-      if type(payload.matches) == 'table' then
-        local limit = math.min(#payload.matches, 12)
-        for idx = 1, limit do
-          matches[#matches + 1] = payload.matches[idx]
-        end
-      end
-      local summary = {
-        cursor_start = payload.cursor_start,
-        cursor_end = payload.cursor_end,
-        preview_matches = matches,
-        sources = payload.sources,
-      }
-      vim.notify('ipybridge: debug completion payload:\n' .. inspect(summary), vim.log.levels.INFO)
-    end)
-  end)
-end
-
 local function clamp_cursor_line(bufnr, line)
   local max_line = api.nvim_buf_line_count(bufnr)
   if line < 1 then
