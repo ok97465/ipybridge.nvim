@@ -247,3 +247,93 @@ def test_request_processor_preview_exec(monkeypatch):
     assert '__mi_preview' in channel.calls[0]
     assert response['ok'] is True
     assert response['data'] == {'name': 'bar'}
+
+
+class ProbeChannel:
+    def __init__(self):
+        self.complete_calls = []
+
+    def complete(self, code, cursor):
+        self.complete_calls.append((code, cursor))
+        return True, {'matches': ['fallback'], 'cursor_start': 0, 'cursor_end': 0}, None
+
+    def run_and_collect(self, code):
+        raise AssertionError('run_and_collect should not be used in probe channel')
+
+
+class ProbePreview:
+    def __init__(self, response):
+        self.calls = []
+        self.response = response
+
+    def complete(self, code, cursor, debug):
+        self.calls.append((code, cursor, debug))
+        return self.response
+
+    def request(self, *args, **kwargs):
+        return True, {}, None
+
+
+def test_handle_complete_helper_adjusts_prompt(monkeypatch):
+    module = load_kernel_client()
+    channel = ProbeChannel()
+    preview = ProbePreview((True, {}, None))
+    processor = module.RequestProcessor(channel, preview, DummyLogger())
+
+    helper_calls = []
+
+    def fake_helper(self, code, cursor):
+        helper_calls.append((code, cursor))
+        return True, {'matches': ['value'], 'cursor_start': 1, 'cursor_end': 2}, None
+
+    processor._debug_complete_helper = types.MethodType(fake_helper, processor)  # type: ignore[attr-defined]
+
+    result = processor._handle_complete('1', {
+        'code': 'ipdb> pri',
+        'cursor_pos': 9,
+        'debug': True,
+        'debug_style': 'helper',
+    })
+
+    assert helper_calls == [('pri', 3)]
+    assert result['ok'] is True
+    assert result['data']['cursor_start'] == 7
+    assert result['data']['cursor_end'] == 8
+    assert channel.complete_calls == []
+
+
+def test_handle_complete_internal_falls_back_to_kernel(monkeypatch):
+    module = load_kernel_client()
+    channel = ProbeChannel()
+    preview = ProbePreview((False, None, 'socket error'))
+    processor = module.RequestProcessor(channel, preview, DummyLogger())
+
+    result = processor._handle_complete('2', {
+        'code': 'foo',
+        'cursor_pos': 3,
+        'debug': True,
+        'debug_style': '',
+    })
+
+    assert preview.calls == [('foo', 3, True)]
+    assert channel.complete_calls == [('foo', 3)]
+    assert result['ok'] is True
+    assert result['data']['matches'] == ['fallback']
+
+
+def test_handle_complete_kernel_style(monkeypatch):
+    module = load_kernel_client()
+    channel = ProbeChannel()
+    preview = ProbePreview((False, None, 'unused'))
+    processor = module.RequestProcessor(channel, preview, DummyLogger())
+
+    result = processor._handle_complete('3', {
+        'code': 'bar',
+        'cursor_pos': 2,
+        'debug': True,
+        'debug_style': 'kernel',
+    })
+
+    assert preview.calls == []
+    assert channel.complete_calls == [('bar', 2)]
+    assert result['ok'] is True
