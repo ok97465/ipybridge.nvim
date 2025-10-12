@@ -88,6 +88,10 @@ function OscParser:ingest(text)
   return table.concat(output, '')
 end
 
+function OscParser:pending()
+  return self._pending or ''
+end
+
 function OscParser:_handle_payload(payload)
   if type(payload) ~= 'string' or payload == '' then
     return

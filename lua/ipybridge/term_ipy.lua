@@ -68,6 +68,7 @@ function TermIpy:new(cmd, cwd, opts)
   else
     tb._on_stdout_chunk = noop
   end
+  tb._osc_pending = ''
   tb._decoder = OscParser:new({
     on_message = function(tag, payload)
       tb:_handle_hidden_message(tag, payload)
@@ -86,6 +87,16 @@ function TermIpy:_handle_hidden_message(tag, payload)
   if not ok then
     vim.notify('ipybridge: hidden message handler failed for ' .. tostring(tag) .. ': ' .. tostring(err), vim.log.levels.WARN)
   end
+end
+
+function TermIpy:__extract_hidden(text)
+  local decoder = self._decoder
+  if not decoder then
+    return text
+  end
+  local visible = decoder:ingest(text)
+  self._osc_pending = decoder:pending()
+  return visible
 end
 
 function TermIpy:send(cmd)

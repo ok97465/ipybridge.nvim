@@ -1,127 +1,220 @@
--- ZMQ client manager for ipybridge.nvim
--- Spawns a background Python process that attaches to the existing IPython kernel
--- via Jupyter's connection file and serves NDJSON over stdio.
+-- ZMQ client manager for ipybridge.nvim.
+-- Responsibilities:
+--  1. Spawn and supervise the helper Python process.
+--  2. Decode line-delimited JSON responses.
+--  3. Route replies back to request callbacks with error isolation.
 
 local fn = vim.fn
-local api = vim.api
 
-local M = {
-  job = nil,
-  buf = "",
-  pending = {}, -- id -> callback
-  next_id = 1,
-}
+local WARNING = vim.log.levels.WARN
 
-local function notify_callback_error(err)
+local function notify_once(message)
   vim.schedule(function()
-    vim.notify('[ipybridge.zmq] callback failed: ' .. tostring(err), vim.log.levels.WARN)
+    vim.notify('[ipybridge.zmq] ' .. message, WARNING)
   end)
 end
 
-local function gen_id()
-  local id = tostring(M.next_id)
-  M.next_id = M.next_id + 1
+-- Maintain buffered stdout data until full JSON lines are available.
+local JsonLineBuffer = {}
+JsonLineBuffer.__index = JsonLineBuffer
+
+function JsonLineBuffer:new()
+  return setmetatable({ _buffer = '' }, self)
+end
+
+function JsonLineBuffer:feed(chunk)
+  if type(chunk) ~= 'string' or chunk == '' then
+    return {}
+  end
+  self._buffer = self._buffer .. chunk .. '\n'
+  local lines = {}
+  while true do
+    local start_idx, end_idx = self._buffer:find('\n', 1, true)
+    if not start_idx then
+      break
+    end
+    local line = self._buffer:sub(1, start_idx - 1)
+    self._buffer = self._buffer:sub(end_idx + 1)
+    if line ~= '' then
+      lines[#lines + 1] = line
+    end
+  end
+  return lines
+end
+
+function JsonLineBuffer:reset()
+  self._buffer = ''
+end
+
+-- Track outstanding requests and deliver responses exactly once.
+local RequestRegistry = {}
+RequestRegistry.__index = RequestRegistry
+
+function RequestRegistry:new()
+  return setmetatable({ next_id = 1, pending = {} }, self)
+end
+
+local function safe_invoke(cb, payload)
+  local ok, err = pcall(cb, payload)
+  if not ok then
+    notify_once('callback failed: ' .. tostring(err))
+  end
+end
+
+function RequestRegistry:allocate_id()
+  local id = tostring(self.next_id)
+  self.next_id = self.next_id + 1
   return id
 end
 
-local function on_stdout(job_id, data, _)
-  if not data then return end
-  for _, chunk in ipairs(data) do
-    if chunk and #chunk > 0 then
-      M.buf = M.buf .. chunk .. "\n"
-    end
+function RequestRegistry:register(id, cb)
+  if not cb then
+    return
   end
-  while true do
-    local s, e = M.buf:find("\n")
-    if not s then break end
-    local line = M.buf:sub(1, s - 1)
-    M.buf = M.buf:sub(e + 1)
-    if #line > 0 then
-      local ok, msg = pcall(vim.json.decode, line)
-      if ok and type(msg) == 'table' and msg.id then
-        local cb = M.pending[msg.id]
-        M.pending[msg.id] = nil
-        if cb then
-          local ok_cb, err = pcall(cb, msg)
-          if not ok_cb then
-            notify_callback_error(err)
-          end
-        end
-      end
-    end
-  end
+  self.pending[id] = cb
 end
 
-local function on_stderr(job_id, data, _)
-  if not data then return end
-  local msg = table.concat(data, "\n")
-  if #vim.trim(msg) > 0 then
-    vim.schedule(function()
-      vim.notify('[ipybridge.zmq] stderr: ' .. msg, vim.log.levels.WARN)
-    end)
+function RequestRegistry:resolve(id)
+  local cb = self.pending[id]
+  self.pending[id] = nil
+  return cb
+end
+
+function RequestRegistry:flush_with_error(reason)
+  local payload = { ok = false, error = reason }
+  for id, cb in pairs(self.pending) do
+    payload.id = id
+    safe_invoke(cb, payload)
   end
+  self.pending = {}
 end
 
-local function on_exit()
-  for id, cb in pairs(M.pending) do
-    local ok_cb, err = pcall(cb, { id = id, ok = false, error = 'zmq client exited' })
-    if not ok_cb then
-      notify_callback_error(err)
-    end
+-- Concrete client managing the subprocess and IO wiring.
+local Client = {}
+Client.__index = Client
+
+function Client:new()
+  local instance = setmetatable({
+    job_id = nil,
+    buffer = JsonLineBuffer:new(),
+    requests = RequestRegistry:new(),
+  }, self)
+  return instance
+end
+
+function Client:is_running()
+  return self.job_id ~= nil
+end
+
+function Client:start(python_cmd, conn_file, module_path, debug)
+  if self:is_running() then
+    return true
   end
-  M.pending = {}
-  M.job = nil
-  M.buf = ""
-end
-
-function M.is_running()
-  return M.job ~= nil
-end
-
-function M.start(python_cmd, conn_file, module_path, debug)
-  if M.is_running() then return true end
   local cmd = { python_cmd or 'python3', '-u', module_path, '--conn-file', conn_file }
-  if debug then table.insert(cmd, '--debug') end
+  if debug then
+    table.insert(cmd, '--debug')
+  end
   local job = fn.jobstart(cmd, {
-    on_stdout = on_stdout,
     stdout_buffered = false,
-    on_stderr = on_stderr,
     stderr_buffered = false,
-    on_exit = on_exit,
+    on_stdout = function(_, data)
+      self:_on_stdout(data)
+    end,
+    on_stderr = function(_, data)
+      self:_on_stderr(data)
+    end,
+    on_exit = function()
+      self:_on_exit()
+    end,
   })
-  if job <= 0 then return false end
-  M.job = job
+  if job <= 0 then
+    return false
+  end
+  self.job_id = job
   return true
 end
 
-function M.stop()
-  if M.job then pcall(fn.jobstop, M.job) end
-  on_exit()
-end
-
-local function send_msg(msg)
-  if not M.job then return false end
-  local line = vim.json.encode(msg) .. "\n"
-  return fn.chansend(M.job, line) > 0
-end
-
-function M.request(op, args, cb)
-  if not M.job then return false end
-  local id = gen_id()
-  if cb then
-    M.pending[id] = cb
+function Client:stop()
+  if self.job_id then
+    pcall(fn.jobstop, self.job_id)
   end
-  if not send_msg({ id = id, op = op, args = args or {} }) then
+  self:_on_exit()
+end
+
+function Client:request(op, args, cb)
+  if not self.job_id then
+    return false
+  end
+  local id = self.requests:allocate_id()
+  if cb then
+    self.requests:register(id, cb)
+  end
+  local payload = { id = id, op = op, args = args or {} }
+  if not self:_send(payload) then
     if cb then
-      M.pending[id] = nil
-      local ok_cb, err = pcall(cb, { id = id, ok = false, error = 'send_failed' })
-      if not ok_cb then
-        notify_callback_error(err)
-      end
+      self.requests:resolve(id)
+      safe_invoke(cb, { id = id, ok = false, error = 'send_failed' })
     end
     return false
   end
   return true
 end
 
-return M
+function Client:_send(msg)
+  local encoded = vim.json.encode(msg) .. "\n"
+  return fn.chansend(self.job_id, encoded) > 0
+end
+
+function Client:_on_stdout(data)
+  if type(data) ~= 'table' then
+    return
+  end
+  for _, chunk in ipairs(data) do
+    local lines = self.buffer:feed(chunk or '')
+    for _, line in ipairs(lines) do
+      local ok, decoded = pcall(vim.json.decode, line)
+      if ok and type(decoded) == 'table' and decoded.id then
+        local cb = self.requests:resolve(decoded.id)
+        if cb then
+          safe_invoke(cb, decoded)
+        end
+      end
+    end
+  end
+end
+
+function Client:_on_stderr(data)
+  if type(data) ~= 'table' then
+    return
+  end
+  local msg = vim.trim(table.concat(data, '\n'))
+  if msg ~= '' then
+    notify_once('stderr: ' .. msg)
+  end
+end
+
+function Client:_on_exit()
+  if not self.job_id then
+    return
+  end
+  self.requests:flush_with_error('zmq client exited')
+  self.buffer:reset()
+  self.job_id = nil
+end
+
+local singleton = Client:new()
+
+return {
+  is_running = function()
+    return singleton:is_running()
+  end,
+  start = function(python_cmd, conn_file, module_path, debug)
+    return singleton:start(python_cmd, conn_file, module_path, debug)
+  end,
+  stop = function()
+    singleton:stop()
+  end,
+  request = function(op, args, cb)
+    return singleton:request(op, args, cb)
+  end,
+}
