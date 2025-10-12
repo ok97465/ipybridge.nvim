@@ -4,6 +4,7 @@
 local uv = vim.uv
 local api = vim.api
 local fn = vim.fn
+local is_windows = uv.os_uname().sysname == 'Windows_NT'
 
 local M = {}
 
@@ -72,7 +73,9 @@ end
 -- Used when multiline selections are sent in 'paste' mode so prompts stay aligned.
 function M.paste_block(lines_tbl)
   if not lines_tbl or #lines_tbl == 0 then return "" end
-  return "\x1b[200~" .. table.concat(lines_tbl, "\n") .. "\n\x1b[201~\n"
+  local separator = is_windows and '\r' or '\n'
+  local body = table.concat(lines_tbl, separator)
+  return "\x1b[200~" .. body .. "\n\x1b[201~\n"
 end
 
 return M

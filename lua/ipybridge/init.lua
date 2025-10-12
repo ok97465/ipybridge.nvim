@@ -23,8 +23,8 @@ local inspect = vim.inspect
 local fs = vim.fs
 local uv = vim.uv
 local is_windows = uv.os_uname().sysname == 'Windows_NT'
--- Normalize newline per platform because Windows terminals require CRLF.
-local newline = is_windows and '\r\n' or '\n'
+-- Use LF newline by default; Windows-specific cases are handled explicitly.
+local newline = '\n'
 local prompt_buffer = ''
 
 local queue_exec_request
@@ -32,10 +32,14 @@ local after_helpers
 local exec_with_pipeline
 
 local function normalize_newlines(text)
-  if not is_windows or type(text) ~= 'string' then
+  if type(text) ~= 'string' then
     return text
   end
-  return text:gsub('\r?\n', '\r\n')
+  if not is_windows then
+    return text
+  end
+  -- Collapse CRLF so IPython receives LF even on Windows terminals.
+  return text:gsub('\r\n', '\n')
 end
 
 -- Core state for the plugin. Comments are in English; see README for usage.
@@ -149,6 +153,19 @@ end
 
 local function term_send_line(payload)
   term_send((payload or '') .. newline)
+end
+
+local function term_send_debug(payload)
+  if not M.term_instance then return end
+  if type(payload) ~= 'string' or payload == '' then
+    return
+  end
+  if is_windows then
+    local sanitized = normalize_newlines(payload):gsub('[\r\n]+$', '')
+    M.term_instance:send(sanitized .. '\r')
+    return
+  end
+  term_send_line(payload)
 end
 
 -- Cell markers must be exactly: start of line '#', one space, then at least '%%'.
@@ -790,7 +807,7 @@ local function send_debug_command(cmd, opts)
     vim.notify('ipybridge: IPython terminal is not open', vim.log.levels.WARN)
     return
   end
-  term_send_line(cmd)
+  term_send_debug(cmd)
   if opts and opts.deactivate then
     clear_debug_state()
   end
