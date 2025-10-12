@@ -38,8 +38,58 @@ local function normalize_newlines(text)
   if not is_windows then
     return text
   end
-  -- Collapse CRLF so IPython receives LF even on Windows terminals.
+  -- Collapse CRLF so downstream logic can reason about a single kind of newline.
   return text:gsub('\r\n', '\n')
+end
+
+local function has_escape_byte(text)
+  if type(text) ~= 'string' then
+    return false
+  end
+  return text:find('\27', 1, true) ~= nil
+end
+
+local function should_use_windows_multiline(text, opts)
+  if not is_windows then
+    return false
+  end
+  if type(text) ~= 'string' or text == '' then
+    return false
+  end
+  opts = type(opts) == 'table' and opts or {}
+  if opts.raw or opts.mode == 'ipdb' then
+    return false
+  end
+  if opts.force_multiline then
+    return true
+  end
+  if has_escape_byte(text) then
+    return false
+  end
+  local _, newline_count = text:gsub('\n', '')
+  if newline_count == 0 then
+    return false
+  end
+  if newline_count > 1 then
+    return true
+  end
+  -- Single LF that is not the terminal newline means we have embedded content.
+  return text:sub(-1) ~= '\n'
+end
+
+local function apply_windows_multiline(text)
+  if type(text) ~= 'string' or text == '' then
+    return text
+  end
+  local has_final_lf = text:sub(-1) == '\n'
+  local body = has_final_lf and text:sub(1, -2) or text
+  if body ~= '' then
+    body = body:gsub('\n', '\r')
+  end
+  if has_final_lf then
+    return body .. '\n'
+  end
+  return body
 end
 
 -- Core state for the plugin. Comments are in English; see README for usage.
@@ -143,29 +193,54 @@ local function with_terminal(go_back, cb)
   end)
 end
 
-local function term_send(payload)
+local function term_send(payload, opts)
   if not M.term_instance then return end
-  if type(payload) ~= 'string' or payload == '' then
+  if type(payload) ~= 'string' then
     return
   end
-  M.term_instance:send(normalize_newlines(payload))
+  local options = {}
+  if type(opts) == 'table' then
+    for k, v in pairs(opts) do
+      options[k] = v
+    end
+  end
+  if is_windows and not options.mode and not options.raw and M._debug_active then
+    options.mode = 'ipdb'
+  end
+  if payload == '' and not options.append_newline then
+    return
+  end
+  local text = payload
+  if options.append_newline then
+    text = text .. newline
+  end
+  text = normalize_newlines(text)
+  if is_windows then
+    if options.mode == 'ipdb' then
+      local sanitized = text:gsub('[\r\n]+$', '')
+      if sanitized == '' then
+        return
+      end
+      M.term_instance:send(sanitized .. '\r')
+      return
+    end
+    if should_use_windows_multiline(text, options) then
+      text = apply_windows_multiline(text)
+    end
+  end
+  M.term_instance:send(text)
 end
 
 local function term_send_line(payload)
-  term_send((payload or '') .. newline)
+  term_send(payload or '', { append_newline = true })
 end
 
 local function term_send_debug(payload)
-  if not M.term_instance then return end
-  if type(payload) ~= 'string' or payload == '' then
-    return
-  end
   if is_windows then
-    local sanitized = normalize_newlines(payload):gsub('[\r\n]+$', '')
-    M.term_instance:send(sanitized .. '\r')
-    return
+    term_send(payload, { mode = 'ipdb' })
+  else
+    term_send(payload, { append_newline = true })
   end
-  term_send_line(payload)
 end
 
 -- Cell markers must be exactly: start of line '#', one space, then at least '%%'.
@@ -758,7 +833,7 @@ M.send_lines = function(line_start, line_stop)
 		if mode == 'paste' then
 			-- Use bracketed paste so IPython displays the pasted block with prompts.
 			local payload = utils.paste_block(tb_lines)
-			term_send(payload)
+			term_send(payload, { raw = true })
 		else
 			-- Default: ship as hex-encoded Python and execute via exec().
 			local block = table.concat(tb_lines, "\n") .. "\n"
@@ -798,7 +873,11 @@ end
 M.run_cmd = function(cmd)
 	with_terminal(true, function()
 		if not M.is_open() then return end
-		term_send_line(cmd)
+		if M._debug_active then
+			term_send_debug(cmd)
+		else
+			term_send_line(cmd)
+		end
 	end)
 end
 
