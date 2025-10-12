@@ -1,29 +1,37 @@
 -- Data viewer UI for DataFrame/ndarray/object preview.
+-- Window orchestration lives here; rendering logic resides in viewer.renderers.
 
 local api = vim.api
+local Renderers = require('ipybridge.viewer.renderers')
 
-local M = {
-  buf = nil,
-  win = nil,
-  name = nil,
-  _line2path = {},
-  _last = nil,
-  _window = nil,
-}
+local ViewerState = {}
+ViewerState.__index = ViewerState
 
-local function is_open()
-  return M.win and api.nvim_win_is_valid(M.win) and M.buf and api.nvim_buf_is_loaded(M.buf)
+function ViewerState:new()
+  return setmetatable({
+    buf = nil,
+    win = nil,
+    name = nil,
+    _line2path = {},
+    _last = nil,
+    _window = nil,
+  }, self)
 end
 
-local function close_win()
-  if is_open() then
-    pcall(api.nvim_win_close, M.win, true)
+function ViewerState:is_open()
+  return self.win and api.nvim_win_is_valid(self.win) and self.buf and api.nvim_buf_is_loaded(self.buf)
+end
+
+function ViewerState:close_window()
+  if self:is_open() then
+    pcall(api.nvim_win_close, self.win, true)
   end
-  if M.buf and api.nvim_buf_is_loaded(M.buf) then
-    pcall(api.nvim_buf_delete, M.buf, { force = true })
+  if self.buf and api.nvim_buf_is_loaded(self.buf) then
+    pcall(api.nvim_buf_delete, self.buf, { force = true })
   end
-  M.win, M.buf, M.name = nil, nil, nil
-  M._window = nil
+  self.buf, self.win, self.name = nil, nil, nil
+  self._window = nil
+  self._line2path = {}
 end
 
 local function layout_size()
@@ -42,14 +50,20 @@ local function viewer_limits()
   local cfg = bridge.config or {}
   local rows = tonumber(cfg.viewer_max_rows) or 30
   local cols = tonumber(cfg.viewer_max_cols) or 20
-  if rows <= 0 then rows = 30 end
-  if cols <= 0 then cols = 20 end
+  if rows <= 0 then
+    rows = 30
+  end
+  if cols <= 0 then
+    cols = 20
+  end
   return rows, cols
 end
 
 local function clamp_offset(offset, delta, total, window)
   local target = offset + delta
-  if target < 0 then target = 0 end
+  if target < 0 then
+    target = 0
+  end
   if total and total > 0 and window and window > 0 then
     local max_offset = math.max(total - window, 0)
     if target > max_offset then
@@ -59,387 +73,119 @@ local function clamp_offset(offset, delta, total, window)
   return target
 end
 
-local function to_str(v)
-  local t = type(v)
-  if v == nil then return '' end
-  if t == 'string' then return v end
-  if t == 'number' or t == 'boolean' then return tostring(v) end
-  return tostring(v)
-end
-
--- Measure on-screen width while tolerating fallback when UI helpers are missing.
-local function display_width(text)
-  local s = text
-  if type(s) ~= 'string' then s = tostring(s or '') end
-  if vim.fn and vim.fn.strdisplaywidth then
-    local ok, width = pcall(vim.fn.strdisplaywidth, s)
-    if ok and type(width) == 'number' then
-      return width
-    end
-  end
-  return #s
-end
-
--- Generate a long horizontal separator sized after the current header row.
-local function separator_line(reference)
-  local width = 80
-  if reference and reference ~= '' then
-    local w = display_width(reference)
-    if w > width then width = w end
-  end
-  return string.rep('-', width)
-end
-
--- Pad data so ASCII tables stay aligned regardless of cell width.
-local function format_tabular(header, rows)
-  local all_rows = {}
-  local str_rows = {}
-  local widths = {}
-
-  if header and #header > 0 then
-    table.insert(all_rows, header)
-  end
-
-  for _, row in ipairs(rows or {}) do
-    table.insert(all_rows, row)
-  end
-
-  for r_idx, row in ipairs(all_rows) do
-    local str_row = {}
-    for c_idx, cell in ipairs(row or {}) do
-      local s = to_str(cell)
-      local w = display_width(s)
-      if not widths[c_idx] or w > widths[c_idx] then
-        widths[c_idx] = w
-      end
-      str_row[c_idx] = s
-    end
-    str_rows[r_idx] = str_row
-  end
-
-  local formatted = {}
-  for r_idx, row in ipairs(str_rows) do
-    local padded = {}
-    for c_idx, cell in ipairs(row) do
-      local w = display_width(cell)
-      local target = widths[c_idx] or w
-      if w < target then
-        padded[c_idx] = cell .. string.rep(' ', target - w)
-      else
-        padded[c_idx] = cell
-      end
-    end
-    formatted[r_idx] = table.concat(padded, ' | ')
-  end
-
-  if header and #header > 0 then
-    local head = formatted[1]
-    local data_rows = {}
-    for i = 2, #formatted do data_rows[#data_rows + 1] = formatted[i] end
-    return head, data_rows
-  end
-
-  return nil, formatted
-end
-
--- Build formatted lines with bracketed indices so they are easy to spot.
-local function build_labeled_table(col_labels, rows, row_offset, col_offset)
-  local prepared = {}
-  local cols = {}
-  local col_count = 0
-
-  if type(rows) == 'table' then
-    for _, r in ipairs(rows) do
-      if type(r) == 'table' and #r > col_count then
-        col_count = #r
-      end
-    end
-  end
-
-  if type(col_labels) == 'table' then
-    for idx, label in ipairs(col_labels) do
-      cols[idx] = to_str(label)
-      if idx > col_count then col_count = idx end
-    end
-  end
-
-  local header = { '[ ]' }
-  for i = 1, col_count do
-    local label = cols[i]
-    if not label or label == '' then
-      label = string.format('[%d]', (col_offset or 0) + i - 1)
-    end
-    header[#header + 1] = label
-  end
-
-  for idx, raw in ipairs(rows or {}) do
-    local display = { string.format('[%d]', (row_offset or 0) + idx - 1) }
-    if type(raw) == 'table' then
-      for i = 1, col_count do
-        display[#display + 1] = raw[i]
-      end
-    end
-    table.insert(prepared, display)
-  end
-
-  return format_tabular(header, prepared)
-end
-
--- Append preformatted header/data rows with consistent separators.
-local function append_tabular(lines, header, rows)
-  local has_rows = type(rows) == 'table' and #rows > 0
-  if not header and not has_rows then
+function ViewerState:set_content(lines)
+  if not self:is_open() then
     return
   end
-  local ref = header
-  if (not ref or ref == '') and has_rows then
-    ref = rows[1]
-  end
-  local sep = separator_line(ref)
-  table.insert(lines, sep)
-  if header and header ~= '' then
-    table.insert(lines, header)
-    table.insert(lines, sep)
-  end
-  if has_rows then
-    for _, row in ipairs(rows) do
-      table.insert(lines, row)
-    end
-  end
-end
-
-local function render_df(data)
-  local lines = {}
-  local shape = data.total_shape or data.shape or {}
-  table.insert(lines, string.format('DataFrame %s  shape=%sx%s', data.name or '', tostring(shape[1] or '?'), tostring(shape[2] or '?')))
-  local row_offset = tonumber(data.row_offset) or 0
-  local col_offset = tonumber(data.col_offset) or 0
-  local window_rows = #(data.rows or {})
-  local window_cols = #(data.columns or {})
-  local row_end = row_offset + window_rows - 1
-  if row_end < row_offset then row_end = row_offset end
-  local col_end = col_offset + window_cols - 1
-  if col_end < col_offset then col_end = col_offset end
-  table.insert(lines, string.format('window rows %d-%d cols %d-%d', row_offset, row_end, col_offset, col_end))
-  local cols = data.columns or {}
-  local header, rows = build_labeled_table(cols, data.rows or {}, row_offset, col_offset)
-  append_tabular(lines, header, rows)
-  return lines
-end
-
-local function render_nd(data)
-  local lines = {}
-  local shape = data.total_shape or data.shape or {}
-  table.insert(lines, string.format('ndarray %s  dtype=%s  shape=%s', data.name or '', tostring(data.dtype or ''), table.concat(vim.tbl_map(tostring, data.shape or {}), 'x')))
-  local row_offset = tonumber(data.row_offset) or 0
-  local col_offset = tonumber(data.col_offset) or 0
-  local window_rows = 0
-  local window_cols = 0
-  if type(data.rows) == 'table' then
-    window_rows = #data.rows
-    window_cols = #(data.rows[1] or {})
-    local row_end = row_offset + window_rows - 1
-    if row_end < row_offset then row_end = row_offset end
-    local col_end = col_offset + window_cols - 1
-    if col_end < col_offset then col_end = col_offset end
-    table.insert(lines, string.format('window rows %d-%d cols %d-%d', row_offset, row_end, col_offset, col_end))
-    local header, rows = build_labeled_table(nil, data.rows, row_offset, col_offset)
-    append_tabular(lines, header, rows)
-  elseif type(data.values1d) == 'table' then
-    window_rows = #data.values1d
-    local row_end = row_offset + window_rows - 1
-    if row_end < row_offset then row_end = row_offset end
-    table.insert(lines, string.format('window rows %d-%d', row_offset, row_end))
-    local header, rows = build_labeled_table({ 'value' }, vim.tbl_map(function(v)
-      return { v }
-    end, data.values1d), row_offset, 0)
-    append_tabular(lines, header, rows)
-  else
-    table.insert(lines, tostring(data.repr or ''))
-  end
-  return lines
-end
-
-local function render_generic(data)
-  local lines = {}
-  table.insert(lines, string.format('Object %s', data.name or ''))
-  table.insert(lines, string.rep('-', 80))
-  table.insert(lines, tostring(data.repr or ''))
-  return lines
-end
-
--- Render dataclass preview
-local function render_dataclass(data)
-  local lines = {}
-  local map = {}
-  local cname = tostring(data.class_name or '')
-  table.insert(lines, string.format('dataclass %s', cname))
-  table.insert(lines, string.rep('-', 80))
-  local fields = type(data.fields) == 'table' and data.fields or {}
-  if #fields == 0 then
-    table.insert(lines, '(no fields)')
-    return lines, map
-  end
-  for _, it in ipairs(fields) do
-    local fname = tostring(it.name or '')
-    local ty = tostring(it.type or '')
-    local kind = tostring(it.kind or '')
-    if kind == 'ndarray' then
-      local shp = it.shape or {}
-      local dtype = tostring(it.dtype or '')
-      table.insert(lines, string.format('%s <%s> ndarray shape=%s dtype=%s', fname, ty, table.concat(vim.tbl_map(tostring, shp), 'x'), dtype))
-      map[#lines] = (M.name or data.name or '') .. '.' .. fname
-    elseif kind == 'dataframe' then
-      local shp = it.shape or {}
-      local shape_str = (#shp >= 2) and (tostring(shp[1]) .. 'x' .. tostring(shp[2])) or table.concat(vim.tbl_map(tostring, shp), 'x')
-      table.insert(lines, string.format('%s <%s> DataFrame shape=%s', fname, ty, shape_str))
-      map[#lines] = (M.name or data.name or '') .. '.' .. fname
-    else
-      table.insert(lines, string.format('%s <%s> = %s', fname, ty, to_str(it.repr)))
-      local r = tostring(it.repr or '')
-      if #r >= 3 and r:sub(-3) == '...' then
-        map[#lines] = (M.name or data.name or '') .. '.' .. fname
-      end
-    end
-  end
-  return lines, map
-end
-
--- Render ctypes.Structure preview
-local function render_ctypes(data)
-  local lines = {}
-  local map = {}
-  local sname = tostring(data.struct_name or '')
-  table.insert(lines, string.format('ctypes.Structure %s', sname))
-  table.insert(lines, string.rep('-', 80))
-  local fields = type(data.fields) == 'table' and data.fields or {}
-  if #fields == 0 then
-    table.insert(lines, '(no fields)')
-    return lines, map
-  end
-  for _, it in ipairs(fields) do
-    local fname = tostring(it.name or '')
-    local ctype = tostring(it.ctype or '')
-    local kind = tostring(it.kind or '')
-    if kind == 'array' then
-      local vals = {}
-      for _, v in ipairs(it.values or {}) do table.insert(vals, to_str(v)) end
-      local suffix = ''
-      if type(it.length) == 'number' then suffix = string.format(' len=%d', it.length) end
-      table.insert(lines, string.format('%s [%s]%s: [ %s ]', fname, ctype, suffix, table.concat(vals, ', ')))
-      map[#lines] = (M.name or data.name or '') .. '.' .. fname
-    elseif kind == 'struct' then
-      -- Nested struct: render as JSON-ish
-      local v = it.value
-      local ok, encoded = pcall(vim.fn.json_encode, v)
-      table.insert(lines, string.format('%s [%s]: %s', fname, ctype, ok and encoded or to_str(v)))
-      map[#lines] = (M.name or data.name or '') .. '.' .. fname
-    else
-      table.insert(lines, string.format('%s [%s]: %s', fname, ctype, to_str(it.value)))
-      -- For scalars, usually not drillable
-    end
-  end
-  return lines, map
-end
-
--- Render standalone ctypes.Array preview
-local function render_ctypes_array(data)
-  local lines = {}
-  table.insert(lines, string.format('ctypes.Array %s len=%s', tostring(data.ctype or ''), tostring(data.length or '')))
-  table.insert(lines, string.rep('-', 80))
-  local vals = {}
-  for _, v in ipairs(data.values or {}) do table.insert(vals, to_str(v)) end
-  table.insert(lines, '[ ' .. table.concat(vals, ', ') .. ' ]')
-  return lines
-end
-
-local function set_content(lines)
-  if not is_open() then return end
-  -- Normalize: nvim_buf_set_lines requires each item to be a single line
   local out = {}
   for _, l in ipairs(lines or {}) do
     local s = l
-    if type(s) ~= 'string' then s = tostring(s or '') end
-    -- Split on CRLF/CR/LF to avoid embedded newlines in a single item
-    if s:find("\n") or s:find("\r") then
-      for _, part in ipairs(vim.split(s, "\r?\n", { plain = false })) do
+    if type(s) ~= 'string' then
+      s = tostring(s or '')
+    end
+    if s:find('\n') or s:find('\r') then
+      for _, part in ipairs(vim.split(s, '\r?\n', { plain = false })) do
         table.insert(out, part)
       end
     else
       table.insert(out, s)
     end
   end
-  api.nvim_buf_set_option(M.buf, 'modifiable', true)
-  api.nvim_buf_set_lines(M.buf, 0, -1, false, out)
-  api.nvim_buf_set_option(M.buf, 'modifiable', false)
+  api.nvim_buf_set_option(self.buf, 'modifiable', true)
+  api.nvim_buf_set_lines(self.buf, 0, -1, false, out)
+  api.nvim_buf_set_option(self.buf, 'modifiable', false)
 end
 
-local function update_title(name)
-  if not is_open() then return end
-  local ok = pcall(api.nvim_win_set_config, M.win, { title = ' Preview: ' .. (name or '') .. ' ' })
+function ViewerState:update_title(name)
+  if not self:is_open() then
+    return
+  end
+  local ok = pcall(api.nvim_win_set_config, self.win, { title = ' Preview: ' .. (name or '') .. ' ' })
   if not ok then
-    -- ignore if not supported
+    -- ignore configuration failures (e.g., on older Neovim)
   end
 end
 
-local function current_offsets()
-  local window = M._window or {}
+function ViewerState:current_offsets()
+  local window = self._window or {}
   local row_offset = tonumber(window.row_offset) or 0
   local col_offset = tonumber(window.col_offset) or 0
-  if row_offset < 0 then row_offset = 0 end
-  if col_offset < 0 then col_offset = 0 end
+  if row_offset < 0 then
+    row_offset = 0
+  end
+  if col_offset < 0 then
+    col_offset = 0
+  end
   return row_offset, col_offset
 end
 
-local function request_with_offsets(row_offset, col_offset)
-  if not M.name then return end
-  local label = 'Loading preview for ' .. tostring(M.name) .. ' ...'
+function ViewerState:request_preview(row_offset, col_offset)
+  if not self.name then
+    return
+  end
+  local label = 'Loading preview for ' .. tostring(self.name) .. ' ...'
   if row_offset ~= 0 or col_offset ~= 0 then
     label = label .. string.format(' [rows %d cols %d]', row_offset, col_offset)
   end
-  set_content({ label })
-  require('ipybridge').request_preview(M.name, {
+  self:set_content({ label })
+  require('ipybridge').request_preview(self.name, {
     row_offset = row_offset,
     col_offset = col_offset,
   })
 end
 
-local function window_shape_dim(dim)
-  if not M._window then return nil end
-  local shape = M._window.shape
-  if type(shape) ~= 'table' then return nil end
+function ViewerState:window_shape_dim(dim)
+  local window = self._window or {}
+  local shape = window.shape
+  if type(shape) ~= 'table' then
+    return nil
+  end
   local value = shape[dim]
-  if type(value) ~= 'number' then value = tonumber(value) end
+  if type(value) ~= 'number' then
+    value = tonumber(value)
+  end
   return value
 end
 
-local function move_rows(direction)
-  if not M._window then return end
-  local kind = M._window.kind
+function ViewerState:move_rows(direction)
+  local window = self._window
+  if not window then
+    return
+  end
+  local kind = window.kind
   if kind ~= 'ndarray' and kind ~= 'dataframe' then
     return
   end
   local default_rows = select(1, viewer_limits())
-  local rows_step = tonumber(M._window.max_rows) or default_rows
-  if rows_step <= 0 then rows_step = default_rows end
-  local current_row, current_col = current_offsets()
-  local total_rows = window_shape_dim(1)
+  local rows_step = tonumber(window.max_rows) or default_rows
+  if rows_step <= 0 then
+    rows_step = default_rows
+  end
+  local current_row, current_col = self:current_offsets()
+  local total_rows = self:window_shape_dim(1)
   local new_row = clamp_offset(current_row, rows_step * direction, total_rows, rows_step)
-  if new_row == current_row then return end
-  request_with_offsets(new_row, current_col)
+  if new_row == current_row then
+    return
+  end
+  self:request_preview(new_row, current_col)
 end
 
-local function move_cols(direction)
-  if not M._window then return end
-  local kind = M._window.kind
+function ViewerState:move_cols(direction)
+  local window = self._window
+  if not window then
+    return
+  end
+  local kind = window.kind
   if kind ~= 'ndarray' and kind ~= 'dataframe' then
     return
   end
   local default_cols = select(2, viewer_limits())
-  local viewer_cols = tonumber(M._window.max_cols) or default_cols
-  if viewer_cols <= 0 then viewer_cols = default_cols end
-  local current_row, current_col = current_offsets()
-  local total_cols = window_shape_dim(2)
+  local viewer_cols = tonumber(window.max_cols) or default_cols
+  if viewer_cols <= 0 then
+    viewer_cols = default_cols
+  end
+  local current_row, current_col = self:current_offsets()
+  local total_cols = self:window_shape_dim(2)
   if (not total_cols or total_cols <= 1) and current_col == 0 and direction ~= 0 then
     return
   end
@@ -447,29 +193,35 @@ local function move_cols(direction)
     return
   end
   local new_col = clamp_offset(current_col, viewer_cols * direction, total_cols, viewer_cols)
-  if new_col == current_col then return end
-  request_with_offsets(current_row, new_col)
+  if new_col == current_col then
+    return
+  end
+  self:request_preview(current_row, new_col)
 end
 
-local function drilldown_current()
-  if not is_open() then return end
-  local lnum = api.nvim_win_get_cursor(M.win)[1]
-  local path = M._line2path[lnum]
+function ViewerState:drilldown_current()
+  if not self:is_open() then
+    return
+  end
+  local lnum = api.nvim_win_get_cursor(self.win)[1]
+  local path = self._line2path[lnum]
   if path and type(path) == 'string' and #path > 0 then
-    M.name = path
-    M._window = { row_offset = 0, col_offset = 0 }
-    update_title(path)
-    request_with_offsets(0, 0)
+    self.name = path
+    self._window = { row_offset = 0, col_offset = 0 }
+    self:update_title(path)
+    self:request_preview(0, 0)
   end
 end
 
-local function ensure_win(name)
-  if is_open() then return end
-  M.buf = api.nvim_create_buf(false, true)
+function ViewerState:ensure_window(name)
+  if self:is_open() then
+    return
+  end
+  self.buf = api.nvim_create_buf(false, true)
   local w, h = layout_size()
   local row = math.floor((vim.o.lines - h) / 4)
   local col = math.floor((vim.o.columns - w) / 2)
-  M.win = api.nvim_open_win(M.buf, true, {
+  self.win = api.nvim_open_win(self.buf, true, {
     relative = 'editor',
     width = w,
     height = h,
@@ -479,54 +231,65 @@ local function ensure_win(name)
     title = ' Preview: ' .. (name or '') .. ' ',
     style = 'minimal',
   })
-  api.nvim_set_option_value('buftype', 'nofile', { buf = M.buf })
-  api.nvim_set_option_value('bufhidden', 'wipe', { buf = M.buf })
-  api.nvim_set_option_value('swapfile', false, { buf = M.buf })
-  api.nvim_set_option_value('filetype', 'ipybridge-view', { buf = M.buf })
-  api.nvim_buf_set_option(M.buf, 'modifiable', false)
-  local function map(lhs, rhs, desc)
-    vim.keymap.set('n', lhs, rhs, { buffer = M.buf, silent = true, nowait = true, desc = desc })
+  api.nvim_set_option_value('buftype', 'nofile', { buf = self.buf })
+  api.nvim_set_option_value('bufhidden', 'wipe', { buf = self.buf })
+  api.nvim_set_option_value('swapfile', false, { buf = self.buf })
+  api.nvim_set_option_value('filetype', 'ipybridge-view', { buf = self.buf })
+  api.nvim_buf_set_option(self.buf, 'modifiable', false)
+
+  local function map(lhs, fn, desc)
+    vim.keymap.set('n', lhs, fn, { buffer = self.buf, silent = true, nowait = true, desc = desc })
   end
-  map('q', close_win, 'Close')
+
+  map('q', function()
+    self:close()
+  end, 'Close')
   map('r', function()
-    if not M.name then return end
-    local row_off, col_off = current_offsets()
-    request_with_offsets(row_off, col_off)
+    if not self.name then
+      return
+    end
+    local row_off, col_off = self:current_offsets()
+    self:request_preview(row_off, col_off)
   end, 'Refresh')
-  map('<C-f>', function() move_rows(1) end, 'Next rows')
-  map('<C-b>', function() move_rows(-1) end, 'Previous rows')
-  map('<C-l>', function() move_cols(1) end, 'Next cols')
-  map('<C-h>', function() move_cols(-1) end, 'Previous cols')
-  map('<C-Right>', function() move_cols(1) end, 'Next cols')
-  map('<C-Left>', function() move_cols(-1) end, 'Previous cols')
-  map('<CR>', drilldown_current, 'Drill-down preview')
+  map('<C-f>', function()
+    self:move_rows(1)
+  end, 'Next rows')
+  map('<C-b>', function()
+    self:move_rows(-1)
+  end, 'Previous rows')
+  map('<C-l>', function()
+    self:move_cols(1)
+  end, 'Next cols')
+  map('<C-h>', function()
+    self:move_cols(-1)
+  end, 'Previous cols')
+  map('<C-Right>', function()
+    self:move_cols(1)
+  end, 'Next cols')
+  map('<C-Left>', function()
+    self:move_cols(-1)
+  end, 'Previous cols')
+  map('<CR>', function()
+    self:drilldown_current()
+  end, 'Drill-down preview')
 end
 
-function M.open(name)
-  M.name = name
-  ensure_win(name)
-  M._window = { row_offset = 0, col_offset = 0 }
-  update_title(name)
-  request_with_offsets(0, 0)
+function ViewerState:prepare_window(name)
+  local incoming = name or self.name
+  local name_changed = incoming and incoming ~= self.name
+  if incoming and incoming ~= '' then
+    self.name = incoming
+  end
+  self:ensure_window(self.name)
+  if name_changed or not self._window then
+    self._window = { row_offset = 0, col_offset = 0 }
+  end
+  self:update_title(self.name)
 end
 
-function M.on_preview(data)
-  if data == vim.NIL then data = nil end
-  -- Expect data.name to match current viewer; otherwise open a new viewer.
-  local name = data and data.name or M.name
-  if not is_open() or (M.name ~= name and name) then
-    M.open(name)
-  end
-  if data and data.error then
-    set_content({ 'Error: ' .. tostring(data.error) })
-    return
-  end
-  if not data or type(data) ~= 'table' then
-    set_content({ 'Preview unavailable' })
-    return
-  end
-  local window = M._window or {}
+function ViewerState:_apply_window_metadata(data)
   local default_rows, default_cols = viewer_limits()
+  local window = self._window or {}
   window.row_offset = tonumber(data.row_offset) or 0
   window.col_offset = tonumber(data.col_offset) or 0
   window.max_rows = tonumber(data.max_rows) or default_rows
@@ -539,28 +302,65 @@ function M.on_preview(data)
     window.shape = nil
   end
   window.kind = data.kind
-  M._window = window
-  local lines, map = nil, {}
-  if data.kind == 'dataframe' then
-    lines = render_df(data)
-  elseif data.kind == 'ndarray' then
-    lines = render_nd(data)
-  elseif data.kind == 'dataclass' then
-    lines, map = render_dataclass(data)
-  elseif data.kind == 'ctypes' then
-    lines, map = render_ctypes(data)
-  elseif data.kind == 'ctypes_array' then
-    lines = render_ctypes_array(data)
-  else
-    lines = render_generic(data)
-  end
-  M._last = data
-  M._line2path = map or {}
-  set_content(lines)
+  self._window = window
 end
 
-function M.close()
-  close_win()
+function ViewerState:open(name)
+  self:prepare_window(name)
+  self:request_preview(0, 0)
 end
+
+function ViewerState:on_preview(data)
+  if data == vim.NIL then
+    data = nil
+  end
+  local name = data and data.name or self.name
+  local should_prepare = not self:is_open() or (name and name ~= self.name)
+  if should_prepare then
+    self:prepare_window(name)
+    if not data then
+      self:request_preview(0, 0)
+    end
+  end
+  if data and data.error then
+    self:set_content({ 'Error: ' .. tostring(data.error) })
+    return
+  end
+  if not data or type(data) ~= 'table' then
+    self:set_content({ 'Preview unavailable' })
+    return
+  end
+  self:_apply_window_metadata(data)
+  local lines, map = Renderers.render(data, { viewer_name = self.name })
+  self._last = data
+  self._line2path = map or {}
+  self:set_content(lines)
+end
+
+function ViewerState:close()
+  self:close_window()
+end
+
+local state = ViewerState:new()
+
+local M = {}
+
+setmetatable(M, {
+  __index = function(_, key)
+    local method = ViewerState[key]
+    if type(method) == 'function' then
+      return function(first, ...)
+        if first == M or first == nil then
+          return method(state, ...)
+        end
+        return method(state, first, ...)
+      end
+    end
+    return state[key]
+  end,
+  __newindex = function(_, key, value)
+    state[key] = value
+  end,
+})
 
 return M
