@@ -9,8 +9,19 @@ import sys
 import threading
 import time
 import types
+import warnings
 from collections import namedtuple
+from contextlib import ExitStack
 from IPython import get_ipython
+
+try:
+    from IPython.core.completer import (
+        ProvisionalCompleterWarning,
+        provisionalcompleter,
+    )
+except Exception:
+    ProvisionalCompleterWarning = None
+    provisionalcompleter = None
 
 
 _PREVIEW_LIMITS = {"rows": 30, "cols": 20}
@@ -1033,27 +1044,109 @@ def _mi_ipython_complete(code, cursor_pos, dbg=None):
                     frame_payload = frame
             except Exception:
                 frame_payload = frame
+    def _complete_with_jedi():
+        completer = getattr(shell, "Completer", None)
+        completions_fn = getattr(completer, "completions", None)
+        if completer is None or not callable(completions_fn):
+            return None
+        matches = []
+        sources = {}
+        seen = set()
+        min_start = None
+        max_end = None
+        try:
+            with ExitStack() as stack:
+                builtin_trap = getattr(shell, "builtin_trap", None)
+                if builtin_trap is not None:
+                    try:
+                        stack.enter_context(builtin_trap)
+                    except Exception:
+                        pass
+                if provisionalcompleter is not None:
+                    try:
+                        stack.enter_context(provisionalcompleter())
+                    except Exception as exc:
+                        if not getattr(_complete_with_jedi, "_provisional_failed", False):
+                            _ipy_log_debug(f"provisional completer unavailable: {exc}")
+                            _complete_with_jedi._provisional_failed = True
+                with warnings.catch_warnings():
+                    if ProvisionalCompleterWarning is not None:
+                        warnings.simplefilter("ignore", ProvisionalCompleterWarning)
+                    for entry in completions_fn(code, cursor_pos):
+                        text = getattr(entry, "text", None)
+                        if not isinstance(text, str) or text == "":
+                            continue
+                        origin = getattr(entry, "_origin", None)
+                        if isinstance(origin, str) and origin:
+                            sources[text] = origin
+                        elif text not in sources:
+                            sources[text] = "python"
+                        if text in seen:
+                            continue
+                        seen.add(text)
+                        matches.append(text)
+                        start = getattr(entry, "start", None)
+                        end = getattr(entry, "end", None)
+                        if isinstance(start, int):
+                            if min_start is None or start < min_start:
+                                min_start = start
+                        if isinstance(end, int):
+                            if max_end is None or end > max_end:
+                                max_end = end
+        except Exception as exc:
+            _ipy_log_debug(f"ipython jedi complete failed: {exc}")
+            return None
+        if not matches:
+            return None
+        if min_start is None:
+            min_start = cursor_pos
+        if max_end is None:
+            max_end = cursor_pos
+        if min_start < 0:
+            min_start = 0
+        if max_end < min_start:
+            max_end = min_start
+        result = _mi_completion_result(matches, min_start, max_end, sources)
+        result["sources"] = dict(sources)
+        return result
+
+    def _complete_legacy():
+        try:
+            line, offset = _mi_line_at_cursor(code, cursor_pos)
+            line_cursor = cursor_pos - offset
+            txt, matches = shell.complete("", line, line_cursor)
+            txt = txt or ""
+            matches = matches or []
+            sources = {}
+            for match in matches:
+                if isinstance(match, str):
+                    sources[match] = "python"
+            return {
+                "matches": matches,
+                "cursor_start": cursor_pos - len(txt),
+                "cursor_end": cursor_pos,
+                "sources": sources,
+            }
+        except Exception as exc:
+            _ipy_log_debug(f"ipython complete failed: {exc}")
+            return None
+    modern = None
     try:
         if callable(set_frame):
             set_frame(frame_payload)
-        line, offset = _mi_line_at_cursor(code, cursor_pos)
-        line_cursor = cursor_pos - offset
-        txt, matches = shell.complete("", line, line_cursor)
-        txt = txt or ""
-        matches = matches or []
-        sources = {}
-        for match in matches:
-            if isinstance(match, str):
-                sources[match] = "python"
-        return {
-            "matches": matches,
-            "cursor_start": cursor_pos - len(txt),
-            "cursor_end": cursor_pos,
-            "sources": sources,
-        }
-    except Exception as exc:
-        _ipy_log_debug(f"ipython complete failed: {exc}")
-        return None
+        modern = _complete_with_jedi()
+    finally:
+        if callable(set_frame):
+            try:
+                set_frame()
+            except Exception:
+                pass
+    if modern is not None:
+        return modern
+    try:
+        if callable(set_frame):
+            set_frame(frame_payload)
+        return _complete_legacy()
     finally:
         if callable(set_frame):
             try:
