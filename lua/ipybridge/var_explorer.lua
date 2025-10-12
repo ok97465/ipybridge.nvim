@@ -1,36 +1,34 @@
--- Variable Explorer UI for ipybridge.nvim
--- Renders a floating window listing variables with type/shape/preview.
+-- Variable explorer UI for ipybridge.nvim.
+-- Manages floating window lifecycle while delegating row formatting.
 
 local api = vim.api
+local Renderer = require('ipybridge.viewer.var_renderer')
 
-local M = {
-  buf = nil,
-  win = nil,
-  vars = {},
-  _line2name = {},
-}
+local ExplorerState = {}
+ExplorerState.__index = ExplorerState
 
-local function is_open()
-  return M.win and api.nvim_win_is_valid(M.win) and M.buf and api.nvim_buf_is_loaded(M.buf)
+function ExplorerState:new()
+  return setmetatable({
+    buf = nil,
+    win = nil,
+    vars = {},
+    _line2name = {},
+  }, self)
 end
 
-local function close_win()
-  if is_open() then
-    pcall(api.nvim_win_close, M.win, true)
-  end
-  if M.buf and api.nvim_buf_is_loaded(M.buf) then
-    pcall(api.nvim_buf_delete, M.buf, { force = true })
-  end
-  M.win, M.buf = nil, nil
-  M._line2name = {}
+function ExplorerState:is_open()
+  return self.win and api.nvim_win_is_valid(self.win) and self.buf and api.nvim_buf_is_loaded(self.buf)
 end
 
-local function fmt_shape(shp)
-  if type(shp) ~= 'table' then return '' end
-  local ok, first = pcall(function() return shp[1] end)
-  if not ok then return '' end
-  if #shp == 2 then return string.format('%sx%s', tostring(shp[1]), tostring(shp[2])) end
-  return table.concat(vim.tbl_map(tostring, shp), 'x')
+function ExplorerState:close_window()
+  if self:is_open() then
+    pcall(api.nvim_win_close, self.win, true)
+  end
+  if self.buf and api.nvim_buf_is_loaded(self.buf) then
+    pcall(api.nvim_buf_delete, self.buf, { force = true })
+  end
+  self.buf, self.win = nil, nil
+  self._line2name = {}
 end
 
 local function layout_size()
@@ -41,39 +39,25 @@ local function layout_size()
   return w, h
 end
 
-local function render()
-  if not is_open() then return end
-  local names = {}
-  for k, _ in pairs(M.vars or {}) do table.insert(names, k) end
-  table.sort(names)
-  local lines = {}
-  M._line2name = {}
-  table.insert(lines, 'Name                Type            Shape     Preview')
-  table.insert(lines, string.rep('-', 72))
-  for _, name in ipairs(names) do
-    local it = M.vars[name] or {}
-    local ty = tostring(it.type or ''):gsub('[\r\n]', ' ')
-    local shp = fmt_shape(it.shape)
-    local pv = tostring(it.repr or ''):gsub('[\r\n]', ' ')
-    local l = string.format('%-20s %-14s %-9s %s', name, ty, shp, pv)
-    table.insert(lines, l)
-    M._line2name[#lines] = name
+function ExplorerState:set_content(lines, map)
+  if not self:is_open() then
+    return
   end
-  if #lines <= 2 then
-    table.insert(lines, '(No user variables) — press r to refresh')
-  end
-  api.nvim_buf_set_option(M.buf, 'modifiable', true)
-  api.nvim_buf_set_lines(M.buf, 0, -1, false, lines)
-  api.nvim_buf_set_option(M.buf, 'modifiable', false)
+  api.nvim_buf_set_option(self.buf, 'modifiable', true)
+  api.nvim_buf_set_lines(self.buf, 0, -1, false, lines)
+  api.nvim_buf_set_option(self.buf, 'modifiable', false)
+  self._line2name = map or {}
 end
 
-local function ensure_win()
-  if is_open() then return end
-  M.buf = api.nvim_create_buf(false, true)
+function ExplorerState:ensure_window()
+  if self:is_open() then
+    return
+  end
+  self.buf = api.nvim_create_buf(false, true)
   local w, h = layout_size()
   local row = math.floor((vim.o.lines - h) / 3)
   local col = math.floor((vim.o.columns - w) / 2)
-  M.win = api.nvim_open_win(M.buf, true, {
+  self.win = api.nvim_open_win(self.buf, true, {
     relative = 'editor',
     width = w,
     height = h,
@@ -83,58 +67,98 @@ local function ensure_win()
     title = ' Variables ',
     style = 'minimal',
   })
-  api.nvim_set_option_value('buftype', 'nofile', { buf = M.buf })
-  api.nvim_set_option_value('bufhidden', 'wipe', { buf = M.buf })
-  api.nvim_set_option_value('swapfile', false, { buf = M.buf })
-  api.nvim_set_option_value('filetype', 'ipybridge-vars', { buf = M.buf })
-  api.nvim_buf_set_option(M.buf, 'modifiable', false)
-  local function map(lhs, rhs, desc)
-    vim.keymap.set('n', lhs, rhs, { buffer = M.buf, silent = true, nowait = true, desc = desc })
+  api.nvim_set_option_value('buftype', 'nofile', { buf = self.buf })
+  api.nvim_set_option_value('bufhidden', 'wipe', { buf = self.buf })
+  api.nvim_set_option_value('swapfile', false, { buf = self.buf })
+  api.nvim_set_option_value('filetype', 'ipybridge-vars', { buf = self.buf })
+  api.nvim_buf_set_option(self.buf, 'modifiable', false)
+
+  local function map(lhs, fn, desc)
+    vim.keymap.set('n', lhs, fn, { buffer = self.buf, silent = true, nowait = true, desc = desc })
   end
-  map('q', close_win, 'Close')
-  map('r', function() require('ipybridge').var_explorer_refresh() end, 'Refresh')
+
+  map('q', function()
+    self:close()
+  end, 'Close')
+  map('r', function()
+    require('ipybridge').var_explorer_refresh()
+  end, 'Refresh')
   map('<CR>', function()
-    local lnum = api.nvim_win_get_cursor(M.win)[1]
-    local name = M._line2name[lnum]
-    if name then
-      local it = M.vars[name] or {}
-      local kind = tostring(it.kind or '')
-      local previewable = false
-      if kind == 'ndarray' or kind == 'dataframe' or kind == 'dataclass' or kind == 'ctypes' or kind == 'ctypes_array' then
-        previewable = true
-      else
-        local r = tostring(it.repr or '')
-        if #r >= 3 and r:sub(-3) == '...' then
-          previewable = true
-        end
-      end
-      if previewable then
-        require('ipybridge.data_viewer').open(name)
-      end
-    end
+    self:drilldown_current()
   end, 'Open viewer')
 end
 
-function M.open()
-  ensure_win()
-  render()
+function ExplorerState:render()
+  if not self:is_open() then
+    return
+  end
+  local lines, map = Renderer.render(self.vars or {})
+  self:set_content(lines, map)
 end
 
-function M.refresh()
+local function is_previewable(entry)
+  local kind = tostring(entry.kind or '')
+  if kind == 'ndarray' or kind == 'dataframe' or kind == 'dataclass' or kind == 'ctypes' or kind == 'ctypes_array' then
+    return true
+  end
+  local repr = tostring(entry.repr or '')
+  return #repr >= 3 and repr:sub(-3) == '...'
+end
+
+function ExplorerState:drilldown_current()
+  if not self:is_open() then
+    return
+  end
+  local lnum = api.nvim_win_get_cursor(self.win)[1]
+  local name = self._line2name[lnum]
+  if not name then
+    return
+  end
+  local entry = self.vars[name]
+  if not entry or not is_previewable(entry) then
+    return
+  end
+  require('ipybridge.data_viewer').open(name)
+end
+
+function ExplorerState:open()
+  self:ensure_window()
+  self:render()
+end
+
+function ExplorerState:refresh()
   require('ipybridge').var_explorer_refresh()
 end
 
-function M.on_vars(tbl)
-  M.vars = tbl or {}
-  render()
+function ExplorerState:on_vars(tbl)
+  self.vars = tbl or {}
+  self:render()
 end
 
-function M.is_open()
-  return is_open()
+function ExplorerState:close()
+  self:close_window()
 end
 
-function M.close()
-  close_win()
-end
+local state = ExplorerState:new()
+
+local M = {}
+
+setmetatable(M, {
+  __index = function(_, key)
+    local method = ExplorerState[key]
+    if type(method) == 'function' then
+      return function(first, ...)
+        if first == M or first == nil then
+          return method(state, ...)
+        end
+        return method(state, first, ...)
+      end
+    end
+    return state[key]
+  end,
+  __newindex = function(_, key, value)
+    state[key] = value
+  end,
+})
 
 return M
