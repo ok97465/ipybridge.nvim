@@ -6,6 +6,8 @@ local fn = vim.fn
 
 local M = {}
 
+local OscParser = require("ipybridge.osc_parser")
+
 local function default_on_message(msg)
   local ok, dispatch = pcall(require, 'ipybridge.dispatch')
   if not ok or not dispatch then return end
@@ -20,10 +22,6 @@ local function noop() end
 local TermIpy = {job_id = nil, buf_id = nil, win_id = nil}
 TermIpy.__index = TermIpy
 local split_cmd = "botright vsplit"
-
-local OSC_PREFIX = "\27]5379;ipybridge:"
-local OSC_PREFIX_LEN = #OSC_PREFIX
-local OSC_SUFFIX = "\7"
 
 local function __handle_exit(term)
 	return function(job_id, code, event)
@@ -49,7 +47,6 @@ end
 
 function TermIpy:new(cmd, cwd, opts)
   local tb = setmetatable({}, TermIpy)
-  tb._osc_pending = ""
   if opts and type(opts.on_message) == 'function' then
     tb._on_message = opts.on_message
   else
@@ -71,80 +68,24 @@ function TermIpy:new(cmd, cwd, opts)
   else
     tb._on_stdout_chunk = noop
   end
+  tb._decoder = OscParser:new({
+    on_message = function(tag, payload)
+      tb:_handle_hidden_message(tag, payload)
+    end,
+  })
   tb:__spawn(cmd, cwd)
   return tb
 end
 
-function TermIpy:__handle_hidden_payload(payload)
-  if type(payload) ~= 'string' or payload == '' then return end
-  local sep = payload:find(':', 1, true)
-  if not sep then return end
-  local tag = payload:sub(1, sep - 1)
-  local body = payload:sub(sep + 1)
-  if not tag or tag == '' then return end
-  if not body or #body == 0 then return end
-  local ok, decoded = pcall(vim.json.decode, body)
-  if not ok then
-    vim.schedule(function()
-      vim.notify('ipybridge: failed to decode hidden payload for ' .. tag, vim.log.levels.WARN)
-    end)
+function TermIpy:_handle_hidden_message(tag, payload)
+  local handler = self._on_message or default_on_message
+  if type(handler) ~= 'function' then
     return
   end
-  local handler = self._on_message
-  if type(handler) ~= 'function' then return end
-  local message = { tag = tag, data = decoded }
-  vim.schedule(function()
-    pcall(handler, message)
-  end)
-end
-
-local function longest_prefix_suffix(s)
-  local max_keep = math.min(#s, OSC_PREFIX_LEN - 1)
-  for len = max_keep, 1, -1 do
-    if OSC_PREFIX:sub(1, len) == s:sub(-len) then
-      return len
-    end
+  local ok, err = pcall(handler, { tag = tag, data = payload })
+  if not ok then
+    vim.notify('ipybridge: hidden message handler failed for ' .. tostring(tag) .. ': ' .. tostring(err), vim.log.levels.WARN)
   end
-  return 0
-end
-
-function TermIpy:__extract_hidden(text)
-  if type(text) ~= 'string' or text == '' then return text end
-  local combined = (self._osc_pending or '') .. text
-  local output = {}
-  local idx = 1
-  while true do
-    local start = combined:find(OSC_PREFIX, idx, true)
-    if not start then
-      break
-    end
-    local before = combined:sub(idx, start - 1)
-    local search_from = start + OSC_PREFIX_LEN
-    local stop = combined:find(OSC_SUFFIX, search_from, true)
-    if not stop then
-      self._osc_pending = combined:sub(start)
-      if before ~= '' then table.insert(output, before) end
-      return table.concat(output, "")
-    end
-    if before ~= '' then
-      table.insert(output, before)
-    end
-    local payload = combined:sub(search_from, stop - 1)
-    self:__handle_hidden_payload(payload)
-    idx = stop + 1
-  end
-  local remainder = combined:sub(idx)
-  local keep = longest_prefix_suffix(remainder)
-  if keep > 0 then
-    self._osc_pending = remainder:sub(-keep)
-    remainder = remainder:sub(1, #remainder - keep)
-  else
-    self._osc_pending = ''
-  end
-  if remainder ~= '' then
-    table.insert(output, remainder)
-  end
-  return table.concat(output, "")
 end
 
 function TermIpy:send(cmd)
@@ -221,7 +162,8 @@ end
 function TermIpy:__on_stdout(data)
   for _, line in ipairs(data) do
     if line ~= nil and line ~= '' then
-      local visible = self:__extract_hidden(line)
+      local decoder = self._decoder
+      local visible = decoder and decoder:ingest(line) or line
       if visible and visible ~= '' then
         self:__notify_stdout(visible)
       end
