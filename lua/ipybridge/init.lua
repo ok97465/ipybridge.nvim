@@ -746,7 +746,9 @@ M.send_lines = function(line_start, line_stop)
 	local tb_lines = api.nvim_buf_get_lines(0, line_start, line_stop, false)
 	if not tb_lines or #tb_lines == 0 then return end
 
-	clear_debug_state()
+	if not M._debug_active then
+		clear_debug_state()
+	end
 
 	with_terminal(true, function()
 		if not M.is_open() then return end
@@ -785,7 +787,9 @@ M.run_line = function()
 		if idx_line_cursor < n_lines then
 			api.nvim_win_set_cursor(0, { idx_line_cursor + 1, 0 })
 		end
-		clear_debug_state()
+		if not M._debug_active then
+			clear_debug_state()
+		end
 	end)
 end
 
@@ -1209,7 +1213,7 @@ M.run_cell = function()
 					else
 						term_send(string.format("runcell(%d, '%s')\n", idx, safe))
 					end
-					clear_debug_state()
+						clear_debug_state()
 					if has_next_cell then
 						local idx_line = math.min(line_stop + 1, api.nvim_buf_line_count(0))
 						api.nvim_win_set_cursor(0, { idx_line, 0 })
