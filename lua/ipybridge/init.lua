@@ -14,7 +14,7 @@ local utils = require("ipybridge.utils")
 local keymaps = require("ipybridge.keymaps")
 local kernel = require("ipybridge.kernel")
 local py_module = require("ipybridge.py_module")
-local debug_scope = require("ipybridge.debug_scope")
+local debug_vars = require("ipybridge.debug_vars")
 local breakpoints = require("ipybridge.breakpoints")
 local cmp_bridge = require("ipybridge.cmp_bridge")
 local debug_completion = require("ipybridge.debug_completion")
@@ -150,65 +150,12 @@ end
 -- Examples matched: '# %%', '# %% Import'. Examples NOT matched: '  # %%', '#%%'.
 local CELL_PATTERN = [[^# %%\+]]
 local CELL_RE = vim.regex(CELL_PATTERN)
-local sanitize_scope = debug_scope.sanitize_scope
 
 local function normalize_path(path)
   if not path or path == '' then return nil end
   local abs = fn.fnamemodify(path, ':p')
   if not abs or abs == '' then return nil end
   return abs:gsub("\\", "/")
-end
-
-local function get_debug_preview_payload(name)
-  if not name or name == '' then
-    return nil
-  end
-  local function lookup(scope_tbl)
-    if type(scope_tbl) ~= 'table' then
-      return nil
-    end
-    local entry = scope_tbl[name]
-    if type(entry) == 'table' then
-      local cache = entry._preview_cache
-      if cache then
-        return cache
-      end
-    end
-    for _, item in pairs(scope_tbl) do
-      if type(item) == 'table' then
-        local children = item._preview_children
-        if type(children) == 'table' then
-          local payload = children[name]
-          if payload then
-            return payload
-          end
-        end
-      end
-    end
-    return nil
-  end
-  local scopes = {}
-  if type(M._debug_locals_snapshot) == 'table' and type(M._debug_locals_snapshot.__locals__) == 'table' then
-    table.insert(scopes, M._debug_locals_snapshot.__locals__)
-  end
-  if type(M._debug_globals_snapshot) == 'table' then
-    local gscope = M._debug_globals_snapshot.__globals__
-    if type(gscope) == 'table' then
-      table.insert(scopes, gscope)
-    else
-      table.insert(scopes, M._debug_globals_snapshot)
-    end
-  end
-  if type(M._latest_vars) == 'table' then
-    table.insert(scopes, M._latest_vars)
-  end
-  for _, scope in ipairs(scopes) do
-    local payload = lookup(scope)
-    if payload then
-      return payload
-    end
-  end
-  return nil
 end
 
 local queue_exec_request -- forward declaration for deferred ZMQ exec
@@ -776,38 +723,12 @@ function M._sync_var_filters()
   M._last_filters_signature = signature
 end
 
-local function current_debug_scope(prefer_locals)
-  return debug_scope.resolve_scope(prefer_locals, M._debug_locals_snapshot, M._debug_globals_snapshot)
-end
-
 function M._digest_vars_snapshot(snapshot)
-  if type(snapshot) ~= 'table' then
-    M._latest_vars = {}
-    return M._latest_vars
-  end
-  local has_debug_meta = snapshot.__scoped__ ~= nil or snapshot.__locals__ ~= nil or snapshot.__globals__ ~= nil
-  if not has_debug_meta then
-    M._debug_locals_snapshot = nil
-    M._debug_globals_snapshot = nil
-    M._latest_vars = sanitize_scope(snapshot)
-    return M._latest_vars
-  end
-  local scoped_flag = snapshot.__scoped__
-  local locals_scope = snapshot.__locals__
-  local globals_scope = snapshot.__globals__
-  if scoped_flag == true or (type(locals_scope) == 'table' and next(locals_scope)) then
-    M._debug_locals_snapshot = snapshot
-  end
-  if scoped_flag == false or type(globals_scope) == 'table' or (not scoped_flag and snapshot.__locals__ == nil) then
-    M._debug_globals_snapshot = snapshot
-  end
-  local prefer_locals = (M._debug_scope == 'locals')
-  M._latest_vars = current_debug_scope(prefer_locals)
-  return M._latest_vars
+  return debug_vars.digest_snapshot(M, snapshot)
 end
 
 function M._update_latest_vars(data)
-  return M._digest_vars_snapshot(data)
+  return debug_vars.digest_snapshot(M, data)
 end
 
 -- Request the kernel connection file path once and cache it.
@@ -1186,24 +1107,17 @@ function M.on_debug_location(info)
     M._debug_scope = 'globals'
   end
   if M._debug_active then
-    M._latest_vars = current_debug_scope(M._debug_scope == 'locals')
-    local ok, vx = pcall(require, 'ipybridge.var_explorer')
-    if ok and vx and vx.on_vars then
-      vx.on_vars(M._latest_vars)
-    end
+    M._latest_vars = debug_vars.current_scope(M, M._debug_scope == 'locals')
+    debug_vars.push_to_explorer(M)
   end
 end
 
 -- Public: open the variable explorer window and refresh data.
 M.var_explorer_open = function()
-  require('ipybridge.var_explorer').open()
+  local vx = require('ipybridge.var_explorer')
+  vx.open()
   if M._debug_active then
-    if M._latest_vars then
-      local ok, vx = pcall(require, 'ipybridge.var_explorer')
-      if ok and vx and vx.on_vars then
-        vx.on_vars(M._latest_vars)
-      end
-    end
+    debug_vars.push_to_explorer(M)
     return
   end
   M.request_vars()
@@ -1212,10 +1126,7 @@ end
 -- Public: refresh variable list.
 M.var_explorer_refresh = function()
   if M._debug_active then
-    local ok, vx = pcall(require, 'ipybridge.var_explorer')
-    if ok and vx and vx.on_vars and M._latest_vars then
-      vx.on_vars(M._latest_vars)
-    end
+    debug_vars.push_to_explorer(M)
     return
   end
   M.request_vars()
@@ -1278,7 +1189,7 @@ function M.request_preview(name, opts)
     local use_cache = (row_offset == 0 and col_offset == 0)
     local payload = nil
     if use_cache then
-      payload = get_debug_preview_payload(name)
+      payload = debug_vars.preview_payload(M, name)
       if type(payload) == 'table' then
         payload.row_offset = payload.row_offset or 0
         payload.col_offset = payload.col_offset or 0
