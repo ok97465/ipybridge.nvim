@@ -4,7 +4,19 @@ Minimal helper to run IPython/Jupyter in a terminal split and send code from the
 
 ## Demo
 
+`demo` captures the day-to-day workflow: Neovim buffers on the left, the IPython console on the right. Cells run with `runfile()`/`runcell()` helpers, and the console echoes section markers so you can see each phase finish. While the script executes, a preview overlay lists numpy arrays, dataclasses, and ctypes structures so you can drill into live data without leaving the editor.
+
 ![demo gif](https://github.com/ok97465/ipybridge.nvim/raw/main/doc/demo.gif)
+
+`demo_debug` dives into the debugger integration:
+
+- Debug sessions run through IPython's `debugfile`, so this plugin natively supports step-by-step debugging.
+- Breakpoints you toggle in Neovim are respected; the gutter indicator in the GIF shows the active stop line.
+- Matplotlib stays interactive even while the debugger pauses execution, letting you pan and zoom figures mid-inspection.
+- The variable explorer stays in sync with the paused frame, making it easy to examine arrays and custom structures.
+- Completions inside `ipdb` come from `nvim-cmp`, giving you the same rich suggestions you rely on during normal editing.
+
+![demo debugger gif](https://github.com/ok97465/ipybridge.nvim/raw/main/doc/demo_debug.gif)
 
 ## Requirements
 
