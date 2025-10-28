@@ -96,8 +96,22 @@ function ExplorerState:render()
   self:set_content(lines, map)
 end
 
+local function sequence_items(entry)
+  local items = entry.sequence_items
+  if type(items) ~= 'table' then
+    items = entry.list_items
+  end
+  if type(items) ~= 'table' then
+    return {}
+  end
+  return items
+end
+
 local function is_previewable(entry)
   local kind = tostring(entry.kind or '')
+  if kind == 'list' or kind == 'tuple' or kind == 'set' then
+    return true
+  end
   if kind == 'ndarray' or kind == 'dataframe' or kind == 'dataclass' or kind == 'ctypes' or kind == 'ctypes_array' then
     return true
   end
@@ -110,15 +124,67 @@ function ExplorerState:drilldown_current()
     return
   end
   local lnum = api.nvim_win_get_cursor(self.win)[1]
-  local name = self._line2name[lnum]
-  if not name then
+  local mapping = self._line2name[lnum]
+  if not mapping then
     return
   end
-  local entry = self.vars[name]
-  if not entry or not is_previewable(entry) then
+  local path
+  local root
+  local previewable
+  if type(mapping) == 'table' then
+    path = mapping.path or mapping.name
+    root = mapping.name or mapping.root or path
+    previewable = mapping.previewable
+  else
+    path = mapping
+    root = mapping
+  end
+  if not path or path == '' then
     return
   end
-  require('ipybridge.data_viewer').open(name)
+  local entry = root and self.vars[root] or nil
+  if previewable == nil and entry then
+    if path == root then
+      previewable = is_previewable(entry)
+    else
+      local kind = tostring(entry.kind or '')
+      if (kind == 'list' or kind == 'tuple') and entry.sequence_index_paths ~= false then
+        for _, item in ipairs(sequence_items(entry)) do
+          if not item.placeholder and item.path_index ~= nil then
+            local idx = item.path_index
+            local idx_str
+            if type(idx) == 'number' then
+              idx_str = string.format('%d', idx)
+            elseif idx ~= nil then
+              idx_str = tostring(idx)
+            end
+            if idx_str then
+              local expected = string.format('%s[%s]', root, idx_str)
+              if expected == path then
+                if item.previewable ~= nil then
+                  previewable = item.previewable == true
+                else
+                  previewable = true
+                end
+                break
+              end
+            end
+          end
+        end
+      end
+    end
+  end
+  if previewable == nil then
+    if path == root then
+      previewable = entry and is_previewable(entry) or false
+    else
+      previewable = false
+    end
+  end
+  if not previewable then
+    return
+  end
+  require('ipybridge.data_viewer').open(path)
 end
 
 function ExplorerState:open()

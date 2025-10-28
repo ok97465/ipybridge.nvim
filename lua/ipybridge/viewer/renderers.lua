@@ -231,6 +231,84 @@ local function render_ndarray(data)
   return lines, {}
 end
 
+local function render_sequence(data, viewer_name)
+  local lines = {}
+  local map = {}
+  local kind = tostring(data.kind or 'list')
+  local length = tonumber(data.length)
+  if not length and type(data.total_shape) == 'table' then
+    local first = data.total_shape[1]
+    if type(first) == 'number' then
+      length = first
+    elseif type(first) == 'string' then
+      length = tonumber(first)
+    end
+  end
+  local row_offset = tonumber(data.row_offset) or 0
+  local items = {}
+  if type(data.items) == 'table' then
+    items = data.items
+  end
+  local allow_index = data.index_paths ~= false
+  local visible = 0
+  for _, item in ipairs(items) do
+    if not item.placeholder then
+      visible = visible + 1
+    end
+  end
+  local window_end = row_offset + math.max(visible - 1, 0)
+  local details = { kind, data.name or '' }
+  if length then
+    table.insert(details, string.format('len=%d', length))
+  end
+  if length and length > 0 then
+    table.insert(details, string.format('window=%d-%d', row_offset, window_end))
+  elseif length == 0 then
+    table.insert(details, 'empty')
+  end
+  local heading = table.concat(details, ' ')
+  table.insert(lines, heading)
+  table.insert(lines, separator_line(heading))
+  if #items == 0 then
+    table.insert(lines, '(no items)')
+    return lines, map
+  end
+  for _, item in ipairs(items) do
+    if item.placeholder then
+      local more = tonumber(item.more) or 0
+      if more > 0 then
+        table.insert(lines, string.format('... (+%d more items)', more))
+      else
+        table.insert(lines, '...')
+      end
+    else
+      local idx = item.index
+      local idx_str
+      if type(idx) == 'number' then
+        idx_str = string.format('%d', idx)
+      else
+        idx_str = tostring(idx or '?')
+      end
+      local ty = tostring(item.type or '')
+      local item_kind = tostring(item.kind or '')
+      local repr = tostring(item.repr or '')
+      local parts = { string.format('[%s] <%s>', idx_str, ty) }
+      if item_kind ~= '' then
+        table.insert(parts, 'kind=' .. item_kind)
+      end
+      if repr ~= '' then
+        table.insert(parts, '-> ' .. repr)
+      end
+      local line = table.concat(parts, ' ')
+      table.insert(lines, line)
+      if allow_index and item.previewable and item.path_index ~= nil and viewer_name and viewer_name ~= '' then
+        map[#lines] = string.format('%s[%s]', viewer_name, idx_str)
+      end
+    end
+  end
+  return lines, map
+end
+
 local function render_generic(data)
   local lines = {}
   table.insert(lines, string.format('Object %s', data.name or ''))
@@ -339,6 +417,8 @@ function Renderers.render(payload, context)
     return render_dataframe(payload)
   elseif payload.kind == 'ndarray' then
     return render_ndarray(payload)
+  elseif payload.kind == 'list' or payload.kind == 'tuple' or payload.kind == 'set' then
+    return render_sequence(payload, name)
   elseif payload.kind == 'dataclass' then
     return render_dataclass(payload, name)
   elseif payload.kind == 'ctypes' then

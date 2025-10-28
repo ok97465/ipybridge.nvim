@@ -577,6 +577,17 @@ def _child_preview_paths(name, preview, remaining):
             out.append(f"{base}['{col}']")
             if len(out) >= remaining:
                 break
+    elif kind in {"list", "tuple"}:
+        for item in preview.get("items") or []:
+            if item.get("placeholder"):
+                continue
+            idx = item.get("index")
+            if isinstance(idx, int):
+                out.append(f"{base}[{idx}]")
+            elif isinstance(idx, str) and idx:
+                out.append(f"{base}[{idx}]")
+            if len(out) >= remaining:
+                break
     return out
 
 
@@ -690,6 +701,17 @@ def _child_preview_paths(name, preview, remaining):
             if not isinstance(col, str) or not col:
                 continue
             out.append(f"{base}['{col}']")
+            if len(out) >= remaining:
+                break
+    elif kind in {"list", "tuple"}:
+        for item in preview.get("items") or []:
+            if item.get("placeholder"):
+                continue
+            idx = item.get("index")
+            if isinstance(idx, int):
+                out.append(f"{base}[{idx}]")
+            elif isinstance(idx, str) and idx:
+                out.append(f"{base}[{idx}]")
             if len(out) >= remaining:
                 break
     return out

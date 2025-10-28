@@ -26,6 +26,17 @@ _PANDAS: Any = _SENTINEL
 _CTYPES: Any = _SENTINEL
 _DEBUG_LOG = False
 _FILTERS = {"names": None, "types": None, "max_repr": 120}
+_PREVIEWABLE_KINDS = {
+    "ndarray",
+    "dataframe",
+    "dataclass",
+    "ctypes",
+    "ctypes_array",
+    "list",
+    "tuple",
+    "set",
+}
+_SEQUENCE_SAMPLE_LIMIT = 5
 
 
 def _lazy_import(holder: str):
@@ -161,6 +172,188 @@ def _shape(value: Any) -> Optional[list]:
     return None
 
 
+def _sequence_materialize(seq: Any, kind: str) -> Tuple[Optional[list], bool]:
+    allow_index = kind in {"list", "tuple"}
+    try:
+        if kind == "list":
+            return list(seq), allow_index
+        if kind == "tuple":
+            return list(seq), allow_index
+        if kind == "set":
+            values = list(seq)
+            try:
+                values.sort(key=lambda item: _safe_repr(item, 60))
+            except Exception:
+                pass
+            return values, False
+    except Exception:
+        return None, allow_index
+    return None, allow_index
+
+
+def _sequence_overview(seq: Any, max_repr: int, kind: str) -> Optional[Dict[str, Any]]:
+    materialized, allow_index = _sequence_materialize(seq, kind)
+    if materialized is None:
+        return None
+    try:
+        length = len(materialized)
+    except Exception:
+        return None
+    items = []
+    previewable_count = 0
+    limit = min(length, _SEQUENCE_SAMPLE_LIMIT)
+    repr_limit = max(20, min(max_repr, 80))
+    for idx in range(limit):
+        try:
+            value = materialized[idx]
+        except Exception:
+            items.append({
+                "index": idx,
+                "type": "?",
+                "kind": None,
+                "repr": "<unreadable>",
+                "previewable": False,
+                "path_index": idx if allow_index else None,
+            })
+            continue
+        item_kind, _ = _value_kind(value)
+        item_type = type(value).__name__
+        item_repr = _safe_repr(value, repr_limit)
+        previewable = False
+        if allow_index and item_kind in _PREVIEWABLE_KINDS:
+            previewable = True
+        elif allow_index and item_repr.endswith("..."):
+            previewable = True
+        entry: Dict[str, Any] = {
+            "index": idx,
+            "type": item_type,
+            "kind": item_kind,
+            "repr": item_repr,
+            "previewable": previewable if allow_index else False,
+            "path_index": idx if allow_index else None,
+        }
+        try:
+            if hasattr(value, "__len__") and not isinstance(value, (str, bytes, dict)):
+                entry["length"] = len(value)
+        except Exception:
+            pass
+        items.append(entry)
+        if entry["previewable"]:
+            previewable_count += 1
+    remaining = length - limit
+    if remaining > 0:
+        items.append({
+            "placeholder": True,
+            "more": remaining,
+        })
+    return {
+        "length": length,
+        "items": items,
+        "previewable_count": previewable_count,
+        "allow_index": allow_index,
+    }
+
+
+def _sequence_preview_payload(name: str,
+                              seq: Any,
+                              kind: str,
+                              rows_limit: int,
+                              row_offset: int,
+                              max_cols: int) -> Dict[str, Any]:
+    materialized, allow_index = _sequence_materialize(seq, kind)
+    if materialized is None:
+        return {
+            "name": name,
+            "kind": kind,
+            "items": [],
+            "row_offset": 0,
+            "col_offset": 0,
+            "max_rows": rows_limit,
+            "max_cols": max_cols,
+            "previewable_count": 0,
+        }
+    try:
+        length = len(materialized)
+    except Exception:
+        length = None
+    if length is None:
+        return {
+            "name": name,
+            "kind": kind,
+            "items": [],
+            "row_offset": 0,
+            "col_offset": 0,
+            "max_rows": rows_limit,
+            "max_cols": max_cols,
+            "previewable_count": 0,
+        }
+    row_base = row_offset
+    if length > 0 and row_base >= length:
+        row_base = max(length - rows_limit, 0)
+    if row_base < 0:
+        row_base = 0
+    end = row_base + rows_limit if rows_limit > 0 else length
+    if end > length:
+        end = length
+    items: list = []
+    previewable_count = 0
+    repr_limit = max(20, min(120, rows_limit * 8))
+    for idx in range(row_base, end):
+        try:
+            if allow_index:
+                value = seq[idx]  # type: ignore[index]
+            else:
+                value = materialized[idx]
+        except Exception:
+            items.append({
+                "index": idx,
+                "type": "?",
+                "kind": None,
+                "repr": "<unreadable>",
+                "previewable": False,
+                "path_index": None,
+            })
+            continue
+        item_kind, _ = _value_kind(value)
+        item_type = type(value).__name__
+        item_repr = _safe_repr(value, repr_limit)
+        previewable = False
+        if allow_index and item_kind in _PREVIEWABLE_KINDS:
+            previewable = True
+        elif allow_index and item_repr.endswith("..."):
+            previewable = True
+        entry = {
+            "index": idx,
+            "type": item_type,
+            "kind": item_kind,
+            "repr": item_repr,
+            "previewable": previewable if allow_index else False,
+            "path_index": idx if allow_index else None,
+        }
+        items.append(entry)
+        if entry["previewable"]:
+            previewable_count += 1
+    if end < length:
+        items.append({
+            "placeholder": True,
+            "more": length - end,
+        })
+    payload: Dict[str, Any] = {
+        "name": name,
+        "kind": kind,
+        "length": length,
+        "items": items,
+        "row_offset": row_base,
+        "col_offset": 0,
+        "max_rows": rows_limit,
+        "max_cols": max_cols,
+        "previewable_count": previewable_count,
+        "total_shape": [length],
+        "index_paths": allow_index,
+    }
+    return payload
+
+
 def _value_kind(value: Any) -> Tuple[Optional[str], Optional[str]]:
     kind: Optional[str] = None
     dtype: Optional[str] = None
@@ -181,6 +374,12 @@ def _value_kind(value: Any) -> Tuple[Optional[str], Optional[str]]:
             except Exception:
                 dtype = None
             return kind, dtype
+        if isinstance(value, list):
+            return "list", None
+        if isinstance(value, tuple):
+            return "tuple", None
+        if isinstance(value, set):
+            return "set", None
         if dataclasses.is_dataclass(value):
             return "dataclass", None
         ctypes_mod = _lazy_import("ctypes")
@@ -216,6 +415,18 @@ def _describe_value(value: Any, max_repr: int) -> Dict[str, Any]:
     }
     if kind:
         description["kind"] = kind
+    if kind in {"list", "tuple", "set"}:
+        overview = _sequence_overview(value, max_repr, kind)
+        if overview:
+            description["length"] = overview.get("length")
+            description["sequence_items"] = overview.get("items")
+            description["sequence_previewable_count"] = overview.get("previewable_count")
+            description["sequence_previewable"] = bool(overview.get("previewable_count"))
+            description["sequence_index_paths"] = overview.get("allow_index")
+            if kind == "list":
+                description["list_items"] = overview.get("items")
+                description["previewable_items"] = overview.get("previewable_count")
+                description["list_previewable"] = bool(overview.get("previewable_count"))
     return description
 
 
@@ -588,6 +799,17 @@ def preview_data(name: str,
                 if total_shape:
                     info["total_shape"] = total_shape
             return info
+        except Exception as exc:
+            return {"name": name, "error": str(exc)}
+
+    if isinstance(obj, (list, tuple, set)):
+        kind = "list"
+        if isinstance(obj, tuple):
+            kind = "tuple"
+        elif isinstance(obj, set):
+            kind = "set"
+        try:
+            return _sequence_preview_payload(name, obj, kind, rows_limit, row_offset, cols_limit)
         except Exception as exc:
             return {"name": name, "error": str(exc)}
 
