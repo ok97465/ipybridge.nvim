@@ -3,6 +3,21 @@
 
 local Renderers = {}
 
+local function sanitize_inline(value)
+  if value == nil then
+    return ''
+  end
+  local text = tostring(value)
+  return text:gsub('[\r\n]', ' ')
+end
+
+local function truncate(text, limit)
+  if #text > limit then
+    return text:sub(1, limit - 3) .. '...'
+  end
+  return text
+end
+
 local function to_str(v)
   local t = type(v)
   if v == nil then
@@ -234,7 +249,7 @@ end
 local function render_sequence(data, viewer_name)
   local lines = {}
   local map = {}
-  local kind = tostring(data.kind or 'list')
+  local kind = sanitize_inline(data.kind or 'list')
   local length = tonumber(data.length)
   if not length and type(data.total_shape) == 'table' then
     local first = data.total_shape[1]
@@ -257,7 +272,7 @@ local function render_sequence(data, viewer_name)
     end
   end
   local window_end = row_offset + math.max(visible - 1, 0)
-  local details = { kind, data.name or '' }
+  local details = { kind, sanitize_inline(data.name or '') }
   if length then
     table.insert(details, string.format('len=%d', length))
   end
@@ -289,9 +304,9 @@ local function render_sequence(data, viewer_name)
       else
         idx_str = tostring(idx or '?')
       end
-      local ty = tostring(item.type or '')
-      local item_kind = tostring(item.kind or '')
-      local repr = tostring(item.repr or '')
+      local ty = sanitize_inline(item.type or '')
+      local item_kind = sanitize_inline(item.kind or '')
+      local repr = truncate(sanitize_inline(item.repr or ''), 120)
       local parts = { string.format('[%s] <%s>', idx_str, ty) }
       if item_kind ~= '' then
         table.insert(parts, 'kind=' .. item_kind)
@@ -305,6 +320,95 @@ local function render_sequence(data, viewer_name)
         map[#lines] = string.format('%s[%s]', viewer_name, idx_str)
       end
     end
+  end
+  return lines, map
+end
+
+local function render_mapping(data, viewer_name)
+  local lines = {}
+  local map = {}
+  local length = tonumber(data.length)
+  if not length and type(data.total_shape) == 'table' then
+    local first = data.total_shape[1]
+    if type(first) == 'number' then
+      length = first
+    elseif type(first) == 'string' then
+      length = tonumber(first)
+    end
+  end
+  local row_offset = tonumber(data.row_offset) or 0
+  local items = {}
+  if type(data.items) == 'table' then
+    items = data.items
+  end
+  local allow_paths = data.allow_paths ~= false
+  local visible = 0
+  for _, item in ipairs(items) do
+    if not item.placeholder then
+      visible = visible + 1
+    end
+  end
+  local window_end = row_offset + math.max(visible - 1, 0)
+  local details = { 'dict', sanitize_inline(data.name or '') }
+  if length then
+    table.insert(details, string.format('len=%d', length))
+  end
+  if length and length > 0 then
+    table.insert(details, string.format('window=%d-%d', row_offset, window_end))
+  elseif length == 0 then
+    table.insert(details, 'empty')
+  end
+  local heading = table.concat(details, ' ')
+  table.insert(lines, heading)
+  table.insert(lines, separator_line(heading))
+  if #items == 0 then
+    table.insert(lines, '(no items)')
+    return lines, map
+  end
+  local header = { 'Key', 'Type', 'Kind', 'Preview' }
+  local rows = {}
+  local row_paths = {}
+  local placeholders = {}
+  for _, item in ipairs(items) do
+    if item.placeholder then
+      local more = tonumber(item.more) or 0
+      if more > 0 then
+        table.insert(placeholders, string.format('... (+%d more items)', more))
+      else
+        table.insert(placeholders, '...')
+      end
+    else
+      local key_display = truncate(sanitize_inline(item.key or ''), 60)
+      local ty = sanitize_inline(item.type or '')
+      local item_kind = sanitize_inline(item.kind or '')
+      local repr = truncate(sanitize_inline(item.repr or ''), 120)
+      rows[#rows + 1] = { key_display, ty, item_kind, repr }
+      if allow_paths and type(item.path_accessor) == 'string' and item.path_accessor ~= '' and item.previewable and viewer_name and viewer_name ~= '' then
+        row_paths[#rows] = viewer_name .. item.path_accessor
+      end
+    end
+  end
+  local head, row_lines = format_tabular(header, rows)
+  local reference = head
+  if (not reference or reference == '') and row_lines[1] then
+    reference = row_lines[1]
+  end
+  if reference and reference ~= '' then
+    table.insert(lines, separator_line(reference))
+  end
+  if head and head ~= '' then
+    table.insert(lines, head)
+    table.insert(lines, separator_line(head))
+  end
+  for idx, row_line in ipairs(row_lines) do
+    table.insert(lines, row_line)
+    local path = row_paths[idx]
+    if path then
+      map[#lines] = path
+    end
+  end
+  for _, placeholder in ipairs(placeholders) do
+    table.insert(lines, placeholder)
   end
   return lines, map
 end
@@ -419,6 +523,8 @@ function Renderers.render(payload, context)
     return render_ndarray(payload)
   elseif payload.kind == 'list' or payload.kind == 'tuple' or payload.kind == 'set' then
     return render_sequence(payload, name)
+  elseif payload.kind == 'dict' then
+    return render_mapping(payload, name)
   elseif payload.kind == 'dataclass' then
     return render_dataclass(payload, name)
   elseif payload.kind == 'ctypes' then

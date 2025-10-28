@@ -588,6 +588,15 @@ def _child_preview_paths(name, preview, remaining):
                 out.append(f"{base}[{idx}]")
             if len(out) >= remaining:
                 break
+    elif kind == "dict":
+        for item in preview.get("items") or []:
+            if item.get("placeholder"):
+                continue
+            accessor = item.get("path_accessor")
+            if isinstance(accessor, str) and accessor:
+                out.append(f"{base}{accessor}")
+                if len(out) >= remaining:
+                    break
     return out
 
 
@@ -714,6 +723,15 @@ def _child_preview_paths(name, preview, remaining):
                 out.append(f"{base}[{idx}]")
             if len(out) >= remaining:
                 break
+    elif kind == "dict":
+        for item in preview.get("items") or []:
+            if item.get("placeholder"):
+                continue
+            accessor = item.get("path_accessor")
+            if isinstance(accessor, str) and accessor:
+                out.append(f"{base}{accessor}")
+                if len(out) >= remaining:
+                    break
     return out
 
 

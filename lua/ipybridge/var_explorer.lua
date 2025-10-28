@@ -107,9 +107,17 @@ local function sequence_items(entry)
   return items
 end
 
+local function mapping_items(entry)
+  local items = entry.mapping_items
+  if type(items) ~= 'table' then
+    return {}
+  end
+  return items
+end
+
 local function is_previewable(entry)
   local kind = tostring(entry.kind or '')
-  if kind == 'list' or kind == 'tuple' or kind == 'set' then
+  if kind == 'list' or kind == 'tuple' or kind == 'set' or kind == 'dict' then
     return true
   end
   if kind == 'ndarray' or kind == 'dataframe' or kind == 'dataclass' or kind == 'ctypes' or kind == 'ctypes_array' then
@@ -168,6 +176,21 @@ function ExplorerState:drilldown_current()
                 end
                 break
               end
+            end
+          end
+        end
+      elseif kind == 'dict' and entry.mapping_allow_paths ~= false then
+        for _, item in ipairs(mapping_items(entry)) do
+          if not item.placeholder and type(item.path_accessor) == 'string' then
+            local accessor = item.path_accessor
+            local expected = root .. accessor
+            if expected == path then
+              if item.previewable ~= nil then
+                previewable = item.previewable == true
+              else
+                previewable = true
+              end
+              break
             end
           end
         end

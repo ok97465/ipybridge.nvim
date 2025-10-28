@@ -153,7 +153,7 @@ function ViewerState:move_rows(direction)
     return
   end
   local kind = window.kind
-  if kind ~= 'ndarray' and kind ~= 'dataframe' and kind ~= 'list' and kind ~= 'tuple' and kind ~= 'set' then
+  if kind ~= 'ndarray' and kind ~= 'dataframe' and kind ~= 'list' and kind ~= 'tuple' and kind ~= 'set' and kind ~= 'dict' then
     return
   end
   local default_rows = select(1, viewer_limits())

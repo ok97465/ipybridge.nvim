@@ -35,8 +35,10 @@ _PREVIEWABLE_KINDS = {
     "list",
     "tuple",
     "set",
+    "dict",
 }
 _SEQUENCE_SAMPLE_LIMIT = 5
+_MAPPING_SAMPLE_LIMIT = 5
 
 
 def _lazy_import(holder: str):
@@ -354,6 +356,163 @@ def _sequence_preview_payload(name: str,
     return payload
 
 
+def _safe_key_repr(key: Any, limit: int = 60) -> str:
+    try:
+        rep = repr(key)
+    except Exception:
+        return "<unrepr>"
+    if len(rep) > limit:
+        return rep[:limit] + "..."
+    return rep
+
+
+def _format_dict_accessor(key: Any) -> Optional[str]:
+    if isinstance(key, str):
+        escaped = key.replace("\\", "\\\\").replace("'", "\\'")
+        return f"['{escaped}']"
+    if isinstance(key, (int, float, bool)):
+        return f"[{repr(key)}]"
+    return None
+
+
+def _sorted_mapping_items(mapping: Any) -> Optional[list]:
+    try:
+        items = list(mapping.items())
+    except Exception:
+        return None
+    decorated = []
+    for idx, (key, value) in enumerate(items):
+        key_repr = _safe_key_repr(key)
+        decorated.append(((key_repr, type(key).__name__, idx), (key, value)))
+    decorated.sort(key=lambda item: item[0])
+    return [pair for _, pair in decorated]
+
+
+def _mapping_overview(mapping: Any, max_repr: int) -> Optional[Dict[str, Any]]:
+    if not isinstance(mapping, dict):
+        return None
+    sorted_items = _sorted_mapping_items(mapping)
+    if sorted_items is None:
+        return None
+    length = len(sorted_items)
+    preview: list = []
+    allow_paths = False
+    previewable_count = 0
+    limit = min(length, _MAPPING_SAMPLE_LIMIT)
+    repr_limit = max(20, min(max_repr, 80))
+    for idx in range(limit):
+        key, value = sorted_items[idx]
+        item_kind, _ = _value_kind(value)
+        value_type = type(value).__name__
+        value_repr = _safe_repr(value, repr_limit)
+        accessor = _format_dict_accessor(key)
+        if accessor:
+            allow_paths = True
+        previewable = bool(accessor) and (
+            (item_kind in _PREVIEWABLE_KINDS) or value_repr.endswith("...")
+        )
+        entry: Dict[str, Any] = {
+            "index": idx,
+            "key": _safe_key_repr(key),
+            "key_type": type(key).__name__,
+            "type": value_type,
+            "kind": item_kind,
+            "repr": value_repr,
+            "previewable": previewable,
+            "path_accessor": accessor,
+        }
+        preview.append(entry)
+        if previewable:
+            previewable_count += 1
+    remaining = length - limit
+    if remaining > 0:
+        preview.append({
+            "placeholder": True,
+            "more": remaining,
+        })
+    return {
+        "length": length,
+        "items": preview,
+        "previewable_count": previewable_count,
+        "allow_paths": allow_paths,
+    }
+
+
+def _mapping_preview_payload(name: str,
+                             mapping: Any,
+                             rows_limit: int,
+                             row_offset: int,
+                             max_cols: int) -> Dict[str, Any]:
+    materialized = _sorted_mapping_items(mapping) or []
+    length = len(materialized)
+    row_base = row_offset
+    if length > 0 and row_base >= length:
+        row_base = max(length - rows_limit, 0)
+    if row_base < 0:
+        row_base = 0
+    end = row_base + rows_limit if rows_limit > 0 else length
+    if end > length:
+        end = length
+    items: list = []
+    previewable_count = 0
+    repr_limit = max(20, min(120, rows_limit * 8))
+    allow_paths = False
+    for idx in range(row_base, end):
+        try:
+            key, value = materialized[idx]
+        except Exception:
+            items.append({
+                "index": idx,
+                "key": "<error>",
+                "key_type": "?",
+                "type": "?",
+                "kind": None,
+                "repr": "<unreadable>",
+                "previewable": False,
+                "path_accessor": None,
+            })
+            continue
+        item_kind, _ = _value_kind(value)
+        value_type = type(value).__name__
+        value_repr = _safe_repr(value, repr_limit)
+        accessor = _format_dict_accessor(key)
+        previewable = bool(accessor) and (
+            (item_kind in _PREVIEWABLE_KINDS) or value_repr.endswith("...")
+        )
+        if accessor:
+            allow_paths = True
+        items.append({
+            "index": idx,
+            "key": _safe_key_repr(key),
+            "key_type": type(key).__name__,
+            "type": value_type,
+            "kind": item_kind,
+            "repr": value_repr,
+            "previewable": previewable,
+            "path_accessor": accessor,
+        })
+        if previewable:
+            previewable_count += 1
+    if end < length:
+        items.append({
+            "placeholder": True,
+            "more": length - end,
+        })
+    return {
+        "name": name,
+        "kind": "dict",
+        "length": length,
+        "items": items,
+        "row_offset": row_base,
+        "col_offset": 0,
+        "max_rows": rows_limit,
+        "max_cols": max_cols,
+        "previewable_count": previewable_count,
+        "total_shape": [length],
+        "allow_paths": allow_paths,
+    }
+
+
 def _value_kind(value: Any) -> Tuple[Optional[str], Optional[str]]:
     kind: Optional[str] = None
     dtype: Optional[str] = None
@@ -380,6 +539,8 @@ def _value_kind(value: Any) -> Tuple[Optional[str], Optional[str]]:
             return "tuple", None
         if isinstance(value, set):
             return "set", None
+        if isinstance(value, dict):
+            return "dict", None
         if dataclasses.is_dataclass(value):
             return "dataclass", None
         ctypes_mod = _lazy_import("ctypes")
@@ -427,6 +588,13 @@ def _describe_value(value: Any, max_repr: int) -> Dict[str, Any]:
                 description["list_items"] = overview.get("items")
                 description["previewable_items"] = overview.get("previewable_count")
                 description["list_previewable"] = bool(overview.get("previewable_count"))
+    elif kind == "dict":
+        overview = _mapping_overview(value, max_repr)
+        if overview:
+            description["length"] = overview.get("length")
+            description["mapping_items"] = overview.get("items")
+            description["mapping_previewable_count"] = overview.get("previewable_count")
+            description["mapping_allow_paths"] = overview.get("allow_paths")
     return description
 
 
@@ -810,6 +978,11 @@ def preview_data(name: str,
             kind = "set"
         try:
             return _sequence_preview_payload(name, obj, kind, rows_limit, row_offset, cols_limit)
+        except Exception as exc:
+            return {"name": name, "error": str(exc)}
+    if isinstance(obj, dict):
+        try:
+            return _mapping_preview_payload(name, obj, rows_limit, row_offset, cols_limit)
         except Exception as exc:
             return {"name": name, "error": str(exc)}
 
