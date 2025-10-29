@@ -133,6 +133,26 @@ it('enter key opens preview for expandable variable', function()
   assert(env.last_open == 'data', 'expected data viewer to open for previewable variable')
 end)
 
+it('renders sequence variables without drilldown rows', function()
+  local explorer, _, buf_lines = fake_env()
+  explorer.open()
+  explorer.on_vars({
+    seq = {
+      type = 'list',
+      kind = 'list',
+      repr = '[1, 2, 3]',
+      sequence_items = {
+        { index = 0, type = 'int', repr = '1', previewable = true, path_index = 0 },
+        { index = 1, type = 'int', repr = '2', previewable = true, path_index = 1 },
+      },
+    },
+  })
+  local lines = buf_lines(explorer.buf)
+  assert(#lines == 3, string.format('expected 3 lines but found %d', #lines))
+  assert(type(explorer._line2name[3]) == 'table', 'root row should remain mappable')
+  assert(explorer._line2name[4] == nil, 'no extra mappings expected for drilldown rows')
+end)
+
 it('refresh delegates to ipybridge refresh helper when not in debug mode', function()
   local explorer, env = fake_env()
   explorer.refresh()

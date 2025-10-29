@@ -11,6 +11,20 @@ local function sanitize_inline(value)
   return text:gsub('[\r\n]', ' ')
 end
 
+local function payload_kind(payload)
+  if type(payload) ~= 'table' then
+    return nil
+  end
+  local kind = payload.kind
+  if kind == 'object' then
+    local seq = payload.sequence_kind
+    if type(seq) == 'string' and seq ~= '' then
+      return seq
+    end
+  end
+  return kind
+end
+
 local function truncate(text, limit)
   if #text > limit then
     return text:sub(1, limit - 3) .. '...'
@@ -249,7 +263,8 @@ end
 local function render_sequence(data, viewer_name)
   local lines = {}
   local map = {}
-  local kind = sanitize_inline(data.kind or 'list')
+  local effective_kind = payload_kind(data) or 'list'
+  local kind = sanitize_inline(effective_kind)
   local length = tonumber(data.length)
   if not length and type(data.total_shape) == 'table' then
     local first = data.total_shape[1]
@@ -517,19 +532,21 @@ end
 
 function Renderers.render(payload, context)
   local name = context and context.viewer_name or payload.name
-  if payload.kind == 'dataframe' then
+  local kind = payload_kind(payload)
+  local root_kind = payload.kind
+  if root_kind == 'dataframe' then
     return render_dataframe(payload)
-  elseif payload.kind == 'ndarray' then
+  elseif root_kind == 'ndarray' then
     return render_ndarray(payload)
-  elseif payload.kind == 'list' or payload.kind == 'tuple' or payload.kind == 'set' then
+  elseif kind == 'list' or kind == 'tuple' or kind == 'set' then
     return render_sequence(payload, name)
-  elseif payload.kind == 'dict' then
+  elseif kind == 'dict' then
     return render_mapping(payload, name)
-  elseif payload.kind == 'dataclass' then
+  elseif root_kind == 'dataclass' then
     return render_dataclass(payload, name)
-  elseif payload.kind == 'ctypes' then
+  elseif root_kind == 'ctypes' then
     return render_ctypes(payload, name)
-  elseif payload.kind == 'ctypes_array' then
+  elseif root_kind == 'ctypes_array' then
     return render_ctypes_array(payload)
   end
   return render_generic(payload)

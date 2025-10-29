@@ -562,6 +562,11 @@ def _child_preview_paths(name, preview, remaining):
     base = name
     out = []
     kind = preview.get("kind")
+    seq_kind = preview.get("sequence_kind")
+    if isinstance(seq_kind, str) and seq_kind and kind == "object":
+        effective_kind = seq_kind
+    else:
+        effective_kind = kind
     if kind in {"ctypes", "dataclass"}:
         for field in preview.get("fields") or []:
             fname = field.get("name")
@@ -577,7 +582,7 @@ def _child_preview_paths(name, preview, remaining):
             out.append(f"{base}['{col}']")
             if len(out) >= remaining:
                 break
-    elif kind in {"list", "tuple"}:
+    elif effective_kind in {"list", "tuple"}:
         for item in preview.get("items") or []:
             if item.get("placeholder"):
                 continue
@@ -588,7 +593,7 @@ def _child_preview_paths(name, preview, remaining):
                 out.append(f"{base}[{idx}]")
             if len(out) >= remaining:
                 break
-    elif kind == "dict":
+    elif effective_kind == "dict":
         for item in preview.get("items") or []:
             if item.get("placeholder"):
                 continue
@@ -697,6 +702,11 @@ def _child_preview_paths(name, preview, remaining):
     base = name
     out = []
     kind = preview.get("kind")
+    seq_kind = preview.get("sequence_kind")
+    if isinstance(seq_kind, str) and seq_kind and kind == "object":
+        effective_kind = seq_kind
+    else:
+        effective_kind = kind
     if kind in {"ctypes", "dataclass"}:
         for field in preview.get("fields") or []:
             fname = field.get("name")
@@ -712,7 +722,7 @@ def _child_preview_paths(name, preview, remaining):
             out.append(f"{base}['{col}']")
             if len(out) >= remaining:
                 break
-    elif kind in {"list", "tuple"}:
+    elif effective_kind in {"list", "tuple"}:
         for item in preview.get("items") or []:
             if item.get("placeholder"):
                 continue
@@ -723,7 +733,7 @@ def _child_preview_paths(name, preview, remaining):
                 out.append(f"{base}[{idx}]")
             if len(out) >= remaining:
                 break
-    elif kind == "dict":
+    elif effective_kind == "dict":
         for item in preview.get("items") or []:
             if item.get("placeholder"):
                 continue

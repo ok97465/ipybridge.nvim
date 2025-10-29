@@ -59,6 +59,20 @@ local function viewer_limits()
   return rows, cols
 end
 
+local function preview_kind(payload)
+  if type(payload) ~= 'table' then
+    return nil
+  end
+  local kind = payload.kind
+  if kind == 'object' then
+    local seq = payload.sequence_kind
+    if type(seq) == 'string' and seq ~= '' then
+      return seq
+    end
+  end
+  return kind
+end
+
 local function clamp_offset(offset, delta, total, window)
   local target = offset + delta
   if target < 0 then
@@ -152,7 +166,7 @@ function ViewerState:move_rows(direction)
   if not window then
     return
   end
-  local kind = window.kind
+  local kind = preview_kind(window)
   if kind ~= 'ndarray' and kind ~= 'dataframe' and kind ~= 'list' and kind ~= 'tuple' and kind ~= 'set' and kind ~= 'dict' then
     return
   end
@@ -175,7 +189,7 @@ function ViewerState:move_cols(direction)
   if not window then
     return
   end
-  local kind = window.kind
+  local kind = preview_kind(window)
   if kind ~= 'ndarray' and kind ~= 'dataframe' then
     return
   end
@@ -302,6 +316,7 @@ function ViewerState:_apply_window_metadata(data)
     window.shape = nil
   end
   window.kind = data.kind
+  window.sequence_kind = data.sequence_kind
   self._window = window
 end
 

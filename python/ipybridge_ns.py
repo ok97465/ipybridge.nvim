@@ -266,13 +266,15 @@ def _sequence_preview_payload(name: str,
     if materialized is None:
         return {
             "name": name,
-            "kind": kind,
+            "kind": "object",
+            "sequence_kind": kind,
             "items": [],
             "row_offset": 0,
             "col_offset": 0,
             "max_rows": rows_limit,
             "max_cols": max_cols,
             "previewable_count": 0,
+            "repr": _safe_repr(seq, 300),
         }
     try:
         length = len(materialized)
@@ -281,13 +283,15 @@ def _sequence_preview_payload(name: str,
     if length is None:
         return {
             "name": name,
-            "kind": kind,
+            "kind": "object",
+            "sequence_kind": kind,
             "items": [],
             "row_offset": 0,
             "col_offset": 0,
             "max_rows": rows_limit,
             "max_cols": max_cols,
             "previewable_count": 0,
+            "repr": _safe_repr(seq, 300),
         }
     row_base = row_offset
     if length > 0 and row_base >= length:
@@ -342,7 +346,8 @@ def _sequence_preview_payload(name: str,
         })
     payload: Dict[str, Any] = {
         "name": name,
-        "kind": kind,
+        "kind": "object",
+        "sequence_kind": kind,
         "length": length,
         "items": items,
         "row_offset": row_base,
@@ -352,6 +357,7 @@ def _sequence_preview_payload(name: str,
         "previewable_count": previewable_count,
         "total_shape": [length],
         "index_paths": allow_index,
+        "repr": _safe_repr(seq, 300),
     }
     return payload
 

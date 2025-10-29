@@ -1,15 +1,32 @@
 -- Utility helpers for ipybridge.nvim
 -- All comments are written in English per user request.
 
-local uv = vim.uv
+local uv = (vim and (vim.uv or vim.loop)) or nil
 local api = vim.api
 local fn = vim.fn
-local is_windows = uv.os_uname().sysname == 'Windows_NT'
+-- Detect Windows even when uv.os_uname is unavailable in stripped test shims.
+local function detect_windows()
+  if uv and uv.os_uname then
+    local ok, uname = pcall(uv.os_uname)
+    if ok and uname and uname.sysname == 'Windows_NT' then
+      return true
+    end
+  end
+  if jit and jit.os then
+    return jit.os == 'Windows'
+  end
+  local sep = package.config and package.config:sub(1, 1) or '/'
+  return sep == '\\'
+end
+local is_windows = detect_windows()
 
 local M = {}
 
 -- Fast file existence check using libuv.
 function M.file_exists(path)
+  if not (uv and uv.fs_stat) then
+    return false
+  end
   return uv.fs_stat(path) and true or false
 end
 

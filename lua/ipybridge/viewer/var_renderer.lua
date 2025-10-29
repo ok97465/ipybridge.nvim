@@ -135,114 +135,6 @@ local function mapping_preview_summary(entry)
   return table.concat(parts, ' ')
 end
 
-local function append_sequence_items(name, kind, entry, lines, mappings)
-  local items = sequence_items(entry)
-  local allow_index = entry.sequence_index_paths
-  if allow_index == nil then
-    allow_index = kind ~= 'set'
-  end
-
-  if #items == 0 then
-    table.insert(lines, string.format('  (empty %s)', kind))
-    table.insert(mappings, false)
-    return
-  end
-
-  for _, item in ipairs(items) do
-    if item.placeholder then
-      local more = tonumber(item.more) or 0
-      if more > 0 then
-        table.insert(lines, string.format('  ... (+%d more)', more))
-      else
-        table.insert(lines, '  ...')
-      end
-      table.insert(mappings, false)
-    else
-      local idx = item.index
-      local idx_str
-      if type(idx) == 'number' then
-        idx_str = string.format('%d', idx)
-      else
-        idx_str = tostring(idx or '?')
-      end
-      local item_type = sanitize_inline(item.type or '')
-      local item_kind = sanitize_inline(item.kind or '')
-      local repr = truncate(sanitize_inline(item.repr or ''), 120)
-      local parts = { string.format('  [%s] <%s>', idx_str, item_type) }
-      if item_kind ~= '' then
-        table.insert(parts, 'kind=' .. item_kind)
-      end
-      if repr ~= '' then
-        table.insert(parts, 'repr=' .. repr)
-      end
-      table.insert(lines, table.concat(parts, ' '))
-      if allow_index and item.path_index ~= nil and item.previewable then
-        local mapping = {
-          name = name,
-          path = string.format('%s[%s]', name, idx_str),
-          previewable = true,
-        }
-        table.insert(mappings, mapping)
-      else
-        table.insert(mappings, false)
-      end
-    end
-  end
-end
-
-local function append_mapping_items(name, entry, lines, mappings)
-  local items = mapping_items(entry)
-  local allow_paths = entry.mapping_allow_paths
-  if allow_paths == nil then
-    allow_paths = entry.allow_paths
-  end
-  if allow_paths == nil then
-    allow_paths = true
-  end
-
-  if #items == 0 then
-    table.insert(lines, '  (empty dict)')
-    table.insert(mappings, false)
-    return
-  end
-
-  for _, item in ipairs(items) do
-    if item.placeholder then
-      local more = tonumber(item.more) or 0
-      if more > 0 then
-        table.insert(lines, string.format('  ... (+%d more)', more))
-      else
-        table.insert(lines, '  ...')
-      end
-      table.insert(mappings, false)
-    else
-      local key_display = truncate(sanitize_inline(item.key or ''), 60)
-      local item_type = sanitize_inline(item.type or '')
-      local item_kind = sanitize_inline(item.kind or '')
-      local repr = truncate(sanitize_inline(item.repr or ''), 120)
-      local parts = { string.format('  %s <%s>', key_display, item_type) }
-      if item_kind ~= '' then
-        table.insert(parts, 'kind=' .. item_kind)
-      end
-      if repr ~= '' then
-        table.insert(parts, 'repr=' .. repr)
-      end
-      local accessor = item.path_accessor
-      table.insert(lines, table.concat(parts, ' '))
-      if allow_paths and type(accessor) == 'string' and accessor ~= '' and item.previewable then
-        local mapping = {
-          name = name,
-          path = name .. accessor,
-          previewable = true,
-        }
-        table.insert(mappings, mapping)
-      else
-        table.insert(mappings, false)
-      end
-    end
-  end
-end
-
 local function render_entry(name, entry)
   local lines = {}
   local mappings = {}
@@ -258,13 +150,8 @@ local function render_entry(name, entry)
   end
   local row = string.format('%-20s %-14s %-9s %s', name, ty, shp, preview)
   table.insert(lines, row)
+  -- Keep mapping for root variable only; child rows are intentionally omitted.
   table.insert(mappings, { name = name, path = name })
-
-  if sequence_kinds[kind] then
-    append_sequence_items(name, kind, entry, lines, mappings)
-  elseif kind == 'dict' then
-    append_mapping_items(name, entry, lines, mappings)
-  end
 
   return lines, mappings
 end
