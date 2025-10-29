@@ -264,6 +264,11 @@ function M.toggle_breakpoint()
   breakpoints.toggle_current_line()
 end
 
+---Prompt for a conditional breakpoint at the current cursor line.
+function M.set_conditional_breakpoint()
+  breakpoints.set_conditional_current_line()
+end
+
 M.config = {
 	profile_name = "vim",
 	startup_script = "import_in_console.py",

@@ -10,6 +10,7 @@ local utils = require('ipybridge.utils')
 
 local BP_SIGN_GROUP = 'IpybridgeBreakpoints'
 local BP_SIGN_NAME = 'IpybridgeBreakpoint'
+local BP_CONDITIONAL_SIGN_NAME = 'IpybridgeConditionalBreakpoint'
 
 local Breakpoints = {}
 
@@ -25,7 +26,206 @@ local state = {
   term_send = nil,
   exec = nil,
   is_term_open = nil,
+  condition_input = nil,
 }
+
+local function trim_condition(text)
+  if type(text) ~= 'string' then
+    return ''
+  end
+  return (text:gsub('^%s+', ''):gsub('%s+$', ''))
+end
+
+local function sanitize_entry(meta)
+  if type(meta) ~= 'table' then
+    return {}
+  end
+  return meta
+end
+
+local function entry_condition(meta)
+  if type(meta) ~= 'table' then
+    return nil
+  end
+  local cond = meta.condition
+  if type(cond) ~= 'string' then
+    return nil
+  end
+  local trimmed = trim_condition(cond)
+  if trimmed == '' then
+    return nil
+  end
+  return trimmed
+end
+
+local function ensure_line_entry(norm, line)
+  state.map[norm] = state.map[norm] or {}
+  local meta = state.map[norm][line]
+  if type(meta) ~= 'table' then
+    meta = sanitize_entry(meta)
+  end
+  state.map[norm][line] = meta
+  return meta
+end
+
+local function clear_line_entry(norm, line)
+  local entry = state.map[norm]
+  if not entry then
+    return
+  end
+  entry[line] = nil
+  if next(entry) == nil then
+    state.map[norm] = nil
+  end
+end
+
+local function set_line_condition(norm, line, condition)
+  local meta = ensure_line_entry(norm, line)
+  local trimmed = trim_condition(condition or '')
+  if trimmed ~= '' then
+    meta.condition = trimmed
+  else
+    meta.condition = nil
+  end
+  return meta
+end
+
+local function default_condition_input(opts, cb)
+  opts = type(opts) == 'table' and opts or {}
+  local prompt = opts.prompt or 'Breakpoint condition'
+  local default = opts.default or ''
+  if type(default) ~= 'string' then
+    default = tostring(default or '')
+  end
+  local columns = tonumber(vim.o and vim.o.columns) or 120
+  local lines = tonumber(vim.o and vim.o.lines) or 40
+  local width = math.floor(columns * 0.6)
+  if width < 30 then
+    width = 30
+  end
+  local min_prompt = #prompt + 6
+  if width < min_prompt then
+    width = min_prompt
+  end
+  if width > columns - 4 then
+    width = math.max(columns - 4, min_prompt)
+  end
+  local row = math.floor((lines - 1) / 2)
+  local col = math.floor((columns - width) / 2)
+  local ok_buf, bufnr = pcall(api.nvim_create_buf, false, true)
+  if not ok_buf or not bufnr or bufnr == 0 then
+    if vim.ui and vim.ui.input then
+      vim.ui.input({ prompt = prompt, default = default }, cb)
+    elseif cb then
+      cb(nil)
+    end
+    return
+  end
+  pcall(api.nvim_buf_set_option, bufnr, 'buftype', 'prompt')
+  pcall(api.nvim_buf_set_option, bufnr, 'bufhidden', 'wipe')
+  pcall(api.nvim_buf_set_option, bufnr, 'filetype', 'ipybridgeBreakpointCondition')
+  local ok_win, win = pcall(api.nvim_open_win, bufnr, true, {
+    relative = 'editor',
+    style = 'minimal',
+    border = 'rounded',
+    width = width,
+    height = 1,
+    row = row,
+    col = col,
+    noautocmd = true,
+  })
+  if not ok_win or not win or win == 0 then
+    pcall(api.nvim_buf_delete, bufnr, { force = true })
+    if cb then
+      cb(nil)
+    end
+    return
+  end
+  pcall(vim.fn.prompt_setprompt, bufnr, prompt .. ': ')
+  if default ~= '' then
+    pcall(fn.prompt_settext, bufnr, default)
+  end
+  local closed = false
+  local function finalize(value, cancelled)
+    if closed then
+      return
+    end
+    closed = true
+    if api.nvim_win_is_valid(win) then
+      api.nvim_win_close(win, true)
+    end
+    if cancelled then
+      if cb then
+        cb(nil)
+      end
+      return
+    end
+    if cb then
+      cb(value)
+    end
+  end
+  pcall(vim.fn.prompt_setcallback, bufnr, function(text)
+    finalize(text or '', false)
+  end)
+  pcall(vim.fn.prompt_setinterrupt, bufnr, function()
+    finalize(nil, true)
+  end)
+  if vim.keymap and vim.keymap.set then
+    vim.keymap.set('n', '<Esc>', function()
+      finalize(nil, true)
+    end, { buffer = bufnr, nowait = true, noremap = true, silent = true })
+    vim.keymap.set('i', '<Esc>', function()
+      finalize(nil, true)
+    end, { buffer = bufnr, nowait = true, noremap = true, silent = true })
+    vim.keymap.set('n', 'q', function()
+      finalize(nil, true)
+    end, { buffer = bufnr, nowait = true, noremap = true, silent = true })
+  end
+  pcall(vim.cmd, 'startinsert')
+  vim.schedule(function()
+    if not api.nvim_win_is_valid(win) or not api.nvim_buf_is_valid(bufnr) then
+      return
+    end
+    local function cursor_to(line_text)
+      if type(line_text) ~= 'string' then
+        line_text = ''
+      end
+      pcall(api.nvim_win_set_cursor, win, { 1, math.max(0, #line_text) })
+    end
+    if default ~= '' then
+      local feed_keys = '<C-u>' .. default
+      if api and api.nvim_replace_termcodes then
+        local ok_term, converted = pcall(api.nvim_replace_termcodes, feed_keys, true, false, true)
+        if ok_term and type(converted) == 'string' and converted ~= '' then
+          feed_keys = converted
+        end
+      end
+      if api and api.nvim_feedkeys then
+        api.nvim_feedkeys(feed_keys, 'in', false)
+      else
+        pcall(fn.prompt_settext, bufnr, default)
+        pcall(api.nvim_buf_set_lines, bufnr, 0, -1, false, { default })
+      end
+      local function finalize_seed()
+        if not api.nvim_win_is_valid(win) or not api.nvim_buf_is_valid(bufnr) then
+          return
+        end
+        local ok_after, after_lines = pcall(api.nvim_buf_get_lines, bufnr, 0, 1, false)
+        local line_text = (ok_after and type(after_lines) == 'table' and after_lines[1]) or default
+        cursor_to(line_text)
+      end
+      if vim and vim.defer_fn then
+        vim.defer_fn(finalize_seed, 10)
+      else
+        vim.schedule(finalize_seed)
+      end
+      return
+    end
+    local ok_lines, buf_lines = pcall(api.nvim_buf_get_lines, bufnr, 0, 1, false)
+    local line_text = (ok_lines and type(buf_lines) == 'table' and buf_lines[1]) or ''
+    cursor_to(line_text)
+  end)
+end
 
 local function normalize_path(path)
   if not path or path == '' then
@@ -40,14 +240,28 @@ end
 
 local function collect_payload()
   local payload = {}
-  for file_path, line_set in pairs(state.map) do
-    local lines = {}
-    for line in pairs(line_set) do
-      table.insert(lines, line)
+  for file_path, line_map in pairs(state.map) do
+    local entries = {}
+    for line, meta in pairs(line_map) do
+      if type(line) == 'number' and line > 0 then
+        local cond = entry_condition(meta)
+        local item = { line = line }
+        if cond then
+          item.condition = cond
+        end
+        table.insert(entries, item)
+      end
     end
-    if #lines > 0 then
-      table.sort(lines)
-      payload[file_path] = lines
+    if #entries > 0 then
+      table.sort(entries, function(a, b)
+        if a.line ~= b.line then
+          return a.line < b.line
+        end
+        local ac = a.condition or ''
+        local bc = b.condition or ''
+        return ac < bc
+      end)
+      payload[file_path] = entries
     end
   end
   return payload
@@ -60,6 +274,12 @@ local function ensure_breakpoint_support()
   pcall(vim.fn.sign_define, BP_SIGN_NAME, {
     text = 'B',
     texthl = 'DiagnosticSignError',
+    linehl = '',
+    numhl = '',
+  })
+  pcall(vim.fn.sign_define, BP_CONDITIONAL_SIGN_NAME, {
+    text = '?',
+    texthl = 'DiagnosticSignWarn',
     linehl = '',
     numhl = '',
   })
@@ -112,19 +332,24 @@ local function refresh_signs_for(bufnr)
   if not entry then
     return
   end
-  local lines = {}
-  for line in pairs(entry) do
-    table.insert(lines, line)
+  local items = {}
+  for line, meta in pairs(entry) do
+    if type(line) == 'number' and line > 0 then
+      table.insert(items, { line = line, meta = meta })
+    end
   end
-  table.sort(lines)
-  for _, line in ipairs(lines) do
+  table.sort(items, function(a, b)
+    return a.line < b.line
+  end)
+  for _, item in ipairs(items) do
     state.seq = state.seq + 1
     local id = state.seq
-    vim.fn.sign_place(id, BP_SIGN_GROUP, BP_SIGN_NAME, bufnr, {
-      lnum = line,
+    local sign_name = entry_condition(item.meta) and BP_CONDITIONAL_SIGN_NAME or BP_SIGN_NAME
+    vim.fn.sign_place(id, BP_SIGN_GROUP, sign_name, bufnr, {
+      lnum = item.line,
       priority = 80,
     })
-    state.signs[bufnr][line] = id
+    state.signs[bufnr][item.line] = { id = id, sign = sign_name }
   end
 end
 
@@ -255,17 +480,68 @@ function Breakpoints.toggle_current_line()
     return
   end
   local line = api.nvim_win_get_cursor(0)[1]
-  state.map[norm] = state.map[norm] or {}
-  if state.map[norm][line] then
-    state.map[norm][line] = nil
-    if next(state.map[norm]) == nil then
-      state.map[norm] = nil
-    end
+  local entry = state.map[norm] and state.map[norm][line]
+  if entry ~= nil then
+    clear_line_entry(norm, line)
   else
-    state.map[norm][line] = true
+    ensure_line_entry(norm, line)
   end
   refresh_signs_for(bufnr)
   Breakpoints.push()
+end
+
+function Breakpoints.set_conditional_current_line()
+  ensure_breakpoint_support()
+  local bufnr = api.nvim_get_current_buf()
+  if not api.nvim_buf_is_loaded(bufnr) then
+    return
+  end
+  local bt = vim.bo[bufnr]
+  if bt and bt.filetype ~= 'python' then
+    return
+  end
+  local norm = normalize_path(api.nvim_buf_get_name(bufnr))
+  if not norm then
+    return
+  end
+  local line = api.nvim_win_get_cursor(0)[1]
+  local current_meta = state.map[norm] and state.map[norm][line] or nil
+  local default_cond = entry_condition(current_meta) or ''
+  local provider = state.condition_input or default_condition_input
+  provider({
+    prompt = 'Breakpoint condition',
+    default = default_cond,
+  }, function(value)
+    if value == nil then
+      return
+    end
+    vim.schedule(function()
+      local trimmed = trim_condition(value or '')
+      local prior_meta = state.map[norm] and state.map[norm][line] or nil
+      local prior_cond = entry_condition(prior_meta)
+      if trimmed == '' then
+        if prior_meta ~= nil then
+          clear_line_entry(norm, line)
+          refresh_signs_for(bufnr)
+          Breakpoints.push()
+        end
+        return
+      end
+      if prior_meta == nil or prior_cond ~= trimmed then
+        set_line_condition(norm, line, trimmed)
+        refresh_signs_for(bufnr)
+        Breakpoints.push()
+      end
+    end)
+  end)
+end
+
+function Breakpoints._set_condition_input(provider)
+  if type(provider) == 'function' then
+    state.condition_input = provider
+  else
+    state.condition_input = nil
+  end
 end
 
 function Breakpoints.clear_for_file(path)

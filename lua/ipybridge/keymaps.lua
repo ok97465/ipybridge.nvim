@@ -58,6 +58,8 @@ function M.apply_buffer(bufnr)
   set('v', '<leader>r', my.run_lines, 'IPy: Run selection')
   -- Toggle debugger breakpoint at cursor
   set('n', '<leader>b', my.toggle_breakpoint, 'IPy: Toggle breakpoint')
+  -- Conditional breakpoint prompt
+  set('n', '<leader>B', my.set_conditional_breakpoint, 'IPy: Conditional breakpoint')
   -- F9 as alternative for line/selection
   set('n', '<F9>', my.run_line, 'IPy: Run line (F9)')
   set('v', '<F9>', my.run_lines, 'IPy: Run selection (F9)')

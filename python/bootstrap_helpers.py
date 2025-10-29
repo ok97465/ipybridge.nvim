@@ -82,24 +82,61 @@ def _myipy_reset_debug_baseline(frame=None):
 def _myipy_normalize_breakpoints(raw):
     result = {}
     if isinstance(raw, dict):
-        for raw_path, lines in raw.items():
+        for raw_path, entries in raw.items():
             if not isinstance(raw_path, str):
                 continue
             try:
                 norm_path = os.path.abspath(raw_path)
             except Exception:
                 norm_path = raw_path
-            collected = []
-            if isinstance(lines, (list, tuple, set)):
-                for entry in lines:
-                    try:
-                        value = int(entry)
-                    except Exception:
-                        continue
-                    if value > 0:
-                        collected.append(value)
+            collected = {}
+            source = entries
+            if isinstance(entries, dict):
+                source = list(entries.values())
+            if isinstance(source, (list, tuple, set)):
+                for entry in source:
+                    line_no = None
+                    condition = None
+                    if isinstance(entry, dict):
+                        try:
+                            line_no = int(entry.get("line"))
+                        except Exception:
+                            continue
+                        if not line_no or line_no <= 0:
+                            continue
+                        cond_val = entry.get("condition")
+                        if isinstance(cond_val, str):
+                            cond_val = cond_val.strip()
+                            if cond_val == "":
+                                cond_val = None
+                        else:
+                            cond_val = None
+                        condition = cond_val
+                    else:
+                        try:
+                            line_no = int(entry)
+                        except Exception:
+                            continue
+                        if not line_no or line_no <= 0:
+                            continue
+                    existing = collected.get(line_no)
+                    if existing is None:
+                        if condition:
+                            collected[line_no] = {"line": line_no, "condition": condition}
+                        else:
+                            collected[line_no] = {"line": line_no}
+                    elif condition:
+                        existing["condition"] = condition
             if collected:
-                result[norm_path] = sorted(set(collected))
+                ordered = []
+                for line_no in sorted(collected):
+                    item = collected[line_no]
+                    if not isinstance(item, dict):
+                        item = {"line": line_no}
+                    if "line" not in item:
+                        item = {"line": line_no, "condition": item.get("condition")}
+                    ordered.append(item)
+                result[norm_path] = ordered
     return result
 
 
@@ -171,16 +208,47 @@ def _myipy_apply_breakpoints(payload=None, dbg=None):
         return success
     if not callable(set_break):
         return success
-    for bp_file, bp_lines in payload.items():
-        if not isinstance(bp_lines, (list, tuple, set)):
+    for bp_file, bp_entries in payload.items():
+        if isinstance(bp_entries, dict):
+            entries = list(bp_entries.values())
+        else:
+            entries = bp_entries
+        if not isinstance(entries, (list, tuple, set)):
             continue
-        for bp_line in bp_lines:
+        latest = {}
+        for entry in entries:
+            line_no = None
+            condition = None
+            if isinstance(entry, dict):
+                try:
+                    line_no = int(entry.get("line"))
+                except Exception:
+                    continue
+                if not line_no or line_no <= 0:
+                    continue
+                cond_val = entry.get("condition")
+                if isinstance(cond_val, str):
+                    cond_val = cond_val.strip()
+                    if cond_val == "":
+                        cond_val = None
+                else:
+                    cond_val = None
+                condition = cond_val
+            else:
+                try:
+                    line_no = int(entry)
+                except Exception:
+                    continue
+                if not line_no or line_no <= 0:
+                    continue
+            latest[line_no] = condition
+        for line_no in sorted(latest):
+            condition = latest[line_no]
             try:
-                line_no = int(bp_line)
-            except Exception:
-                continue
-            try:
-                set_break(bp_file, line_no)
+                if condition:
+                    set_break(bp_file, line_no, cond=condition)
+                else:
+                    set_break(bp_file, line_no)
             except Exception as exc:
                 _ipy_log_debug(
                     f"debug breakpoint set failed {bp_file}:{line_no}: {exc}"

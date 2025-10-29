@@ -164,6 +164,7 @@ Minimal helper to run IPython/Jupyter in a terminal split and send code from the
   - `F6` → debug current file (`%debugfile`)
   - `<leader>r` → run current line
   - `<leader>b` → toggle debugger breakpoint
+  - `<leader>B` → toggle conditional breakpoint
   - `F9` → run current line
   - `F10` → debugger step over
   - `F11` → debugger step into
