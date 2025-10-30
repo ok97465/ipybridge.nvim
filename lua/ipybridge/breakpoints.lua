@@ -23,11 +23,19 @@ local state = {
   signature = nil,
   needs_sync = false,
   registered = false,
-  term_send = nil,
   exec = nil,
   is_term_open = nil,
   condition_input = nil,
 }
+
+local function warn_user(message)
+  if not message then
+    return
+  end
+  vim.schedule(function()
+    vim.notify(tostring(message), vim.log.levels.WARN)
+  end)
+end
 
 local function trim_condition(text)
   if type(text) ~= 'string' then
@@ -392,7 +400,6 @@ function Breakpoints.get_file_path()
 end
 
 function Breakpoints.attach_session(opts)
-  state.term_send = opts and opts.send or nil
   state.exec = opts and opts.exec or nil
   state.is_term_open = opts and opts.is_term_open or nil
   state.registered = false
@@ -401,7 +408,6 @@ function Breakpoints.attach_session(opts)
 end
 
 function Breakpoints.detach_session()
-  state.term_send = nil
   state.exec = nil
   state.is_term_open = nil
   state.registered = false
@@ -412,7 +418,7 @@ function Breakpoints.sync_with_kernel()
   if not state.needs_sync then
     return
   end
-  if not state.term_send and not state.exec then
+  if not state.exec then
     return
   end
   if state.is_term_open and not state.is_term_open() then
@@ -424,18 +430,17 @@ function Breakpoints.sync_with_kernel()
   end
   local safe = utils.py_quote_single(path)
   local payload = string.format("_myipy_register_breakpoints_file('%s')\n", safe)
-  local function fallback_send()
-    if state.term_send then
-      state.term_send(payload)
-    end
-  end
-  if state.exec then
-    state.exec(payload, { fallback = fallback_send })
-  else
-    fallback_send()
-  end
+  state.exec(payload, {
+    on_success = function()
+      state.registered = true
+    end,
+    on_error = function(reason)
+      state.registered = false
+      state.needs_sync = true
+      warn_user('ipybridge: failed to register breakpoint file via ZMQ (' .. tostring(reason or 'unknown') .. ')')
+    end,
+  })
   state.needs_sync = false
-  state.registered = true
 end
 
 function Breakpoints.push()

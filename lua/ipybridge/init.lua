@@ -479,21 +479,12 @@ M.open = function(go_back, cb)
         M._pending_exec = {}
         M._helpers_waiters = {}
         breakpoints.attach_session({
-          send = function(payload)
-            if type(payload) ~= 'string' or payload == '' then
-              return
-            end
-            term_send(payload)
-          end,
           exec = function(payload, opts)
             if type(payload) ~= 'string' or payload == '' then
               return
             end
             local merged = vim.tbl_extend('force', {
               require_helpers = true,
-              fallback = function()
-                term_send(payload)
-              end,
             }, opts or {})
             exec_with_pipeline(payload, merged)
           end,
@@ -558,16 +549,10 @@ M.open = function(go_back, cb)
               end
             end
             if #startup_magics > 0 then
-              local function send_magics_via_terminal()
-                for _, stmt in ipairs(startup_magics) do
-                  term_send_line(stmt)
-                end
-              end
               local payload = table.concat(startup_magics, '\n') .. '\n'
               exec_with_pipeline(payload, {
-                fallback = send_magics_via_terminal,
-                on_error = function()
-                  send_magics_via_terminal()
+                on_error = function(reason)
+                  warn_user('ipybridge: failed to run startup magics via ZMQ (' .. tostring(reason or 'unknown') .. ')')
                 end,
               })
             end
@@ -646,13 +631,14 @@ function M._sync_var_filters()
     :gsub('__TYPES_JSON__', types_json)
     :gsub('__MAX_REPR__', tostring(max_repr))
     :gsub('__ENABLE_LOGS__', enable_logs and 'True' or 'False')
-  local function fallback()
-    local payload = utils.send_exec_block(script)
-    term_send(payload)
-  end
   exec_with_pipeline(script, {
     require_helpers = true,
-    fallback = fallback,
+    on_error = function(reason)
+      if M._last_filters_signature == signature then
+        M._last_filters_signature = nil
+      end
+      warn_user('ipybridge: failed to sync variable filters via ZMQ (' .. tostring(reason or 'unknown') .. ')')
+    end,
   })
   M._last_filters_signature = signature
 end

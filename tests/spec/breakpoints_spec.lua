@@ -208,20 +208,14 @@ local function fresh_breakpoints()
   return mod, ctx
 end
 
-it('sync_with_kernel uses exec and fallback', function()
+it('sync_with_kernel uses exec callbacks', function()
   local breakpoints, ctx = fresh_breakpoints()
-  local fallback_called = false
   local exec_calls = {}
+  local captured_opts
   breakpoints.attach_session({
-    send = function(payload)
-      ctx.term_payload = payload
-    end,
     exec = function(payload, opts)
-      table.insert(exec_calls, { payload = payload, opts = opts })
-      if opts and opts.fallback then
-        fallback_called = true
-        opts.fallback()
-      end
+      table.insert(exec_calls, payload)
+      captured_opts = opts
     end,
     is_term_open = function()
       return true
@@ -229,10 +223,16 @@ it('sync_with_kernel uses exec and fallback', function()
   })
 
   assert(exec_calls[1], 'exec should be invoked during attach_session')
-  assert(exec_calls[1].payload:match("_myipy_register_breakpoints_file"), 'expected register breakpoints command')
-  assert(fallback_called == true, 'fallback should be triggered')
-  assert(ctx.term_payload and ctx.term_payload:match("_myipy_register_breakpoints_file"), 'fallback send should reach terminal')
+  assert(exec_calls[1]:match("_myipy_register_breakpoints_file"), 'expected register breakpoints command')
+  assert(captured_opts and type(captured_opts.on_error) == 'function', 'on_error callback should be provided')
+  assert(captured_opts and type(captured_opts.on_success) == 'function', 'on_success callback should be provided')
+  assert(not captured_opts or captured_opts.fallback == nil, 'fallback should not be provided')
+  assert(ctx.term_payload == nil, 'terminal fallback should not be triggered')
   assert(ctx.quoted_path:match('breakpoints'), 'path should be normalised')
+
+  captured_opts.on_error('failure')
+  breakpoints.sync_with_kernel()
+  assert(#exec_calls == 2, 'sync should retry after error')
 end)
 
 it('set_conditional_current_line stores condition and removes breakpoint on blank input', function()
@@ -271,7 +271,6 @@ end)
 it('toggle_current_line tracks lines and writes file', function()
   local breakpoints, ctx = fresh_breakpoints()
   breakpoints.attach_session({
-    send = function() end,
     exec = function() end,
     is_term_open = function()
       return true

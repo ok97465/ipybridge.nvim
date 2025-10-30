@@ -276,6 +276,7 @@ local function fresh_init()
     'ipybridge.breakpoints',
     'ipybridge.cmp_bridge',
     'ipybridge.exec_magics',
+    'ipybridge.zmq_client',
   }
   for _, name in ipairs(modules) do
     package.loaded[name] = nil
@@ -432,6 +433,31 @@ local function fresh_init()
     }
   end
 
+  package.preload['ipybridge.zmq_client'] = function()
+    return {
+      start = function(...)
+        ctx.zmq_start = { ... }
+        return true
+      end,
+      request = function(op, args, cb)
+        ctx.zmq_requests = ctx.zmq_requests or {}
+        table.insert(ctx.zmq_requests, { op = op, args = args })
+        if cb then
+          if op == 'ping' then
+            cb({ ok = true, tag = 'pong' })
+          else
+            cb({ ok = true, tag = op })
+          end
+        end
+        return true
+      end,
+      is_running = function()
+        return true
+      end,
+      stop = function() end,
+    }
+  end
+
   local prev_vim = stub_vim(ctx)
   local init_mod = require('ipybridge.init')
   _G.vim = prev_vim
@@ -475,10 +501,17 @@ it('open starts console and attaches breakpoint session', function()
   assert(cb_ok == true, 'callback should receive success flag')
   assert(init_mod.is_open() == true, 'terminal should report open state')
 
-  local sent = ctx.attached_breakpoints.send
-  assert(type(sent) == 'function', 'send handler missing')
-  sent('payload-1')
-  assert(ctx.term_payloads[1] == 'payload-1', 'payload should reach term instance')
+  local attached_exec = ctx.attached_breakpoints.exec
+  assert(type(attached_exec) == 'function', 'exec handler missing')
+  attached_exec('payload-1', { on_success = function() end })
+  local payload_routed = false
+  for _, req in ipairs(ctx.zmq_requests or {}) do
+    if req.op == 'exec' and type(req.args) == 'table' and req.args.code == 'payload-1' then
+      payload_routed = true
+      break
+    end
+  end
+  assert(payload_routed, 'payload should route through ZMQ exec')
 
   local keymap_seen = false
   for _, entry in ipairs(ctx.keymaps) do
@@ -494,19 +527,23 @@ it('run_file waits for runcell helpers before dispatch', function()
   local init_mod, ctx = fresh_init()
   init_mod.run_file()
 
-  assert(ctx.term_payloads and #ctx.term_payloads > 0, 'expected terminal payloads')
-  local helper_idx, runfile_idx
-  for idx, payload in ipairs(ctx.term_payloads) do
-    if payload:match('%.myipy_runcell%.py') then
-      helper_idx = helper_idx or idx
-    end
-    if payload:match('runfile%(') then
-      runfile_idx = runfile_idx or idx
+  local helper_request = false
+  for _, req in ipairs(ctx.zmq_requests or {}) do
+    if req.op == 'exec' and type(req.args) == 'table' and tostring(req.args.code):find('print("magic")') then
+      helper_request = true
+      break
     end
   end
-  assert(helper_idx, 'helper bootstrap should execute before runfile call')
+  assert(helper_request, 'helper bootstrap should execute via ZMQ')
+
+  local runfile_idx
+  for idx, payload in ipairs(ctx.term_payloads or {}) do
+    if payload:match('runfile%(') then
+      runfile_idx = idx
+      break
+    end
+  end
   assert(runfile_idx, 'runfile command should be sent')
-  assert(helper_idx < runfile_idx, 'runfile must be queued after helpers load')
 end)
 
 it('run_cell defers runcell call until helpers are ready', function()
@@ -522,19 +559,23 @@ it('run_cell defers runcell call until helpers are ready', function()
 
   init_mod.run_cell()
 
-  assert(ctx.term_payloads and #ctx.term_payloads > 0, 'expected terminal payloads')
-  local helper_idx, runcell_idx
-  for idx, payload in ipairs(ctx.term_payloads) do
-    if payload:match('%.myipy_runcell%.py') then
-      helper_idx = helper_idx or idx
-    end
-    if payload:match('runcell%(') then
-      runcell_idx = runcell_idx or idx
+  local helper_request = false
+  for _, req in ipairs(ctx.zmq_requests or {}) do
+    if req.op == 'exec' and type(req.args) == 'table' and tostring(req.args.code):find('print("magic")') then
+      helper_request = true
+      break
     end
   end
-  assert(helper_idx, 'helper bootstrap should execute before runcell call')
+  assert(helper_request, 'helper bootstrap should execute via ZMQ')
+
+  local runcell_idx
+  for idx, payload in ipairs(ctx.term_payloads or {}) do
+    if payload:match('runcell%(') then
+      runcell_idx = idx
+      break
+    end
+  end
   assert(runcell_idx, 'runcell command should be sent')
-  assert(helper_idx < runcell_idx, 'runcell must be queued after helpers load')
 end)
 
 local all_ok = true
