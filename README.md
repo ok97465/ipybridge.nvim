@@ -42,8 +42,7 @@ Minimal helper to run IPython/Jupyter in a terminal split and send code from the
         -- Matplotlib backend
         matplotlib_backend = nil,        -- e.g. 'qt', 'inline', 'macosx', 'tk', 'agg'
 
-        -- Spyder-like runcell support
-        prefer_runcell_magic = false,    -- run cells via helper instead of raw text
+        -- Spyder-like runcell/runfile support
         runcell_save_before_run = true,  -- save buffer before runcell to use up-to-date file
         runfile_save_before_run = true,  -- save buffer before runfile to use up-to-date file
         debugfile_save_before_run = true, -- save buffer before debugfile to use up-to-date file
@@ -67,7 +66,6 @@ Minimal helper to run IPython/Jupyter in a terminal split and send code from the
 ### Additional options
 
 - `matplotlib_backend` (string|nil): `qt`, `inline`, `macosx`, `tk`, `agg`
-- `prefer_runcell_magic` (boolean): If `true`, run cells via an IPython helper (`runcell(index, path)` / `%runcell`).
 - `runcell_save_before_run` (boolean): Save the buffer before runcell execution (default `true`).
 - `runfile_save_before_run` (boolean): Save the buffer before runfile execution (default `true`).
 - `debugfile_save_before_run` (boolean): Save the buffer before `%debugfile` execution (default `true`).
@@ -137,7 +135,7 @@ Minimal helper to run IPython/Jupyter in a terminal split and send code from the
 - Qt requires `PyQt5` or `PySide6`. Tk requires Tk support. macOS may require framework build Python.
 
 ## Spyder-like Runcell
-- Enable `prefer_runcell_magic = true` to execute cells via a helper registered in IPython.
+
 - The helper defines `runcell(index, path, cwd=None)` and a `%runcell` line magic. Cells are delimited by lines matching `^# %%+`.
 - The plugin computes the current cell index (0-based) and calls `runcell(index, <current file path>, <cwd according to exec_cwd_mode>)`.
 - If `runcell_save_before_run = true` (default), the buffer is saved first to ensure the helper runs the latest contents.
@@ -145,7 +143,7 @@ Minimal helper to run IPython/Jupyter in a terminal split and send code from the
 
 ## Runfile Magic
 - The helper also defines `runfile(path, cwd=None)` and registers `%runfile`.
-- When `prefer_runcell_magic = true`, `run_file()` uses `runfile('<abs_path>', '<cwd>')` instead of `%run` and avoids changing the global working directory.
+- `run_file()` uses `runfile('<abs_path>', '<cwd>')` to avoid changing the global working directory.
 
 ## Variable Explorer & Data Viewer (ZMQ)
 - Open the variable explorer and request current variables from the kernel over a lightweight ZMQ backend.

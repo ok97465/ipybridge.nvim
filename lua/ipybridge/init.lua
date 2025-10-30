@@ -280,9 +280,7 @@ M.config = {
     python_cmd = "python3",
     -- Matplotlib backend for the interactive console; applied via `%matplotlib`.
     -- Recommended values include 'qt', 'inline', 'macosx', 'tk', or 'agg'.
-    matplotlib_backend = nil,
-    -- Prefer Spyder-like runcell helper over sending raw lines
-    prefer_runcell_magic = false,
+  matplotlib_backend = nil,
     -- Save buffer before calling runcell to ensure the file content is current
     runcell_save_before_run = true,
     -- Save buffer before calling runfile to ensure the file content is current
@@ -577,10 +575,8 @@ M.open = function(go_back, cb)
               -- Common numerics so user snippets like `array([...])` work
               term_send("import numpy as np; from numpy import array\n")
             end
-            -- Optionally seed runcell helpers for Spyder-like behavior
-            if M.config.prefer_runcell_magic then
-              M._ensure_runcell_helpers()
-            end
+      -- Seed runcell helpers for Spyder-like behavior
+      M._ensure_runcell_helpers()
             M.term_instance:scroll_to_bottom()
             if go_back == true then
                 vim.cmd("wincmd p")
@@ -754,28 +750,23 @@ M.run_file = function()
 		pcall(vim.cmd, 'write')
 	end
 	with_terminal(true, function()
-		if not M.is_open() then return end
-		if M.config.prefer_runcell_magic then
-			-- Use runfile helper with optional cwd argument; avoid global %cd
-			M._ensure_runcell_helpers()
-			local cwd_arg = nil
-			local mode = M.config.exec_cwd_mode or 'pwd'
-			if mode == 'file' then
-				cwd_arg = fn.fnamemodify(abs_path, ':p:h')
-			elseif mode == 'pwd' then
-				cwd_arg = fn.getcwd()
-			end
-			local safe = utils.py_quote_single(abs_path)
-			if cwd_arg and #cwd_arg > 0 then
-				local safecwd = utils.py_quote_single(cwd_arg)
-				term_send(string.format("runfile('%s','%s')\n", safe, safecwd))
-			else
-				term_send(string.format("runfile('%s')\n", safe))
-			end
-		else
-			local safe = utils.py_quote_double(abs_path)
-			term_send(string.format("%%run \"%s\"\n", safe))
-		end
+    if not M.is_open() then return end
+    -- Use runfile helper with optional cwd argument; avoid global %cd
+    M._ensure_runcell_helpers()
+    local cwd_arg = nil
+    local mode = M.config.exec_cwd_mode or 'pwd'
+    if mode == 'file' then
+      cwd_arg = fn.fnamemodify(abs_path, ':p:h')
+    elseif mode == 'pwd' then
+      cwd_arg = fn.getcwd()
+    end
+    local safe = utils.py_quote_single(abs_path)
+    if cwd_arg and #cwd_arg > 0 then
+      local safecwd = utils.py_quote_single(cwd_arg)
+      term_send(string.format("runfile('%s','%s')\n", safe, safecwd))
+    else
+      term_send(string.format("runfile('%s')\n", safe))
+    end
 		clear_debug_state()
 	end)
 end
@@ -1318,48 +1309,46 @@ M.run_cell = function()
 	local line_start = get_start_line_cell(idx_line_cursor)
 	local line_stop, has_next_cell = get_stop_line_cell(idx_line_cursor + 1)
 
-	-- Prefer IPython runcell helper when configured and viable.
-	if M.config.prefer_runcell_magic then
-		local path = fn.expand('%:p')
-		if path and #path > 0 then
-			-- Save buffer before run if requested
-			if vim.bo.modified and M.config.runcell_save_before_run ~= false then
-				pcall(vim.cmd, 'write')
-			end
-			if (not vim.bo.modified) and utils.file_exists(path) then
-				-- Determine working directory to pass into runcell (no global %cd)
-				local cwd_arg = nil
-				local mode = M.config.exec_cwd_mode or 'pwd'
-				if mode == 'file' then
-					cwd_arg = fn.fnamemodify(path, ':p:h')
-				elseif mode == 'pwd' then
-					cwd_arg = fn.getcwd()
-				end
-				-- Count cell index by markers strictly matching '^# %%+'
-				local pre_lines = api.nvim_buf_get_lines(0, 0, math.max(line_start - 1, 0), false)
-				local idx = 0
-				for _, ln in ipairs(pre_lines) do
-					local s = CELL_RE:match_str(ln)
-					if s ~= nil then idx = idx + 1 end
-				end
-				with_terminal(true, function()
-					if not M.is_open() then return end
-					M._ensure_runcell_helpers()
-					local safe = utils.py_quote_single(path)
-					if cwd_arg and #cwd_arg > 0 then
-						local safecwd = utils.py_quote_single(cwd_arg)
-						term_send(string.format("runcell(%d, '%s', '%s')\n", idx, safe, safecwd))
-					else
-						term_send(string.format("runcell(%d, '%s')\n", idx, safe))
-					end
-						clear_debug_state()
-					if has_next_cell then
-						local idx_line = math.min(line_stop + 1, api.nvim_buf_line_count(0))
-						api.nvim_win_set_cursor(0, { idx_line, 0 })
-					end
-				end)
-				return
-			end
+  -- Prefer IPython runcell helper when viable.
+  local path = fn.expand('%:p')
+  if path and #path > 0 then
+    -- Save buffer before run if requested
+    if vim.bo.modified and M.config.runcell_save_before_run ~= false then
+      pcall(vim.cmd, 'write')
+    end
+    if (not vim.bo.modified) and utils.file_exists(path) then
+      -- Determine working directory to pass into runcell (no global %cd)
+      local cwd_arg = nil
+      local mode = M.config.exec_cwd_mode or 'pwd'
+      if mode == 'file' then
+        cwd_arg = fn.fnamemodify(path, ':p:h')
+      elseif mode == 'pwd' then
+        cwd_arg = fn.getcwd()
+      end
+      -- Count cell index by markers strictly matching '^# %%+'
+      local pre_lines = api.nvim_buf_get_lines(0, 0, math.max(line_start - 1, 0), false)
+      local idx = 0
+      for _, ln in ipairs(pre_lines) do
+        local s = CELL_RE:match_str(ln)
+        if s ~= nil then idx = idx + 1 end
+      end
+      with_terminal(true, function()
+        if not M.is_open() then return end
+        M._ensure_runcell_helpers()
+        local safe = utils.py_quote_single(path)
+        if cwd_arg and #cwd_arg > 0 then
+          local safecwd = utils.py_quote_single(cwd_arg)
+          term_send(string.format("runcell(%d, '%s', '%s')\n", idx, safe, safecwd))
+        else
+          term_send(string.format("runcell(%d, '%s')\n", idx, safe))
+        end
+        clear_debug_state()
+        if has_next_cell then
+          local idx_line = math.min(line_stop + 1, api.nvim_buf_line_count(0))
+          api.nvim_win_set_cursor(0, { idx_line, 0 })
+        end
+      end)
+      return
 		end
 	end
 
