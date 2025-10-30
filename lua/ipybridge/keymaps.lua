@@ -66,6 +66,7 @@ function M.apply_buffer(bufnr)
   -- Debugger stepping helpers
   set('n', '<F10>', my.debug_step_over, 'IPy: Debug step over (F10)')
   set('n', '<F11>', my.debug_step_into, 'IPy: Debug step into (F11)')
+  set('n', '<S-F11>', my.debug_step_out, 'IPy: Debug step out (Shift+F11)')
   set('n', '<F12>', my.debug_continue, 'IPy: Debug continue (F12)')
   -- Cell navigation in normal and visual modes
   set('n', ']c', my.down_cell, 'IPy: Next cell')

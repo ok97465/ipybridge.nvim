@@ -911,6 +911,11 @@ M.debug_step_into = function()
   send_debug_command('!step')
 end
 
+---Debugger step out (Shift-F11 equivalent).
+M.debug_step_out = function()
+  send_debug_command('!return')
+end
+
 ---Debugger continue (F12 equivalent).
 M.debug_continue = function()
   send_debug_command('!continue', { deactivate = true })

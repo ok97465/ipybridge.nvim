@@ -101,6 +101,7 @@ Minimal helper to run IPython/Jupyter in a terminal split and send code from the
   - `F6` → launch `%debugfile` for the active buffer (uses `exec_cwd_mode` to set the working directory)
   - `F10` → `next`
   - `F11` → `step`
+  - `Shift+F11` → `return`
   - `F12` → `continue`
 - `%debugfile` becomes available automatically once the console starts; no manual `%load_ext` needed.
 
@@ -168,6 +169,7 @@ Minimal helper to run IPython/Jupyter in a terminal split and send code from the
   - `F9` → run current line
   - `F10` → debugger step over
   - `F11` → debugger step into
+  - `Shift+F11` → debugger step out
   - `F12` → debugger continue
   - `]c` / `[c` → next/prev cell
   - `<leader>vx` → variable explorer (global command also available)
@@ -210,6 +212,7 @@ vim.api.nvim_create_autocmd('FileType', {
     vim.keymap.set('v', '<F9>', ipybridge.run_lines, { buffer = true })
     vim.keymap.set('n', '<F10>', ipybridge.debug_step_over, { buffer = true })
     vim.keymap.set('n', '<F11>', ipybridge.debug_step_into, { buffer = true })
+    vim.keymap.set('n', '<S-F11>', ipybridge.debug_step_out, { buffer = true })
     vim.keymap.set('n', '<F12>', ipybridge.debug_continue, { buffer = true })
     vim.keymap.set('n', ']c', ipybridge.down_cell, { buffer = true })
     vim.keymap.set('n', '[c', ipybridge.up_cell,   { buffer = true })
