@@ -187,6 +187,7 @@ Minimal helper to run IPython/Jupyter in a terminal split and send code from the
 - `:IpybridgeVars` → open variable explorer
 - `:IpybridgeVarsRefresh` → refresh variables
 - `:IpybridgeDebugFile` → debug the current file via `%debugfile`
+- `:IpybridgeInterrupt` → send an interrupt signal to the connected kernel (Ctrl+C equivalent)
 - `:IpybridgePreview <name>` → open preview for a variable or path (supports dotted/indexed paths, e.g., `yy.b`, `yy.c`, `hh.h2`, `arr[0]`)
 
 ### Terminal Buffers

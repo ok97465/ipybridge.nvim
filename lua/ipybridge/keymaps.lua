@@ -31,6 +31,7 @@ function M.apply_defaults()
   pcall(api.nvim_create_user_command, 'IpybridgeVars', function() require('ipybridge').var_explorer_open() end, {})
   pcall(api.nvim_create_user_command, 'IpybridgeVarsRefresh', function() require('ipybridge').var_explorer_refresh() end, {})
   pcall(api.nvim_create_user_command, 'IpybridgeDebugFile', function() require('ipybridge').debug_file() end, {})
+  pcall(api.nvim_create_user_command, 'IpybridgeInterrupt', function() require('ipybridge').interrupt() end, {})
   pcall(api.nvim_create_user_command, 'IpybridgePreview', function(opts)
     local name = (opts and opts.args) or ''
     if name ~= '' then require('ipybridge').request_preview(name) end

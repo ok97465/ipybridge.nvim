@@ -1274,6 +1274,38 @@ function M.request_preview(name, opts)
   end)
 end
 
+---Request an interrupt signal for the connected kernel.
+function M.interrupt()
+  local function dispatch_interrupt()
+    local ok, z = pcall(require, 'ipybridge.zmq_client')
+    if not ok or not z then
+      warn_user('ipybridge: ZMQ backend not available; interrupt failed')
+      return
+    end
+    local sent = z.request('interrupt', {}, function(msg)
+      if msg and msg.ok and msg.tag == 'interrupt' then
+        return
+      end
+      local err = (msg and msg.error) or 'interrupt failed'
+      warn_user('ipybridge: ' .. err)
+    end)
+    if not sent then
+      warn_user('ipybridge: failed to send interrupt request')
+    end
+  end
+  if M.config.use_zmq and M._zmq_ready then
+    dispatch_interrupt()
+    return
+  end
+  M.ensure_zmq(function(ok)
+    if ok then
+      dispatch_interrupt()
+      return
+    end
+    warn_user('ipybridge: ZMQ backend not available; interrupt failed')
+  end)
+end
+
 function M.ensure_zmq(cb)
   executor:ensure_zmq(cb)
 end

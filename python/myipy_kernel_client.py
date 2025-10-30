@@ -10,6 +10,8 @@ import json
 import socket
 import sys
 import time
+import threading
+import uuid
 from pathlib import Path
 from typing import IO, Callable, Optional, Tuple
 
@@ -58,6 +60,10 @@ class KernelChannel:
         self._logger = logger
         self._client = None
         self._debug_port: Optional[int] = None
+        self._control_comm_id: Optional[str] = None
+        self._control_comm_ready = False
+        self._control_comm_lock = threading.Lock()
+        self._iopub_backlog = []
 
     @property
     def client(self):  # type: ignore[override]
@@ -76,6 +82,7 @@ class KernelChannel:
         self._logger.log("channels started")
         self._client = client
         self._send_prelude(prelude)
+        self._setup_control_comm()
 
     def _send_prelude(self, prelude: str) -> None:
         msg_id = self.client.execute(
@@ -91,7 +98,7 @@ class KernelChannel:
             pass
         while True:
             try:
-                io_msg = self.client.get_iopub_msg(timeout=0.2)
+                io_msg = self._get_iopub_msg(timeout=0.2)
             except Exception:
                 break
             if (
@@ -115,6 +122,224 @@ class KernelChannel:
                     except Exception:
                         self._logger.log("failed to parse debug preview port from prelude")
         self._logger.log("prelude ready")
+
+    def _get_iopub_msg(self, timeout: float):
+        """Return the next IOPub message, considering the local backlog first."""
+        if self._iopub_backlog:
+            return self._iopub_backlog.pop(0)
+        return self.client.get_iopub_msg(timeout=timeout)
+
+    def _cache_iopub_msg(self, msg: dict) -> None:
+        """Store an IOPub message so other consumers can process it later."""
+        self._iopub_backlog.append(msg)
+        if len(self._iopub_backlog) > 200:
+            self._iopub_backlog.pop(0)
+
+    def _consume_cached_iopub(self, extractor):
+        """Remove the first cached message matching extractor(msg)."""
+        for idx, msg in enumerate(self._iopub_backlog):
+            try:
+                result = extractor(msg)
+            except Exception:
+                result = None
+            if result is not None:
+                self._iopub_backlog.pop(idx)
+                return result
+        return None
+
+    def _await_comm_reply(
+        self,
+        request_id: str,
+        timeout: float,
+    ) -> Tuple[bool, Optional[str], bool]:
+        """Wait for a control comm reply matching the provided request id.
+
+        Returns (ok, error, timed_out). timed_out is True only when no reply
+        arrived before the timeout expired.
+        """
+        if not request_id:
+            return False, "missing request id", False
+        if self._client is None:
+            return False, "kernel client unavailable", False
+
+        def parse_reply(msg):
+            if not isinstance(msg, dict):
+                return None
+            if msg.get("msg_type") != "comm_msg":
+                return None
+            content = msg.get("content") or {}
+            if content.get("comm_id") != self._control_comm_id:
+                return None
+            data = content.get("data") or {}
+            response = data.get("response") or {}
+            if response.get("request_id") != request_id:
+                return None
+            ok = bool(response.get("ok", True))
+            err = response.get("error")
+            if not ok and err:
+                self._logger.log(f"control comm reply error: {err}")
+            return ok, err
+
+        cached = self._consume_cached_iopub(parse_reply)
+        if cached is not None:
+            ok, err = cached
+            return ok, err, False
+
+        deadline = time.monotonic() + max(timeout, 0.0)
+        while time.monotonic() < deadline:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            wait_for = remaining if remaining < 0.15 else 0.15
+            if wait_for <= 0:
+                wait_for = 0.01
+            try:
+                msg = self.client.get_iopub_msg(timeout=wait_for)
+            except Exception:
+                continue
+            parsed = parse_reply(msg)
+            if parsed is not None:
+                ok, err = parsed
+                return ok, err, False
+            self._cache_iopub_msg(msg)
+        return False, "timeout waiting for reply", True
+
+    def _wait_for_comm_open(self, comm_id: str, timeout: float = 1.0) -> bool:
+        """Wait until the kernel acknowledges a comm_open for comm_id."""
+        if not comm_id:
+            return False
+
+        def is_comm_open(msg):
+            if not isinstance(msg, dict):
+                return None
+            if msg.get("msg_type") != "comm_open":
+                return None
+            content = msg.get("content") or {}
+            if content.get("comm_id") != comm_id:
+                return None
+            return True
+
+        if self._consume_cached_iopub(is_comm_open):
+            return True
+
+        deadline = time.monotonic() + max(timeout, 0.0)
+        while time.monotonic() < deadline:
+            remaining = deadline - time.monotonic()
+            wait_for = remaining if remaining < 0.15 else 0.15
+            if wait_for <= 0:
+                wait_for = 0.01
+            try:
+                msg = self.client.get_iopub_msg(timeout=wait_for)
+            except Exception:
+                continue
+            if is_comm_open(msg):
+                return True
+            self._cache_iopub_msg(msg)
+        return False
+
+    def _send_control_comm(
+        self,
+        data: dict,
+        expect_reply: bool = False,
+        timeout: float = 0.0,
+        allow_timeout: bool = False,
+    ) -> Tuple[bool, Optional[str]]:
+        """Send a message over the control comm."""
+        if self._client is None:
+            return False, "kernel client unavailable"
+        comm_id = self._control_comm_id
+        if not comm_id:
+            return False, "control comm unavailable"
+        content = {"comm_id": comm_id, "data": data}
+        try:
+            self.client.session.send(
+                self.client.control_channel.socket,
+                "comm_msg",
+                content,
+            )
+        except Exception as exc:
+            err = f"control comm send failed: {exc}"
+            self._logger.log(err)
+            return False, err
+        if not expect_reply:
+            return True, None
+        request_id = data.get("request_id")
+        if not request_id:
+            return False, "missing request id"
+        ok, err, timed_out = self._await_comm_reply(request_id, timeout or 1.0)
+        if ok:
+            return True, None
+        if timed_out and allow_timeout:
+            self._logger.log(
+                "control comm reply timed out; continuing without acknowledgement"
+            )
+            return True, None
+        return False, err
+
+    def _setup_control_comm(self) -> bool:
+        """Ensure the control comm channel is established and ready."""
+        if self._client is None:
+            return False
+        with self._control_comm_lock:
+            if self._control_comm_ready and self._control_comm_id:
+                return True
+            comm_id = uuid.uuid4().hex
+            content = {
+                "comm_id": comm_id,
+                "target_name": "ipybridge.control",
+                "data": {},
+            }
+            try:
+                self.client.session.send(
+                    self.client.shell_channel.socket,
+                    "comm_open",
+                    content,
+                )
+            except Exception as exc:
+                self._logger.log(f"control comm open failed: {exc}")
+                self._control_comm_id = None
+                self._control_comm_ready = False
+                return False
+            self._control_comm_id = comm_id
+            self._control_comm_ready = False
+        if not self._wait_for_comm_open(comm_id, timeout=1.0):
+            self._logger.log("control comm open acknowledgement timed out")
+        request_id = f"ping-{uuid.uuid4().hex}"
+        ok, err = self._send_control_comm(
+            {"request": "ping", "request_id": request_id},
+            expect_reply=True,
+            timeout=1.0,
+        )
+        if ok:
+            with self._control_comm_lock:
+                self._control_comm_ready = True
+            self._logger.log("control comm ready")
+            return True
+        self._logger.log(f"control comm handshake failed: {err}")
+        with self._control_comm_lock:
+            self._control_comm_id = None
+            self._control_comm_ready = False
+        return False
+
+    def interrupt_kernel(self) -> Tuple[bool, Optional[str]]:
+        """Send an interrupt request to the kernel via the control comm."""
+        if self._client is None:
+            return False, "kernel client unavailable"
+        if not self._setup_control_comm():
+            return False, "control comm unavailable"
+        request_id = f"interrupt-{uuid.uuid4().hex}"
+        ok, err = self._send_control_comm(
+            {"request": "interrupt", "request_id": request_id},
+            expect_reply=True,
+            timeout=0.4,
+            allow_timeout=True,
+        )
+        if ok:
+            self._logger.log("interrupt request delivered")
+            return True, None
+        with self._control_comm_lock:
+            self._control_comm_ready = False
+        return False, err or "interrupt failed"
 
     @staticmethod
     def _shorten(src: str, limit: int = 80) -> str:
@@ -149,7 +374,7 @@ class KernelChannel:
 
         try:
             while not idle and (time.time() - start) < 5.0:
-                msg = self.client.get_iopub_msg(timeout=0.5)
+                msg = self._get_iopub_msg(timeout=0.5)
                 if msg.get("parent_header", {}).get("msg_id") != exec_id:
                     continue
                 msg_type = msg.get("msg_type")
@@ -266,7 +491,7 @@ class KernelChannel:
         start = time.time()
         try:
             while not idle and (time.time() - start) < 5.0:
-                msg = self.client.get_iopub_msg(timeout=0.5)
+                msg = self._get_iopub_msg(timeout=0.5)
                 if msg.get("parent_header", {}).get("msg_id") != msg_id:
                     continue
                 msg_type = msg.get("msg_type")
@@ -458,6 +683,8 @@ class RequestProcessor:
             return self._handle_preview(req_id, args)
         if op == "exec":
             return self._handle_exec(req_id, args)
+        if op == "interrupt":
+            return self._handle_interrupt(req_id)
         if op == "complete":
             return self._handle_complete(req_id, args)
         return {"id": req_id, "ok": False, "error": "unknown op"}
@@ -489,6 +716,13 @@ class RequestProcessor:
         response = {"id": req_id, "ok": ok, "tag": "exec"}
         if not ok:
             response["error"] = err or "error"
+        return response
+
+    def _handle_interrupt(self, req_id) -> dict:
+        ok, err = self._channel.interrupt_kernel()
+        response = {"id": req_id, "ok": ok, "tag": "interrupt"}
+        if not ok:
+            response["error"] = err or "interrupt failed"
         return response
 
     def _handle_preview(self, req_id, args: dict) -> dict:

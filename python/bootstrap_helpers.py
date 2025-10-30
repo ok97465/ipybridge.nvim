@@ -4,6 +4,7 @@ import base64
 import io
 import json
 import os
+import signal
 import socket
 import sys
 import threading
@@ -12,6 +13,7 @@ import types
 import warnings
 from collections import namedtuple
 from contextlib import ExitStack
+from _thread import interrupt_main
 from IPython import get_ipython
 
 try:
@@ -22,6 +24,35 @@ try:
 except Exception:
     ProvisionalCompleterWarning = None
     provisionalcompleter = None
+
+
+_CONTROL_COMM_NAME = "ipybridge.control"
+
+
+def _myipy_prepare_control_handlers():
+    """Ensure control channel forwards comm messages to the comm manager."""
+    kernel = _myipy_get_kernel()
+    if kernel is None:
+        _ipy_log_debug("control handlers setup skipped: kernel missing")
+        return False
+    handlers = getattr(kernel, "control_handlers", None)
+    manager = getattr(kernel, "comm_manager", None)
+    if not isinstance(handlers, dict) or manager is None:
+        _ipy_log_debug("control handlers setup skipped: prerequisites missing")
+        return False
+    updated = False
+    for name in ("comm_open", "comm_msg", "comm_close"):
+        handler = getattr(manager, name, None)
+        if handler is None:
+            continue
+        if handlers.get(name) is handler:
+            continue
+        handlers[name] = handler
+        updated = True
+    if not updated:
+        return True
+    _ipy_log_debug("control handlers updated for comm messages")
+    return True
 
 
 _PREVIEW_LIMITS = {"rows": 30, "cols": 20}
@@ -594,6 +625,149 @@ from ipybridge_ns import (
     set_var_filters as _ipy_set_var_filters,
     resolve_path as _ipy_resolve_path,
 )
+
+
+def _myipy_get_kernel():
+    """Return the currently active IPykernel instance, if any."""
+    try:
+        ipy = get_ipython()
+    except Exception:
+        return None
+    if ipy is None:
+        return None
+    return getattr(ipy, "kernel", None)
+
+
+def _myipy_raise_interrupt_signal():
+    """Attempt to interrupt the main execution thread."""
+    kernel = _myipy_get_kernel()
+    if kernel is None:
+        _ipy_log_debug("interrupt request ignored: kernel unavailable")
+        return False
+
+    if os.name == "nt":
+        handler = signal.getsignal(signal.SIGINT)
+        if callable(handler):
+            try:
+                interrupt_main()
+                return True
+            except Exception as exc:
+                _ipy_log_debug(f"interrupt_main failed: {exc}")
+                return False
+        _ipy_log_debug("interrupt request ignored: SIGINT handler not callable")
+        return False
+
+    sender = getattr(kernel, "_send_interupt_children", None)
+    if sender is None:
+        sender = getattr(kernel, "_send_interrupt_children", None)
+    if sender is None:
+        try:
+            os.kill(os.getpid(), signal.SIGINT)
+            return True
+        except Exception as exc:
+            _ipy_log_debug(f"interrupt fallback failed: {exc}")
+            return False
+
+    try:
+        sender()
+        return True
+    except Exception as exc:
+        _ipy_log_debug(f"interrupt send failed: {exc}")
+        try:
+            os.kill(os.getpid(), signal.SIGINT)
+            return True
+        except Exception as fallback_exc:
+            _ipy_log_debug(f"interrupt os.kill fallback failed: {fallback_exc}")
+            return False
+
+
+def _myipy_control_comm_open(comm, _msg):
+    """Register handlers for a newly opened control comm."""
+    reply_lock = threading.Lock()
+
+    def send_response(payload):
+        """Send a response to the frontend, guarding against double sends."""
+        try:
+            with reply_lock:
+                comm.send({"response": payload})
+        except Exception as exc:
+            _ipy_log_debug(f"control comm reply failed: {exc}")
+
+    def handle_request(data):
+        request = data.get("request")
+        request_id = data.get("request_id")
+        if request == "interrupt":
+            ok = _myipy_raise_interrupt_signal()
+            send_response(
+                {
+                    "request": request,
+                    "request_id": request_id,
+                    "ok": bool(ok),
+                }
+            )
+            return
+        if request == "ping":
+            send_response(
+                {
+                    "request": request,
+                    "request_id": request_id,
+                    "ok": True,
+                }
+            )
+            return
+        send_response(
+            {
+                "request": request,
+                "request_id": request_id,
+                "ok": False,
+                "error": "unknown request",
+            }
+        )
+
+    def on_msg(msg):
+        try:
+            content = msg.get("content") or {}
+            data = content.get("data") or {}
+        except Exception:
+            data = {}
+        handle_request(data)
+
+    try:
+        comm.on_msg(on_msg)
+        comm.on_close(lambda *_: None)
+    except Exception as exc:
+        _ipy_log_debug(f"control comm setup failed: {exc}")
+
+
+def _myipy_register_control_comm():
+    """Register the control comm target used by the frontend."""
+    kernel = _myipy_get_kernel()
+    if kernel is None:
+        _ipy_log_debug("control comm registration skipped: kernel missing")
+        return False
+    manager = getattr(kernel, "comm_manager", None)
+    if manager is None:
+        _ipy_log_debug("control comm registration skipped: comm manager missing")
+        return False
+    _myipy_prepare_control_handlers()
+    register = getattr(manager, "register_target", None)
+    if callable(register):
+        try:
+            register(_CONTROL_COMM_NAME, _myipy_control_comm_open)
+            return True
+        except ValueError:
+            return True
+        except Exception as exc:
+            _ipy_log_debug(f"control comm registration failed: {exc}")
+            # Fall through to manual registration
+    targets = getattr(manager, "targets", None)
+    if isinstance(targets, dict):
+        if _CONTROL_COMM_NAME not in targets:
+            targets[_CONTROL_COMM_NAME] = _myipy_control_comm_open
+        return True
+    _ipy_log_debug("control comm registration failed: unknown manager layout")
+    return False
+
 
 _OSC_PREFIX = "\x1b]5379;ipybridge:"
 _OSC_SUFFIX = "\x07"
@@ -1516,4 +1690,5 @@ if env_bp_path:
     _myipy_register_breakpoints_file(env_bp_path)
 else:
     _myipy_start_breakpoint_watcher()
+_myipy_register_control_comm()
 _DEBUG_PREVIEW.ensure_running()
