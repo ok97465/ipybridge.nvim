@@ -634,7 +634,6 @@ def debugfile(filename, cwd=None):
         return
     try:
         if _mi_plt is not None:
-            _mi_plt.ion()
             _mi_start_qt_pump()
             if not hasattr(_mi_plt, "_myipy_orig_show"):
                 _mi_plt._myipy_orig_show = _mi_plt.show

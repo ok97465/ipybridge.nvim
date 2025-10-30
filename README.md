@@ -39,9 +39,8 @@ Minimal helper to run IPython/Jupyter in a terminal split and send code from the
         sleep_ms_after_open = 1000,      -- defer init to allow IPython to start
         set_default_keymaps = true,      -- applies by default (can set false)
 
-        -- Matplotlib backend / ion
-        matplotlib_backend = nil,        -- 'qt'|'tk'|'macosx'|'inline' or 'QtAgg'|'TkAgg'|'MacOSX'
-        matplotlib_ion = true,           -- call plt.ion() on startup
+        -- Matplotlib backend
+        matplotlib_backend = nil,        -- e.g. 'qt', 'inline', 'macosx', 'tk', 'agg'
 
         -- Spyder-like runcell support
         prefer_runcell_magic = false,    -- run cells via helper instead of raw text
@@ -63,12 +62,12 @@ Minimal helper to run IPython/Jupyter in a terminal split and send code from the
 ### Configuration
 - `profile_name` (string|nil): IPython profile passed as `--profile=<name>`. If `nil`, the flag is omitted.
 - `startup_script` (string): If this file exists under current working directory, `ipython -i <startup_script>` is used; otherwise the plugin sends a minimal set of numeric imports automatically.
-- `sleep_ms_after_open` (number): Milliseconds to wait (non-blocking) before running initial setup such as `plt.ion()`.
+- `sleep_ms_after_open` (number): Milliseconds to wait (non-blocking) before running initial setup such as `%matplotlib` or `%load_ext autoreload`.
 - `set_default_keymaps` (boolean, default: `true`): Apply buffer-local keymaps for Python files only.
 
 ### Additional options
-- `matplotlib_backend` (string|nil): `'qt'|'tk'|'macosx'|'inline'` via IPython magic, or backend name `'QtAgg'|'TkAgg'|'MacOSX'` via `matplotlib.use()`.
-- `matplotlib_ion` (boolean): If `true`, `plt.ion()` is called on startup (default `true`).
+
+- `matplotlib_backend` (string|nil): `qt`, `inline`, `macosx`, `tk`, `agg`
 - `prefer_runcell_magic` (boolean): If `true`, run cells via an IPython helper (`runcell(index, path)` / `%runcell`).
 - `runcell_save_before_run` (boolean): Save the buffer before runcell execution (default `true`).
 - `runfile_save_before_run` (boolean): Save the buffer before runfile execution (default `true`).
@@ -90,10 +89,12 @@ Minimal helper to run IPython/Jupyter in a terminal split and send code from the
 - `multiline_send_mode` (string): How selections/cells are sent. `'exec'` executes a hex-encoded block via `exec()`; `'paste'`(default) sends a plain-text bracketed paste so the console echoes the code like typed.
 
 ## Cell Syntax
+
 - Lines beginning with `# %%` (one or more `%`) mark cell boundaries.
 - A “cell” runs from the most recent `# %%` (or file start) up to the line before the next `# %%` (or file end).
 
 ### Debugging
+
 - `<leader>b` toggles a persistent breakpoint sign at the cursor and sends the updated list to the IPython debugger.
 - `%debugfile <path> [cwd]` mirrors Spyder's helper and runs the current file under an IPython `Pdb` instance.
 - The helper pumps the Qt event loop while the debugger waits, so Matplotlib (Qt backends) stays interactive without manual `plt.pause()` calls.
@@ -106,6 +107,7 @@ Minimal helper to run IPython/Jupyter in a terminal split and send code from the
 - `%debugfile` becomes available automatically once the console starts; no manual `%load_ext` needed.
 
 ## API
+
 - `require('ipybridge').setup(opts)` — Configure the plugin.
 - `require('ipybridge').toggle()` — Toggle the IPython terminal split.
 - `require('ipybridge').open(go_back)` — Open the terminal. If `go_back` is `true`, jump back to the previous window after initialization.
@@ -121,8 +123,9 @@ Minimal helper to run IPython/Jupyter in a terminal split and send code from the
 - `require('ipybridge').up_cell()` / `down_cell()` — Move to the previous/next cell.
 
 ## Notes
+
 - On open, the plugin starts a Jupyter kernel and attaches a `jupyter console --existing` in a `botright vsplit`.
-- Matplotlib: if configured, the backend is set first (IPython magic or `matplotlib.use()`), then `plt.ion()` is called (configurable).
+- Matplotlib: if configured, the backend is set via `%matplotlib`, and the debugger keeps Qt windows responsive by processing events in the background.
 - If `startup_script` exists in the current working directory, it is executed in the console; otherwise minimal numeric imports are sent.
 - Multi-line sending mode is configurable:
   - Default is `'exec'` which hex-encodes the selection and executes it via `exec()` (robust; minimal echo).
@@ -131,8 +134,8 @@ Minimal helper to run IPython/Jupyter in a terminal split and send code from the
 - When `set_default_keymaps` is enabled, keymaps are also applied to already-open Python buffers at startup.
 
 ## Matplotlib Backend / GUI Windows
-- Set `matplotlib_backend = 'qt'|'tk'|'macosx'|'inline'` to use IPython magic, or `'QtAgg'|'TkAgg'|'MacOSX'` for `matplotlib.use()`.
-- `matplotlib_ion = true` enables interactive mode. For GUI windows instead of inline PNGs, use a GUI backend (e.g. `'qt'`).
+
+- Set `matplotlib_backend` to a value accepted by `%matplotlib` (e.g. `'qt'`, `'inline'`, `'macosx'`, `'tk'`, `'agg'`).
 - Qt requires `PyQt5` or `PySide6`. Tk requires Tk support. macOS may require framework build Python.
 
 ## Spyder-like Runcell

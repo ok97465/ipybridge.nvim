@@ -279,12 +279,9 @@ M.config = {
     var_repr_limit = 120,
     use_zmq = true,
     python_cmd = "python3",
-    -- Matplotlib backend/ion control for the interactive console.
-    -- Set to 'qt' | 'tk' | 'macosx' | 'inline' to use IPython magic,
-    -- or a Matplotlib backend name like 'QtAgg' | 'TkAgg' | 'MacOSX'.
+    -- Matplotlib backend for the interactive console; applied via `%matplotlib`.
+    -- Recommended values include 'qt', 'inline', 'macosx', 'tk', or 'agg'.
     matplotlib_backend = nil,
-    -- Whether to enable interactive mode (plt.ion()) on startup.
-    matplotlib_ion = true,
     -- Prefer Spyder-like runcell helper over sending raw lines
     prefer_runcell_magic = false,
     -- Save buffer before calling runcell to ensure the file content is current
@@ -533,16 +530,19 @@ M.open = function(go_back, cb)
             local path_startup_script = fs.joinpath(cwd, M.config.startup_script)
             -- Configure Matplotlib backend before importing pyplot
             if M.config.matplotlib_backend and #tostring(M.config.matplotlib_backend) > 0 then
-              local b = tostring(M.config.matplotlib_backend)
-              if b == 'qt' or b == 'tk' or b == 'macosx' or b == 'inline' then
-                -- Use IPython magic directly for interactive backends
-                local stmt = string.format("%%matplotlib %s", b)
-                term_send_line(stmt)
-              else
-                -- Fallback to Matplotlib backend name
-                local stmt = string.format("import matplotlib as _mpl; _mpl.use('%s')\n", b)
-                term_send(stmt)
-              end
+              local raw_backend = tostring(M.config.matplotlib_backend)
+              local lowered = raw_backend:lower()
+              local backend_aliases = {
+                qtagg = "qt",
+                qt5agg = "qt",
+                qt6agg = "qt",
+                tkagg = "tk",
+                macosx = "macosx",
+                osx = "macosx",
+              }
+              local magic_backend = backend_aliases[lowered] or lowered
+              local stmt = string.format("%%matplotlib %s", magic_backend)
+              term_send_line(stmt)
             end
             -- Configure IPython color scheme via %colors magic (portable across jupyter-console versions)
             if M.config.ipython_colors and #tostring(M.config.ipython_colors) > 0 then
@@ -560,10 +560,6 @@ M.open = function(go_back, cb)
                 local stmt = string.format("%%autoreload %s", mode)
                 term_send_line(stmt)
               end
-            end
-            -- Optionally enable interactive mode
-            if M.config.matplotlib_ion ~= false then
-              term_send("import matplotlib.pyplot as plt; plt.ion()\n")
             end
             if utils.file_exists(path_startup_script) then
               term_send(utils.exec_file_stmt(path_startup_script))
