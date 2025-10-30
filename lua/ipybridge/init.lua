@@ -567,7 +567,15 @@ M.open = function(go_back, cb)
               })
             end
             if utils.file_exists(path_startup_script) then
-              term_send(utils.exec_file_stmt(path_startup_script))
+              local stmt = utils.exec_file_stmt(path_startup_script)
+              exec_with_pipeline(stmt, {
+                require_helpers = true,
+                on_error = function(reason)
+                  local r = tostring(reason or '')
+                  warn_user('ipybridge: failed to run startup script via ZMQ; replaying in terminal (' .. (r ~= '' and r or 'unknown') .. ')')
+                  term_send(stmt)
+                end,
+              })
             else
               -- Common numerics so user snippets like `array([...])` work
               term_send("import numpy as np; from numpy import array\n")
