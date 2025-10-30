@@ -806,31 +806,50 @@ M.debug_file = function()
         return
       end
       breakpoints.push()
-      term_send("_myipy_reset_debug_baseline()\n")
-      local cwd_arg = nil
       local mode = M.config.exec_cwd_mode or 'pwd'
+      local cwd_arg = nil
       if mode == 'file' then
         cwd_arg = fn.fnamemodify(abs_path, ':p:h')
       elseif mode == 'pwd' then
         cwd_arg = fn.getcwd()
       end
       local safe = utils.py_quote_single(abs_path)
+      local safecwd = nil
       if cwd_arg and #cwd_arg > 0 then
-        local safecwd = utils.py_quote_single(cwd_arg)
-        term_send(string.format("debugfile('%s','%s')\n", safe, safecwd))
-      else
-        term_send(string.format("debugfile('%s')\n", safe))
+        safecwd = utils.py_quote_single(cwd_arg)
       end
-      local was_debug = M._debug_active
-      M._debug_generation = (M._debug_generation or 0) + 1
-      if M._debug_generation > 0 then
-        M._debug_generation_complete = M._debug_generation - 1
+      local debugfile_sent = false
+      local function dispatch_debugfile()
+        if debugfile_sent then
+          return
+        end
+        debugfile_sent = true
+        if safecwd then
+          term_send(string.format("debugfile('%s','%s')\n", safe, safecwd))
+        else
+          term_send(string.format("debugfile('%s')\n", safe))
+        end
+        local was_debug = M._debug_active
+        M._debug_generation = (M._debug_generation or 0) + 1
+        if M._debug_generation > 0 then
+          M._debug_generation_complete = M._debug_generation - 1
+        end
+        M._debug_active = true
+        M._debug_status_active = true
+        if not was_debug then
+          M._sync_var_filters()
+        end
       end
-      M._debug_active = true
-      M._debug_status_active = true
-      if not was_debug then
-        M._sync_var_filters()
-      end
+      exec_with_pipeline("_myipy_reset_debug_baseline()", {
+        require_helpers = true,
+        on_success = dispatch_debugfile,
+        on_error = function(reason)
+          local r = tostring(reason or '')
+          warn_user('ipybridge: failed to reset debug baseline via ZMQ; falling back to terminal call (' .. (r ~= '' and r or 'unknown') .. ')')
+          term_send("_myipy_reset_debug_baseline()\n")
+          dispatch_debugfile()
+        end,
+      })
     end)
 	end)
 end
