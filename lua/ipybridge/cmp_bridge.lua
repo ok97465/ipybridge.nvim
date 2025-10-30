@@ -17,6 +17,85 @@ local state = {
   last_context = nil,
 }
 
+local function cmp_module()
+  local cmp = package.loaded['cmp']
+  if type(cmp) == 'table' then
+    return cmp
+  end
+  return nil
+end
+
+local function with_cmp(fn)
+  if type(fn) ~= 'function' then
+    return nil
+  end
+  local cmp = cmp_module()
+  if not cmp then
+    return nil
+  end
+  local ok, result = pcall(fn, cmp)
+  if not ok then
+    return nil
+  end
+  return result
+end
+
+local function cmp_is_visible()
+  local visible = with_cmp(function(cmp)
+    if type(cmp.visible) ~= 'function' then
+      return false
+    end
+    return cmp.visible()
+  end)
+  return visible and true or false
+end
+
+local function cmp_close_if_visible()
+  with_cmp(function(cmp)
+    if type(cmp.visible) ~= 'function' or type(cmp.close) ~= 'function' then
+      return
+    end
+    if cmp.visible() then
+      pcall(cmp.close)
+    end
+  end)
+end
+
+local function cmp_abort_if_visible()
+  with_cmp(function(cmp)
+    if type(cmp.visible) ~= 'function' or type(cmp.abort) ~= 'function' then
+      return
+    end
+    if cmp.visible() then
+      pcall(cmp.abort)
+    end
+  end)
+end
+
+local function cmp_select(direction)
+  with_cmp(function(cmp)
+    if type(cmp.visible) ~= 'function' or not cmp.visible() then
+      return
+    end
+    local behavior = cmp.SelectBehavior and cmp.SelectBehavior.Select
+    local opts = behavior and { behavior = behavior } or nil
+    local selector
+    if direction == 'next' then
+      selector = cmp.select_next_item
+    elseif direction == 'prev' then
+      selector = cmp.select_prev_item
+    end
+    if type(selector) ~= 'function' then
+      return
+    end
+    if opts then
+      pcall(selector, opts)
+    else
+      pcall(selector)
+    end
+  end)
+end
+
 local key_listener_attached = false
 local mapped_buffers = {}
 local autocmd_buffers = {}
@@ -63,8 +142,20 @@ local function patch_cmp_api()
   if state.patched then
     return true
   end
-  local ok, cmp_api = pcall(require, 'cmp.utils.api')
-  if not ok or type(cmp_api) ~= 'table' then
+  local cmp = cmp_module()
+  if not cmp then
+    return false
+  end
+  local cmp_utils = (type(cmp) == 'table' and cmp.utils) or nil
+  local cmp_api = cmp_utils and cmp_utils.api or package.loaded['cmp.utils.api']
+  if type(cmp_api) ~= 'table' then
+    local ok, loaded = pcall(require, 'cmp.utils.api')
+    if not ok or type(loaded) ~= 'table' then
+      return false
+    end
+    cmp_api = loaded
+  end
+  if type(cmp_api) ~= 'table' then
     return false
   end
   local original_get_mode = cmp_api.get_mode or function() return nil end
@@ -99,10 +190,7 @@ end
 
 local function close_menu()
   vim.schedule(function()
-    local ok, cmp = pcall(require, 'cmp')
-    if ok and cmp.visible() then
-      cmp.close()
-    end
+    cmp_close_if_visible()
     state.last_context = nil
   end)
 end
@@ -123,10 +211,15 @@ local function ensure_key_listener()
     if char:match('%c') then
       return
     end
+    if not is_active_ipy_terminal() then
+      return
+    end
     vim.schedule(function()
-      local ok, cmp = pcall(require, 'cmp')
-      if ok and cmp.visible() then
-        cmp.abort()
+      if not is_active_ipy_terminal() then
+        return
+      end
+      if cmp_is_visible() then
+        cmp_abort_if_visible()
         state.last_context = nil
       end
     end)
@@ -545,8 +638,8 @@ register_provider({
 })
 
 local function apply_completion()
-  local ok, cmp = pcall(require, 'cmp')
-  if not ok or not cmp.visible() then
+  local cmp = cmp_module()
+  if not cmp or not cmp.visible() then
     return false
   end
   local ctx = state.last_context or {}
@@ -558,10 +651,7 @@ local function apply_completion()
   if not entry then
     state.last_context = nil
     vim.schedule(function()
-      local ok_cmp, active = pcall(require, 'cmp')
-      if ok_cmp and active and active.visible() then
-        pcall(active.close)
-      end
+      cmp_close_if_visible()
     end)
     return false
   end
@@ -587,10 +677,7 @@ local function apply_completion()
   local text = (text_edit and text_edit.newText) or item.insertText or item.label or ''
   state.last_context = nil
   vim.schedule(function()
-    local ok_cmp, active = pcall(require, 'cmp')
-    if ok_cmp and active and active.visible() then
-      pcall(active.close)
-    end
+    cmp_close_if_visible()
     if span > 0 then
       feed_terminal(string.rep('<BS>', span))
     end
@@ -659,60 +746,39 @@ end
 -- Buffer integration ---------------------------------------------------------
 
 local function setup_terminal_keymaps()
-  local cmp = require('cmp')
   local buf = vim.api.nvim_get_current_buf()
   if mapped_buffers[buf] then
     return
   end
-  local function cmp_or_nil()
-    local ok, cmp_mod = pcall(require, 'cmp')
-    if ok then
-      return cmp_mod
-    end
-    return nil
-  end
   vim.keymap.set('t', '<C-n>', function()
-    local cmp_mod = cmp_or_nil()
-    if cmp_mod and cmp_mod.visible() then
+    if cmp_is_visible() then
       vim.schedule(function()
-        local ok_cmp, active = pcall(require, 'cmp')
-        if ok_cmp and active.visible() then
-          active.select_next_item({ behavior = active.SelectBehavior.Select })
-        end
+        cmp_select('next')
       end)
       return ''
     end
     return vim.api.nvim_replace_termcodes('<C-n>', true, false, true)
   end, { buffer = buf, noremap = true, silent = true, expr = true })
   vim.keymap.set('t', '<C-p>', function()
-    local cmp_mod = cmp_or_nil()
-    if cmp_mod and cmp_mod.visible() then
+    if cmp_is_visible() then
       vim.schedule(function()
-        local ok_cmp, active = pcall(require, 'cmp')
-        if ok_cmp and active.visible() then
-          active.select_prev_item({ behavior = active.SelectBehavior.Select })
-        end
+        cmp_select('prev')
       end)
       return ''
     end
     return vim.api.nvim_replace_termcodes('<C-p>', true, false, true)
   end, { buffer = buf, noremap = true, silent = true, expr = true })
   vim.keymap.set('t', '<CR>', function()
-    local cmp_mod = cmp_or_nil()
-    if cmp_mod and cmp_mod.visible() then
+    if cmp_is_visible() then
       apply_completion()
       return ''
     end
     return vim.api.nvim_replace_termcodes('<CR>', true, false, true)
   end, { buffer = buf, noremap = true, silent = true, expr = true })
   vim.keymap.set('t', '<Esc>', function()
-    local cmp_mod = cmp_or_nil()
-    if cmp_mod and cmp_mod.visible() then
+    if cmp_is_visible() then
       vim.schedule(function()
-        local ok_cmp, active = pcall(require, 'cmp')
-        if ok_cmp and active.visible() then
-          active.abort()
-        end
+        cmp_abort_if_visible()
         state.last_context = nil
       end)
       return ''
@@ -732,10 +798,7 @@ local function setup_buffer_autocmds()
     group = group,
     buffer = buf,
     callback = function()
-      local ok, cmp = pcall(require, 'cmp')
-      if ok and cmp.visible() then
-        cmp.abort()
-      end
+      cmp_abort_if_visible()
       state.last_context = nil
     end,
   })
@@ -760,8 +823,8 @@ function M.register_completion_provider(provider)
 end
 
 function M.ensure()
-  local ok, cmp = pcall(require, 'cmp')
-  if not ok then
+  local cmp = cmp_module()
+  if not cmp then
     return false
   end
   if not patch_cmp_api() then
@@ -775,22 +838,30 @@ function M.ensure()
 end
 
 function M.trigger()
-  local ok, cmp = pcall(require, 'cmp')
-  if not ok then
+  if not cmp_module() then
     return false
   end
   if not M.ensure() then
     return false
   end
   vim.schedule(function()
-    cmp.complete({
-      config = {
-        sources = cmp.config.sources({
-          { name = SOURCE_NAME },
-        }),
-      },
-      reason = cmp.ContextReason.Manual,
-    })
+    with_cmp(function(active)
+      local sources = { { name = SOURCE_NAME } }
+      local sources_builder = active.config and active.config.sources
+      if type(sources_builder) == 'function' then
+        local ok_sources, resolved = pcall(sources_builder, sources)
+        if ok_sources and resolved ~= nil then
+          sources = resolved
+        end
+      end
+      local reason = active.ContextReason and active.ContextReason.Manual or nil
+      active.complete({
+        config = {
+          sources = sources,
+        },
+        reason = reason,
+      })
+    end)
   end)
   return true
 end
