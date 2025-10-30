@@ -285,13 +285,6 @@ end
 
 function Executor:ensure_zmq(cb)
   local st = self.state
-  if not st.config.use_zmq then
-    self:_fail_pending_exec('zmq_disabled')
-    if cb then
-      cb(false)
-    end
-    return
-  end
   if st._zmq_ready then
     self:_flush_pending_exec()
     if cb then

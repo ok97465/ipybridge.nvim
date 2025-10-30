@@ -276,8 +276,7 @@ M.config = {
 	set_default_keymaps = true,
 	viewer_max_rows = 30,
     viewer_max_cols = 20,
-    var_repr_limit = 120,
-    use_zmq = true,
+  var_repr_limit = 120,
     python_cmd = "python3",
     -- Matplotlib backend for the interactive console; applied via `%matplotlib`.
     -- Recommended values include 'qt', 'inline', 'macosx', 'tk', or 'agg'.
@@ -354,8 +353,7 @@ M.setup = function(config)
             set_default_keymaps = { config.set_default_keymaps, 'b', true },
             viewer_max_rows = { config.viewer_max_rows, 'n', true },
             viewer_max_cols = { config.viewer_max_cols, 'n', true },
-            var_repr_limit = { config.var_repr_limit, 'n', true },
-            use_zmq = { config.use_zmq, 'b', true },
+      var_repr_limit = { config.var_repr_limit, 'n', true },
             python_cmd = { config.python_cmd, 's', true },
             debugfile_save_before_run = { config.debugfile_save_before_run, 'b', true },
         })
@@ -1155,7 +1153,7 @@ function M.request_vars()
       warn_user('ipybridge: ZMQ request send failed')
     end
   end
-  if M.config.use_zmq and M._zmq_ready then
+  if M._zmq_ready then
     dispatch_vars_request()
     return
   end
@@ -1194,10 +1192,6 @@ function M.request_preview(name, opts)
       if not deliver_preview_payload(payload) then
         warn_user('ipybridge: data viewer module unavailable')
       end
-      return
-    end
-    if not M.config.use_zmq then
-      deliver_preview_error(name, 'ZMQ backend disabled for debug preview')
       return
     end
     local function dispatch_response(msg)
@@ -1268,7 +1262,7 @@ function M.request_preview(name, opts)
       warn_user('ipybridge: ZMQ request send failed')
     end
   end
-  if M.config.use_zmq and M._zmq_ready then
+  if M._zmq_ready then
     dispatch_preview_request()
     return
   end
@@ -1301,7 +1295,7 @@ function M.interrupt()
       warn_user('ipybridge: failed to send interrupt request')
     end
   end
-  if M.config.use_zmq and M._zmq_ready then
+  if M._zmq_ready then
     dispatch_interrupt()
     return
   end

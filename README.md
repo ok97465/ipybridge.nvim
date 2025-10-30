@@ -48,8 +48,7 @@ Minimal helper to run IPython/Jupyter in a terminal split and send code from the
         runfile_save_before_run = true,  -- save buffer before runfile to use up-to-date file
         debugfile_save_before_run = true, -- save buffer before debugfile to use up-to-date file
 
-        -- Variable explorer / preview (ZMQ backend)
-        use_zmq = true,                  -- requires ipykernel + jupyter_client + pyzmq
+        -- Variable explorer / preview (ZMQ backend requires ipykernel + jupyter_client + pyzmq)
         viewer_max_rows = 30,
         viewer_max_cols = 20,
         -- Autoreload: 1, 2, or 'disable' (default 2)
@@ -76,7 +75,6 @@ Minimal helper to run IPython/Jupyter in a terminal split and send code from the
   - `'file'`: change directory to the current file's directory before executing
   - `'pwd'`: change directory to Neovim's `getcwd()` (default)
   - `'none'`: do not change directory
-- `use_zmq` (boolean): Enable ZMQ backend for variable explorer/preview (default `true`). Requires `ipykernel`, `jupyter_client`, `pyzmq`.
 - `viewer_max_rows` / `viewer_max_cols` (numbers): DataFrame/ndarray preview limits.
 - `simple_prompt` (boolean): Use simplified prompt in Jupyter console. Defaults to `false` for richer colors/UI.
 - `ipython_colors` (string|nil): Color scheme applied via IPython's `%colors` magic (e.g., `Linux`, `LightBG`, `NoColor`). Some jupyter-console versions ignore CLI flags; this runtime magic is used for portability.
