@@ -472,6 +472,8 @@ M.open = function(go_back, cb)
         if M._helpers_path then pcall(os.remove, M._helpers_path); M._helpers_path = nil end
         M._runcell_sent = false
         if M._runcell_path then pcall(os.remove, M._runcell_path); M._runcell_path = nil end
+        M._runcell_pending = false
+        M._runcell_waiters = {}
         M._zmq_ready = false
         M._last_filters_signature = nil
         M._pending_exec = {}
@@ -606,8 +608,8 @@ function M._fail_pending_exec(reason)
   executor:fail_pending_exec(reason)
 end
 
-function M._ensure_runcell_helpers()
-  executor:ensure_runcell_helpers()
+function M._ensure_runcell_helpers(cb)
+  executor:ensure_runcell_helpers(cb)
 end
 
 function M._send_helpers_if_needed()
@@ -751,8 +753,6 @@ M.run_file = function()
 	end
 	with_terminal(true, function()
     if not M.is_open() then return end
-    -- Use runfile helper with optional cwd argument; avoid global %cd
-    M._ensure_runcell_helpers()
     local cwd_arg = nil
     local mode = M.config.exec_cwd_mode or 'pwd'
     if mode == 'file' then
@@ -760,14 +760,23 @@ M.run_file = function()
     elseif mode == 'pwd' then
       cwd_arg = fn.getcwd()
     end
-    local safe = utils.py_quote_single(abs_path)
-    if cwd_arg and #cwd_arg > 0 then
-      local safecwd = utils.py_quote_single(cwd_arg)
-      term_send(string.format("runfile('%s','%s')\n", safe, safecwd))
-    else
-      term_send(string.format("runfile('%s')\n", safe))
+    local function send_runfile()
+      local safe = utils.py_quote_single(abs_path)
+      if cwd_arg and #cwd_arg > 0 then
+        local safecwd = utils.py_quote_single(cwd_arg)
+        term_send(string.format("runfile('%s','%s')\n", safe, safecwd))
+      else
+        term_send(string.format("runfile('%s')\n", safe))
+      end
+      clear_debug_state()
     end
-		clear_debug_state()
+    M._ensure_runcell_helpers(function(ok)
+      if not ok then
+        warn_user('ipybridge: failed to prepare runfile helpers; run aborted')
+        return
+      end
+      send_runfile()
+    end)
 	end)
 end
 
@@ -785,34 +794,39 @@ M.debug_file = function()
 	end
 	with_terminal(true, function()
 		if not M.is_open() then return end
-		M._ensure_runcell_helpers()
 		M._send_helpers_if_needed()
-		breakpoints.push()
-		term_send("_myipy_reset_debug_baseline()\n")
-		local cwd_arg = nil
-		local mode = M.config.exec_cwd_mode or 'pwd'
-		if mode == 'file' then
-			cwd_arg = fn.fnamemodify(abs_path, ':p:h')
-		elseif mode == 'pwd' then
-			cwd_arg = fn.getcwd()
-		end
-		local safe = utils.py_quote_single(abs_path)
-		if cwd_arg and #cwd_arg > 0 then
-			local safecwd = utils.py_quote_single(cwd_arg)
-			term_send(string.format("debugfile('%s','%s')\n", safe, safecwd))
-		else
-			term_send(string.format("debugfile('%s')\n", safe))
-		end
-		local was_debug = M._debug_active
-		M._debug_generation = (M._debug_generation or 0) + 1
-		if M._debug_generation > 0 then
-			M._debug_generation_complete = M._debug_generation - 1
-		end
-		M._debug_active = true
-		M._debug_status_active = true
-		if not was_debug then
-			M._sync_var_filters()
-		end
+    M._ensure_runcell_helpers(function(ok)
+      if not ok then
+        warn_user('ipybridge: debug helpers unavailable; debugfile aborted')
+        return
+      end
+      breakpoints.push()
+      term_send("_myipy_reset_debug_baseline()\n")
+      local cwd_arg = nil
+      local mode = M.config.exec_cwd_mode or 'pwd'
+      if mode == 'file' then
+        cwd_arg = fn.fnamemodify(abs_path, ':p:h')
+      elseif mode == 'pwd' then
+        cwd_arg = fn.getcwd()
+      end
+      local safe = utils.py_quote_single(abs_path)
+      if cwd_arg and #cwd_arg > 0 then
+        local safecwd = utils.py_quote_single(cwd_arg)
+        term_send(string.format("debugfile('%s','%s')\n", safe, safecwd))
+      else
+        term_send(string.format("debugfile('%s')\n", safe))
+      end
+      local was_debug = M._debug_active
+      M._debug_generation = (M._debug_generation or 0) + 1
+      if M._debug_generation > 0 then
+        M._debug_generation_complete = M._debug_generation - 1
+      end
+      M._debug_active = true
+      M._debug_status_active = true
+      if not was_debug then
+        M._sync_var_filters()
+      end
+    end)
 	end)
 end
 
@@ -1311,55 +1325,54 @@ M.run_cell = function()
 
   -- Prefer IPython runcell helper when viable.
   local path = fn.expand('%:p')
-  if path and #path > 0 then
-    -- Save buffer before run if requested
-    if vim.bo.modified and M.config.runcell_save_before_run ~= false then
-      pcall(vim.cmd, 'write')
+  if not (path and #path > 0) then
+    warn_user('ipybridge: unable to resolve file path for runcell; run aborted')
+    return
+  end
+  -- Save buffer before run if requested
+  if vim.bo.modified and M.config.runcell_save_before_run ~= false then
+    pcall(vim.cmd, 'write')
+  end
+  if vim.bo.modified or not utils.file_exists(path) then
+    warn_user('ipybridge: file must be saved before runcell can run')
+    return
+  end
+  -- Determine working directory to pass into runcell (no global %cd)
+  -- Count cell index by markers strictly matching '^# %%+'
+  local pre_lines = api.nvim_buf_get_lines(0, 0, math.max(line_start - 1, 0), false)
+  local idx = 0
+  for _, ln in ipairs(pre_lines) do
+    local s = CELL_RE:match_str(ln)
+    if s ~= nil then idx = idx + 1 end
+  end
+  with_terminal(true, function()
+    if not M.is_open() then return end
+    local cwd_arg = nil
+    local mode = M.config.exec_cwd_mode or 'pwd'
+    if mode == 'file' then
+      cwd_arg = fn.fnamemodify(path, ':p:h')
+    elseif mode == 'pwd' then
+      cwd_arg = fn.getcwd()
     end
-    if (not vim.bo.modified) and utils.file_exists(path) then
-      -- Determine working directory to pass into runcell (no global %cd)
-      local cwd_arg = nil
-      local mode = M.config.exec_cwd_mode or 'pwd'
-      if mode == 'file' then
-        cwd_arg = fn.fnamemodify(path, ':p:h')
-      elseif mode == 'pwd' then
-        cwd_arg = fn.getcwd()
+    M._ensure_runcell_helpers(function(ok)
+      if not ok then
+        warn_user('ipybridge: failed to prepare runcell helpers; run aborted')
+        return
       end
-      -- Count cell index by markers strictly matching '^# %%+'
-      local pre_lines = api.nvim_buf_get_lines(0, 0, math.max(line_start - 1, 0), false)
-      local idx = 0
-      for _, ln in ipairs(pre_lines) do
-        local s = CELL_RE:match_str(ln)
-        if s ~= nil then idx = idx + 1 end
+      local safe = utils.py_quote_single(path)
+      if cwd_arg and #cwd_arg > 0 then
+        local safecwd = utils.py_quote_single(cwd_arg)
+        term_send(string.format("runcell(%d, '%s', '%s')\n", idx, safe, safecwd))
+      else
+        term_send(string.format("runcell(%d, '%s')\n", idx, safe))
       end
-      with_terminal(true, function()
-        if not M.is_open() then return end
-        M._ensure_runcell_helpers()
-        local safe = utils.py_quote_single(path)
-        if cwd_arg and #cwd_arg > 0 then
-          local safecwd = utils.py_quote_single(cwd_arg)
-          term_send(string.format("runcell(%d, '%s', '%s')\n", idx, safe, safecwd))
-        else
-          term_send(string.format("runcell(%d, '%s')\n", idx, safe))
-        end
-        clear_debug_state()
-        if has_next_cell then
-          local idx_line = math.min(line_stop + 1, api.nvim_buf_line_count(0))
-          api.nvim_win_set_cursor(0, { idx_line, 0 })
-        end
-      end)
-      return
-		end
-	end
-
-	-- Fallback: send cell text directly.
-	local end_excl = has_next_cell and (line_stop - 1) or line_stop
-	M.send_lines(line_start - 1, end_excl)
-
-	if has_next_cell then
-		local idx_line = math.min(line_stop + 1, api.nvim_buf_line_count(0))
-		api.nvim_win_set_cursor(0, { idx_line, 0 })
-	end
+      clear_debug_state()
+      if has_next_cell then
+        local idx_line = math.min(line_stop + 1, api.nvim_buf_line_count(0))
+        api.nvim_win_set_cursor(0, { idx_line, 0 })
+      end
+    end)
+  end)
 end
 
 ---Move cursor to the start of the previous cell.

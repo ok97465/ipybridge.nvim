@@ -65,12 +65,29 @@ local function stub_vim(ctx)
     validate = function()
       return true
     end,
-    regex = function()
-      return { match_str = function() return nil end }
+    regex = function(pattern)
+      return {
+        match_str = function(_, text)
+          if type(text) ~= 'string' then
+            return nil
+          end
+          local matched = text:match('^# %%+')
+          if matched then
+            return 0, #matched
+          end
+          return nil
+        end,
+      }
     end,
     fn = {
       has = function() return 1 end,
       getcwd = function() return ctx.cwd end,
+      expand = function(expr)
+        if expr == '%:p' then
+          return ctx.buffer_name
+        end
+        return expr
+      end,
       tempname = function()
         ctx.temp_index = ctx.temp_index + 1
         return string.format('/tmp/temp%d', ctx.temp_index)
@@ -133,6 +150,30 @@ local function stub_vim(ctx)
   vim_stub.on_key = function() end
   vim_stub.schedule_wrap = function(cb) return cb end
 
+  vim_stub.iter = function(tbl)
+    local data = tbl or {}
+    local obj = {}
+    function obj:enumerate()
+      local enum = {}
+      function enum:rev()
+        local i = #data + 1
+        local function rev_iter(_, _)
+          i = i - 1
+          if i >= 1 then
+            return i, data[i]
+          end
+        end
+        return rev_iter, nil, nil
+      end
+      return setmetatable(enum, {
+        __call = function()
+          return ipairs(data)
+        end,
+      })
+    end
+    return obj
+  end
+
   vim_stub.api = {
     nvim_replace_termcodes = function(str) return str end,
     nvim_feedkeys = function(keys, mode)
@@ -157,7 +198,10 @@ local function stub_vim(ctx)
       return ctx.buffer_name
     end,
     nvim_win_get_cursor = function()
-      return { 1, 0 }
+      return { ctx.cursor_line or 1, 0 }
+    end,
+    nvim_win_set_cursor = function(_, pos)
+      ctx.cursor_set = pos
     end,
     nvim_buf_set_option = function() end,
     nvim_set_option_value = function() end,
@@ -165,10 +209,25 @@ local function stub_vim(ctx)
       return true
     end,
     nvim_buf_line_count = function()
+      local lines = ctx.buf_lines
+      if type(lines) == 'table' and #lines > 0 then
+        return #lines
+      end
       return 1
     end,
-    nvim_buf_get_lines = function()
-      return {}
+    nvim_buf_get_lines = function(_, start_idx, stop_idx)
+      local src = ctx.buf_lines or {}
+      local total = #src
+      local last = stop_idx
+      if not last or last < 0 or last > total then
+        last = total
+      end
+      local first = math.max((start_idx or 0) + 1, 1)
+      local out = {}
+      for i = first, last do
+        out[#out + 1] = src[i]
+      end
+      return out
     end,
     nvim_buf_is_valid = function()
       return true
@@ -181,7 +240,7 @@ local function stub_vim(ctx)
   vim_stub.bo = setmetatable({}, {
     __index = function(_, key)
       if not bo_store[key] then
-        bo_store[key] = { buftype = '', filetype = 'python' }
+        bo_store[key] = { buftype = '', filetype = 'python', modified = false }
       end
       return bo_store[key]
     end,
@@ -273,11 +332,33 @@ local function fresh_init()
         ctx.exec_stmt = path
         return 'exec:' .. tostring(path)
       end,
-      file_exists = function()
+      file_exists = function(target)
+        if ctx.file_exists ~= nil then
+          return ctx.file_exists
+        end
+        if ctx.file_exists_map and target then
+          local flag = ctx.file_exists_map[target]
+          if flag ~= nil then
+            return flag
+          end
+        end
         return false
       end,
       py_quote_single = function(text)
+        ctx.last_py_quote_single = text
         return text
+      end,
+      py_quote_double = function(text)
+        ctx.last_py_quote_double = text
+        return text
+      end,
+      send_exec_block = function(block)
+        ctx.last_exec_block = block
+        return 'exec_block:' .. tostring(block)
+      end,
+      paste_block = function(lines_tbl)
+        ctx.paste_payload = lines_tbl
+        return 'paste'
       end,
     }
   end
@@ -407,6 +488,53 @@ it('open starts console and attaches breakpoint session', function()
     end
   end
   assert(keymap_seen, '<Tab> terminal mapping should be applied')
+end)
+
+it('run_file waits for runcell helpers before dispatch', function()
+  local init_mod, ctx = fresh_init()
+  init_mod.run_file()
+
+  assert(ctx.term_payloads and #ctx.term_payloads > 0, 'expected terminal payloads')
+  local helper_idx, runfile_idx
+  for idx, payload in ipairs(ctx.term_payloads) do
+    if payload:match('%.myipy_runcell%.py') then
+      helper_idx = helper_idx or idx
+    end
+    if payload:match('runfile%(') then
+      runfile_idx = runfile_idx or idx
+    end
+  end
+  assert(helper_idx, 'helper bootstrap should execute before runfile call')
+  assert(runfile_idx, 'runfile command should be sent')
+  assert(helper_idx < runfile_idx, 'runfile must be queued after helpers load')
+end)
+
+it('run_cell defers runcell call until helpers are ready', function()
+  local init_mod, ctx = fresh_init()
+  ctx.file_exists = true
+  ctx.buf_lines = {
+    '# %% cell1',
+    'print("top")',
+    '# %% cell2',
+    'print("bottom")',
+  }
+  ctx.cursor_line = 2
+
+  init_mod.run_cell()
+
+  assert(ctx.term_payloads and #ctx.term_payloads > 0, 'expected terminal payloads')
+  local helper_idx, runcell_idx
+  for idx, payload in ipairs(ctx.term_payloads) do
+    if payload:match('%.myipy_runcell%.py') then
+      helper_idx = helper_idx or idx
+    end
+    if payload:match('runcell%(') then
+      runcell_idx = runcell_idx or idx
+    end
+  end
+  assert(helper_idx, 'helper bootstrap should execute before runcell call')
+  assert(runcell_idx, 'runcell command should be sent')
+  assert(helper_idx < runcell_idx, 'runcell must be queued after helpers load')
 end)
 
 local all_ok = true

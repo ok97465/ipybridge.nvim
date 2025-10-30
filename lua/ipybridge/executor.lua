@@ -102,6 +102,20 @@ function Executor:_run_helper_waiters(success)
   end
 end
 
+function Executor:_run_runcell_waiters(success)
+  local waiters = self.state._runcell_waiters
+  if not waiters or #waiters == 0 then
+    return
+  end
+  self.state._runcell_waiters = {}
+  for _, cb in ipairs(waiters) do
+    local ok, err = pcall(cb, success)
+    if not ok then
+      warn_once('ipybridge: runcell helper callback failed: ' .. tostring(err))
+    end
+  end
+end
+
 function Executor:after_helpers(cb)
   if type(cb) ~= 'function' then
     return
@@ -163,32 +177,71 @@ function Executor:ensure_helpers()
   })
 end
 
-function Executor:ensure_runcell_helpers()
+function Executor:ensure_runcell_helpers(cb)
   local st = self.state
-  if st._runcell_sent or not self.is_open() then
+  if st._runcell_sent then
+    if type(cb) == 'function' then
+      local ok, err = pcall(cb, true)
+      if not ok then
+        warn_once('ipybridge: runcell helper callback failed: ' .. tostring(err))
+      end
+    end
+    return
+  end
+  if type(cb) == 'function' then
+    if not st._runcell_waiters then
+      st._runcell_waiters = {}
+    end
+    table.insert(st._runcell_waiters, cb)
+  end
+  if st._runcell_pending or not self.is_open() then
     return
   end
   local code = runcell_py_code()
+  st._runcell_pending = true
+  local resolved = false
+  local function resolve(success)
+    if resolved then
+      return
+    end
+    resolved = true
+    st._runcell_pending = false
+    if success then
+      st._runcell_sent = true
+    end
+    self:_run_runcell_waiters(success)
+  end
   local function fallback()
     if st._runcell_sent then
+      resolve(true)
       return
     end
     if not self.term_send then
+      resolve(false)
+      warn_once('ipybridge: failed to load runcell helpers (no terminal sender)')
       return
     end
     if not st._runcell_path then
       st._runcell_path = self.fn.tempname() .. '.myipy_runcell.py'
-      pcall(self.fn.writefile, vim.split(code, "\n", { plain = true }), st._runcell_path)
+      local ok_write = pcall(self.fn.writefile, vim.split(code, "\n", { plain = true }), st._runcell_path)
+      if not ok_write then
+        st._runcell_path = nil
+        resolve(false)
+        warn_once('ipybridge: failed to persist runcell helpers')
+        return
+      end
     end
     self.term_send(utils.exec_file_stmt(st._runcell_path))
-    st._runcell_sent = true
+    resolve(true)
   end
   self:exec_with_pipeline(code, {
     require_helpers = true,
     on_success = function()
-      st._runcell_sent = true
+      resolve(true)
     end,
-    on_error = fallback,
+    on_error = function()
+      fallback()
+    end,
     fallback = fallback,
   })
 end
