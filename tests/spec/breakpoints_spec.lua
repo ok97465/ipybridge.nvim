@@ -230,8 +230,7 @@ it('sync_with_kernel uses exec callbacks', function()
   assert(ctx.term_payload == nil, 'terminal fallback should not be triggered')
   assert(ctx.quoted_path:match('breakpoints'), 'path should be normalised')
 
-  captured_opts.on_error('failure')
-  breakpoints.sync_with_kernel()
+  captured_opts.on_error('helpers_failed')
   assert(#exec_calls == 2, 'sync should retry after error')
 end)
 

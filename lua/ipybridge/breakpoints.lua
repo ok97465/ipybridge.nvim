@@ -430,17 +430,32 @@ function Breakpoints.sync_with_kernel()
   end
   local safe = utils.py_quote_single(path)
   local payload = string.format("_myipy_register_breakpoints_file('%s')\n", safe)
+  local function schedule_retry()
+    if not state.needs_sync then
+      return
+    end
+    vim.defer_fn(function()
+      if state.needs_sync then
+        Breakpoints.sync_with_kernel()
+      end
+    end, 200)
+  end
   state.exec(payload, {
     on_success = function()
       state.registered = true
+      state.needs_sync = false
     end,
     on_error = function(reason)
       state.registered = false
       state.needs_sync = true
-      warn_user('ipybridge: failed to register breakpoint file via ZMQ (' .. tostring(reason or 'unknown') .. ')')
+      local r = tostring(reason or '')
+      if r == 'helpers_failed' or r == 'conn_file_unavailable' or r == 'zmq_unavailable' then
+        schedule_retry()
+        return
+      end
+      warn_user('ipybridge: failed to register breakpoint file via ZMQ (' .. (r ~= '' and r or 'unknown') .. ')')
     end,
   })
-  state.needs_sync = false
 end
 
 function Breakpoints.push()

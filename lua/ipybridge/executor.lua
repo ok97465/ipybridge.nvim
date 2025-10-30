@@ -20,6 +20,11 @@ local function notify_zmq_failure(reason)
   warn_once(message)
 end
 
+local function is_transient_zmq_issue(reason)
+  local r = tostring(reason or '')
+  return r == 'conn_file_unavailable' or r == 'zmq_unavailable'
+end
+
 local function helpers_py_code()
   local template = py_module.source('bootstrap_helpers.py')
   local module_b64 = py_module.base64('ipybridge_ns.py')
@@ -138,8 +143,17 @@ function Executor:ensure_helpers()
     end
     handled = true
     st._helpers_pending = false
+    if is_transient_zmq_issue(reason) and self.is_open() and not st._helpers_sent then
+      vim.defer_fn(function()
+        if self.is_open() and not st._helpers_sent then
+          self:ensure_helpers()
+        end
+      end, 120)
+      return
+    end
     self:_run_helper_waiters(false)
-    notify_zmq_failure(reason or 'helper_load_failed')
+    local r = tostring(reason or '')
+    notify_zmq_failure(r ~= '' and r or 'helper_load_failed')
   end
 
   self:queue_exec(code, {
@@ -188,8 +202,18 @@ function Executor:ensure_runcell_helpers(cb)
       resolve(true)
     end,
     on_error = function(reason)
+      local r = tostring(reason or '')
+      if (r == 'helpers_failed' or r == 'conn_file_unavailable' or r == 'zmq_unavailable') and self.is_open() then
+        st._runcell_pending = false
+        vim.defer_fn(function()
+          if self.is_open() and not st._runcell_sent then
+            self:ensure_runcell_helpers()
+          end
+        end, 120)
+        return
+      end
       resolve(false)
-      notify_zmq_failure(reason or 'runcell_helper_failed')
+      notify_zmq_failure(r ~= '' and r or 'runcell_helper_failed')
     end,
   })
 end

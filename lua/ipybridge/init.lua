@@ -31,6 +31,16 @@ local queue_exec_request
 local after_helpers
 local exec_with_pipeline
 
+-- Emit user-facing warnings on the main loop to avoid tearing.
+local function warn_user(message)
+  if not message then
+    return
+  end
+  vim.schedule(function()
+    vim.notify(tostring(message), vim.log.levels.WARN)
+  end)
+end
+
 local function normalize_newlines(text)
   if type(text) ~= 'string' then
     return text
@@ -634,10 +644,19 @@ function M._sync_var_filters()
   exec_with_pipeline(script, {
     require_helpers = true,
     on_error = function(reason)
+      local r = tostring(reason or '')
       if M._last_filters_signature == signature then
         M._last_filters_signature = nil
       end
-      warn_user('ipybridge: failed to sync variable filters via ZMQ (' .. tostring(reason or 'unknown') .. ')')
+      if r == 'helpers_failed' or r == 'zmq_unavailable' or r == 'conn_file_unavailable' then
+        vim.defer_fn(function()
+          if M.is_open() then
+            M._sync_var_filters()
+          end
+        end, 150)
+        return
+      end
+      warn_user('ipybridge: failed to sync variable filters via ZMQ (' .. (r ~= '' and r or 'unknown') .. ')')
     end,
   })
   M._last_filters_signature = signature
@@ -1052,17 +1071,6 @@ function M.on_debug_location(info)
   end
 end
 
--- Emit user-facing warnings on the main loop to avoid tearing.
-local function warn_user(message)
-  if not message then
-    return
-  end
-  vim.schedule(function()
-    vim.notify(tostring(message), vim.log.levels.WARN)
-  end)
-end
-
--- Schedule a vars payload for the explorer; return false when the module is unavailable.
 local function deliver_vars_to_explorer(payload)
   local ok, vx = pcall(require, 'ipybridge.var_explorer')
   if not ok or not vx or type(vx.on_vars) ~= 'function' then
