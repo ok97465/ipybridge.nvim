@@ -528,6 +528,7 @@ M.open = function(go_back, cb)
             -- Enable interactive plotting and minimal numeric imports for convenience
             local cwd = fn.getcwd()
             local path_startup_script = fs.joinpath(cwd, M.config.startup_script)
+            local startup_magics = {}
             -- Configure Matplotlib backend before importing pyplot
             if M.config.matplotlib_backend and #tostring(M.config.matplotlib_backend) > 0 then
               local raw_backend = tostring(M.config.matplotlib_backend)
@@ -541,14 +542,12 @@ M.open = function(go_back, cb)
                 osx = "macosx",
               }
               local magic_backend = backend_aliases[lowered] or lowered
-              local stmt = string.format("%%matplotlib %s", magic_backend)
-              term_send_line(stmt)
+              table.insert(startup_magics, string.format("%%matplotlib %s", magic_backend))
             end
             -- Configure IPython color scheme via %colors magic (portable across jupyter-console versions)
             if M.config.ipython_colors and #tostring(M.config.ipython_colors) > 0 then
               local c = tostring(M.config.ipython_colors)
-              local stmt = string.format("%%colors %s", c)
-              term_send_line(stmt)
+              table.insert(startup_magics, string.format("%%colors %s", c))
             end
             -- Configure autoreload extension per user config (default: 2)
             do
@@ -556,10 +555,23 @@ M.open = function(go_back, cb)
               if ar == nil then ar = 2 end
               local mode = tostring(ar)
               if mode == '1' or mode == '2' then
-                term_send_line("%load_ext autoreload")
-                local stmt = string.format("%%autoreload %s", mode)
-                term_send_line(stmt)
+                table.insert(startup_magics, "%load_ext autoreload")
+                table.insert(startup_magics, string.format("%%autoreload %s", mode))
               end
+            end
+            if #startup_magics > 0 then
+              local function send_magics_via_terminal()
+                for _, stmt in ipairs(startup_magics) do
+                  term_send_line(stmt)
+                end
+              end
+              local payload = table.concat(startup_magics, '\n') .. '\n'
+              exec_with_pipeline(payload, {
+                fallback = send_magics_via_terminal,
+                on_error = function()
+                  send_magics_via_terminal()
+                end,
+              })
             end
             if utils.file_exists(path_startup_script) then
               term_send(utils.exec_file_stmt(path_startup_script))
