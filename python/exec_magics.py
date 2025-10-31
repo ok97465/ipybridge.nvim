@@ -33,6 +33,7 @@ except NameError:  # pragma: no cover
             sys.modules["ipybridge_ns"] = mod
         return mod
 
+
 _MYIPY_MOD = _myipy_bootstrap_module()
 from ipybridge_ns import (
     collect_namespace as _ipy_collect_namespace,
@@ -45,6 +46,13 @@ _CELL_RE = re.compile(r"^# %%+")
 
 _OSC_PREFIX = "\x1b]5379;ipybridge:"
 _OSC_SUFFIX = "\x07"
+
+_IPDB_PROMPT_COLORS = {
+    "linux": "\x1b[92m",
+    "neutral": "\x1b[32m",
+    "lightbg": "\x1b[34m",
+    "nocolor": "",
+}
 
 
 def _mi_emit_hidden_json(tag, payload):
@@ -188,7 +196,7 @@ _mi_gui_enabled = False
 
 def _mi_read_text(path, label):
     try:
-        with io.open(path, "r", encoding="utf-8") as handle:
+        with open(path, encoding="utf-8") as handle:
             return handle.read()
     except Exception as exc:
         print(f"{label}: cannot read {path}: {exc}")
@@ -291,12 +299,16 @@ def _mi_patch_kernel_input():
 
         assert self.session is not None
         content = json_clean(dict(prompt=prompt, password=password))
-        self.session.send(self.stdin_socket, "input_request", content, parent, ident=ident)
+        self.session.send(
+            self.stdin_socket, "input_request", content, parent, ident=ident
+        )
 
         while True:
             _mi_process_qt_once()
             try:
-                ready, _, xready = zmq.select([self.stdin_socket], [], [self.stdin_socket], 0.01)
+                ready, _, xready = zmq.select(
+                    [self.stdin_socket], [], [self.stdin_socket], 0.01
+                )
                 if ready or xready:
                     ident_reply, reply = self.session.recv(self.stdin_socket)
                     if (ident_reply, reply) != (None, None):
@@ -333,7 +345,9 @@ def _mi_enable_matplotlib(backends=_MI_QT_BACKENDS):
     try:
         from ipykernel.zmqshell import ZMQInteractiveShell
 
-        shells.extend(inst for inst in ZMQInteractiveShell.instance().__class__._instances)  # type: ignore[attr-defined]
+        shells.extend(
+            inst for inst in ZMQInteractiveShell.instance().__class__._instances
+        )  # type: ignore[attr-defined]
     except Exception:
         pass
     for shell in shells:
@@ -352,6 +366,7 @@ def _mi_enable_matplotlib(backends=_MI_QT_BACKENDS):
             continue
     try:
         from ipykernel import eventloops as _mi_eventloops
+
         for backend in backends:
             try:
                 with warnings.catch_warnings():
@@ -430,7 +445,6 @@ class _MiQtAwarePdb:
             return None
 
         class QtAwarePdb(Pdb):
-
             def interaction(self, *args, **kwargs):
                 self._mi_autoprint = True
                 _mi_emit_debug_status(True)
@@ -450,7 +464,9 @@ class _MiQtAwarePdb:
                             pass
                         self._mi_autoprint = False
 
-            def print_stack_entry(self, frame_lineno, prompt_prefix="\n-> ", context=None):
+            def print_stack_entry(
+                self, frame_lineno, prompt_prefix="\n-> ", context=None
+            ):
                 emit = getattr(self, "_mi_autoprint", False)
                 if emit:
                     try:
@@ -466,7 +482,11 @@ class _MiQtAwarePdb:
                         shell = getattr(self, "shell", None)
                         hooks = getattr(shell, "hooks", None)
                         sync = getattr(hooks, "synchronize_with_editor", None)
-                        if sync is not None and frame is not None and lineno_int is not None:
+                        if (
+                            sync is not None
+                            and frame is not None
+                            and lineno_int is not None
+                        ):
                             filename = getattr(frame.f_code, "co_filename", None)
                             if filename:
                                 sync(filename, lineno_int, 0)
@@ -482,6 +502,28 @@ class _MiQtAwarePdb:
                     return handled
                 return super().default(line)
 
+            def _error_exc(self):
+                exc = sys.exception()
+                if exc is None:
+                    return super()._error_exc()
+                theme = getattr(self, "theme", None)
+                if theme is None:
+                    return super()._error_exc()
+                try:
+                    from pygments.token import Token
+                except Exception:
+                    return super()._error_exc()
+                try:
+                    message = theme.format(
+                        [
+                            (Token.ExcName, exc.__class__.__name__),
+                            (Token.Normal, f": {exc}"),
+                        ]
+                    )
+                    self.error(message)
+                except Exception:
+                    super()._error_exc()
+
             def _mi_apply_alias(self, line):
                 try:
                     cmd = line.strip().split()[0]
@@ -493,7 +535,7 @@ class _MiQtAwarePdb:
                 method = getattr(self, "do_" + target, None)
                 if method is None:
                     return None
-                arg = line[len(cmd):].lstrip()
+                arg = line[len(cmd) :].lstrip()
                 return method(arg)
 
             def postcmd(self, stop, line):
@@ -659,43 +701,26 @@ def debugfile(filename, cwd=None):
     glbs = globals()
     dbg = pdb_cls()
     glbs["_mi_active_debugger"] = dbg
+    shell = None
     try:
         shell = getattr(dbg, "shell", None)
-        colors = None
-        if shell is not None:
-            try:
-                colors = getattr(shell, "colors", None)
-            except Exception:
-                colors = None
-        target = "linux"
-        if isinstance(colors, str) and colors:
-            target = colors.strip().lower() or target
-        if target == "nocolor":
-            target = "linux"
-        applied = False
-        if hasattr(dbg, "set_theme_name"):
-            try:
-                dbg.set_theme_name(target)
-                _ipy_log_debug(f"debug theme applied: {target}")
-                applied = True
-            except Exception as exc:
-                _ipy_log_debug(f"debug theme apply failed: {exc}")
-        if not applied and hasattr(dbg, "set_colors"):
-            try:
-                dbg.set_colors(target)
-                _ipy_log_debug(f"debug colors legacy apply: {target}")
-            except Exception as exc:
-                _ipy_log_debug(f"debug legacy colors failed: {exc}")
-        if shell is not None:
-            try:
-                color_map = {"linux": "Linux", "lightbg": "LightBG", "neutral": "Neutral", "nocolor": "NoColor"}
-                magic_value = color_map.get(target, target)
-                shell.run_line_magic('colors', magic_value)
-                _ipy_log_debug(f"debug colors magic sent: {magic_value}")
-            except Exception as exc:
-                _ipy_log_debug(f"debug colors magic failed: {exc}")
-    except Exception as exc:
-        _ipy_log_debug(f"debug theme setup error: {exc}")
+    except Exception:
+        pass
+    if shell is not None:
+        try:
+            theme_name = getattr(shell, "colors", None)
+        except Exception:
+            theme_name = None
+    else:
+        theme_name = None
+    theme_name = (theme_name or "linux").lower()
+    prompt_prefix = _IPDB_PROMPT_COLORS.get(theme_name)
+    if not prompt_prefix:
+        prompt_prefix = _IPDB_PROMPT_COLORS.get("linux", "")
+    if prompt_prefix:
+        dbg.prompt = f"{prompt_prefix}ipdb>\x1b[0m "
+    else:
+        dbg.prompt = "ipdb> "
     helper_prepare = glbs.get("_myipy_prepare_breakpoints_for_debug")
     if callable(helper_prepare):
         try:
