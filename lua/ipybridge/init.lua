@@ -528,6 +528,7 @@ M.open = function(go_back, cb)
             local cwd = fn.getcwd()
             local path_startup_script = fs.joinpath(cwd, M.config.startup_script)
             local startup_magics = {}
+      local warmup_code = nil
             -- Configure Matplotlib backend before importing pyplot
             if M.config.matplotlib_backend and #tostring(M.config.matplotlib_backend) > 0 then
               local raw_backend = tostring(M.config.matplotlib_backend)
@@ -542,6 +543,45 @@ M.open = function(go_back, cb)
               }
               local magic_backend = backend_aliases[lowered] or lowered
               table.insert(startup_magics, string.format("%%matplotlib %s", magic_backend))
+        if is_windows then
+          local is_qt = magic_backend == 'qt' or magic_backend == 'qt5' or magic_backend == 'qt6'
+          if is_qt then
+            warmup_code = table.concat({
+              "import matplotlib.pyplot as _ipybridge_warm_plt",
+              "_ipybridge_warm_plt.ion()",
+              "_ipybridge_warm_fig = _ipybridge_warm_plt.figure()",
+              "try:",
+              "    _ipybridge_warm_win = getattr(_ipybridge_warm_fig.canvas.manager, 'window', None)",
+              "    if _ipybridge_warm_win is not None:",
+              "        try:",
+              "            _ipybridge_warm_win.setWindowTitle('Matplotlib')",
+              "        except Exception:",
+              "            pass",
+              "        try:",
+              "            _ipybridge_warm_win.show()",
+              "        except Exception:",
+              "            pass",
+              "        for _ipybridge_warm_attr in ('showNormal', 'raise_', 'activateWindow'):",
+              "            try:",
+              "                getattr(_ipybridge_warm_win, _ipybridge_warm_attr)()",
+              "            except Exception:",
+              "                pass",
+              "    _ipybridge_warm_plt.pause(0.25)",
+              "finally:",
+              "    try:",
+              "        _ipybridge_warm_win = getattr(_ipybridge_warm_fig.canvas.manager, 'window', None)",
+              "        if _ipybridge_warm_win is not None:",
+              "            try:",
+              "                _ipybridge_warm_win.close()",
+              "            except Exception:",
+              "                pass",
+              "    except Exception:",
+              "        pass",
+              "    _ipybridge_warm_plt.close(_ipybridge_warm_fig)",
+              "    del _ipybridge_warm_fig",
+            }, '\n')
+          end
+        end
             end
             -- Configure IPython color scheme via %colors magic (portable across jupyter-console versions)
             if M.config.ipython_colors and #tostring(M.config.ipython_colors) > 0 then
@@ -566,6 +606,13 @@ M.open = function(go_back, cb)
                 end,
               })
             end
+      if warmup_code then
+        exec_with_pipeline(warmup_code .. '\n', {
+          on_error = function(reason)
+            warn_user('ipybridge: matplotlib warmup failed (' .. tostring(reason or 'unknown') .. ')')
+          end,
+        })
+      end
             if utils.file_exists(path_startup_script) then
               local stmt = utils.exec_file_stmt(path_startup_script)
               exec_with_pipeline(stmt, {
@@ -575,10 +622,7 @@ M.open = function(go_back, cb)
                   warn_user('ipybridge: failed to run startup script via ZMQ; replaying in terminal (' .. (r ~= '' and r or 'unknown') .. ')')
                   term_send(stmt)
                 end,
-              })
-            else
-              -- Common numerics so user snippets like `array([...])` work
-              term_send("import numpy as np; from numpy import array\n")
+        })
             end
       -- Seed runcell helpers for Spyder-like behavior
       M._ensure_runcell_helpers()

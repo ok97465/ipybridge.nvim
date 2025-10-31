@@ -359,7 +359,7 @@ def _mi_enable_matplotlib(backends=_MI_QT_BACKENDS):
                     category=UserWarning,
                 )
                 with redirect_stdout(io.StringIO()):
-                    shell.enable_matplotlib("qt5")
+                    shell.enable_matplotlib("qt")
             _mi_gui_enabled = True
             return True
         except Exception:
