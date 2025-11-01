@@ -304,7 +304,7 @@ end
 M.config = {
 	profile_name = "vim",
 	startup_script = "import_in_console.py",
-	sleep_ms_after_open = 1000,
+	sleep_ms_after_open = 5000,
 	set_default_keymaps = true,
 	viewer_max_rows = 30,
 	viewer_max_cols = 20,
