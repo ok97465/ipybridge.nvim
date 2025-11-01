@@ -13,6 +13,7 @@ import time
 import threading
 import uuid
 from pathlib import Path
+from queue import Empty
 from typing import IO, Callable, Optional, Tuple
 
 
@@ -498,39 +499,53 @@ class KernelChannel:
         )
         error_text: Optional[str] = None
         idle = False
-        start = time.time()
-        try:
-            while not idle and (time.time() - start) < 5.0:
+        # Allow a slightly longer grace period so kernels that are still warming
+        # up do not trigger spurious errors.
+        deadline = time.time() + 6.0
+        while not idle and time.time() < deadline:
+            try:
                 msg = self._get_iopub_msg(timeout=0.5)
-                if msg.get("parent_header", {}).get("msg_id") != msg_id:
-                    continue
-                msg_type = msg.get("msg_type")
-                if (
-                    msg_type == "status"
-                    and msg.get("content", {}).get("execution_state") == "idle"
-                ):
-                    idle = True
-                    break
-                if msg_type == "error":
-                    content = msg.get("content") or {}
-                    ename = content.get("ename") or ""
-                    evalue = content.get("evalue") or ""
-                    frames = "\n".join(content.get("traceback") or [])
-                    if ename or evalue:
-                        error_text = f"{ename}: {evalue}"
-                    else:
-                        error_text = frames or "error"
-                    idle = True
-                    break
-        except Exception as exc:
-            self._logger.log(f"silent exec iopub loop error: {exc}")
-            return False, str(exc)
+            except Empty:
+                # No message yet; keep polling while the deadline has not expired.
+                continue
+            except Exception as exc:
+                self._logger.log(f"silent exec iopub loop error: {exc}")
+                return False, str(exc)
+            if msg.get("parent_header", {}).get("msg_id") != msg_id:
+                continue
+            msg_type = msg.get("msg_type")
+            if (
+                msg_type == "status"
+                and msg.get("content", {}).get("execution_state") == "idle"
+            ):
+                idle = True
+                break
+            if msg_type == "error":
+                content = msg.get("content") or {}
+                ename = content.get("ename") or ""
+                evalue = content.get("evalue") or ""
+                frames = "\n".join(content.get("traceback") or [])
+                if ename or evalue:
+                    error_text = f"{ename}: {evalue}"
+                else:
+                    error_text = frames or "error"
+                idle = True
+                break
 
-        try:
-            reply = self.client.get_shell_msg(timeout=5)
-        except Exception as exc:
-            self._logger.log(f"silent exec shell timeout: {exc}")
-            return False, f"shell timeout: {exc}"
+        reply = None
+        shell_deadline = time.time() + 5.0
+        while reply is None and time.time() < shell_deadline:
+            try:
+                reply = self.client.get_shell_msg(timeout=0.5)
+            except Empty:
+                # Shell replies can legitimately lag while the kernel finishes setup.
+                continue
+            except Exception as exc:
+                self._logger.log(f"silent exec shell timeout: {exc}")
+                return False, f"shell timeout: {exc}"
+        if reply is None:
+            self._logger.log("silent exec shell timeout: no reply")
+            return False, "shell timeout: no reply"
 
         content = reply.get("content") or {}
         status = content.get("status") or "ok"
