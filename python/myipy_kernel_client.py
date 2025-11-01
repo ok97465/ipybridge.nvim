@@ -120,7 +120,9 @@ class KernelChannel:
                             f"debug preview port captured {self._debug_port}"
                         )
                     except Exception:
-                        self._logger.log("failed to parse debug preview port from prelude")
+                        self._logger.log(
+                            "failed to parse debug preview port from prelude"
+                        )
         self._logger.log("prelude ready")
 
     def _get_iopub_msg(self, timeout: float):
@@ -378,15 +380,19 @@ class KernelChannel:
                 if msg.get("parent_header", {}).get("msg_id") != exec_id:
                     continue
                 msg_type = msg.get("msg_type")
-                self._logger.log(
-                    f"iopub msg type={msg_type} keys={list(msg.keys())}"
-                )
-                if msg_type == "stream" and msg.get("content", {}).get("name") == "stdout":
+                self._logger.log(f"iopub msg type={msg_type} keys={list(msg.keys())}")
+                if (
+                    msg_type == "stream"
+                    and msg.get("content", {}).get("name") == "stdout"
+                ):
                     stdout_chunks += msg.get("content", {}).get("text", "")
                 elif msg_type == "error":
                     success = False
                     error_text = "\n".join(msg.get("content", {}).get("traceback", []))
-                elif msg_type == "status" and msg.get("content", {}).get("execution_state") == "idle":
+                elif (
+                    msg_type == "status"
+                    and msg.get("content", {}).get("execution_state") == "idle"
+                ):
                     idle = True
                 elif msg_type == "debug_reply":
                     self._logger.log(
@@ -405,7 +411,11 @@ class KernelChannel:
         try:
             reply = self.client.get_shell_msg(timeout=5)
         except Exception as exc:
-            context = "shell reply timeout (expr)" if user_expression else "shell reply timeout"
+            context = (
+                "shell reply timeout (expr)"
+                if user_expression
+                else "shell reply timeout"
+            )
             self._logger.log(f"{context}: {exc}")
             if stdout_chunks:
                 try:
@@ -417,9 +427,7 @@ class KernelChannel:
 
         content = reply.get("content") or {}
         status = content.get("status") or "ok"
-        self._logger.log(
-            f"shell reply status={status} keys={list(content.keys())}"
-        )
+        self._logger.log(f"shell reply status={status} keys={list(content.keys())}")
         if status != "ok":
             err = content.get("ename") and content.get("evalue")
             if err:
@@ -447,7 +455,11 @@ class KernelChannel:
                     f"user expr text/plain={self._shorten(str(text_value))}"
                 )
                 try:
-                    json_text = ast.literal_eval(text_value) if isinstance(text_value, str) else text_value
+                    json_text = (
+                        ast.literal_eval(text_value)
+                        if isinstance(text_value, str)
+                        else text_value
+                    )
                 except Exception:
                     self._logger.log("user expr literal_eval failed; using raw text")
                     json_text = text_value
@@ -457,9 +469,7 @@ class KernelChannel:
                 data = json.loads(json_text)
                 return True, data, None
             except Exception as exc:
-                self._logger.log(
-                    f"user expr parse error: {exc}; payload={json_text!r}"
-                )
+                self._logger.log(f"user expr parse error: {exc}; payload={json_text!r}")
                 return False, None, f"parse error: {exc}"
 
         payload = stdout_chunks.strip()
@@ -495,7 +505,10 @@ class KernelChannel:
                 if msg.get("parent_header", {}).get("msg_id") != msg_id:
                     continue
                 msg_type = msg.get("msg_type")
-                if msg_type == "status" and msg.get("content", {}).get("execution_state") == "idle":
+                if (
+                    msg_type == "status"
+                    and msg.get("content", {}).get("execution_state") == "idle"
+                ):
                     idle = True
                     break
                 if msg_type == "error":
@@ -533,7 +546,9 @@ class KernelChannel:
 
         return True, None
 
-    def complete(self, code: str, cursor_pos: int) -> Tuple[bool, Optional[dict], Optional[str]]:
+    def complete(
+        self, code: str, cursor_pos: int
+    ) -> Tuple[bool, Optional[dict], Optional[str]]:
         """Request completions from the kernel."""
         if not isinstance(code, str):
             code = str(code or "")
@@ -542,7 +557,9 @@ class KernelChannel:
         except Exception:
             cursor = len(code)
         try:
-            reply = self.client.complete(code=code, cursor_pos=cursor, reply=True, timeout=2.0)
+            reply = self.client.complete(
+                code=code, cursor_pos=cursor, reply=True, timeout=2.0
+            )
         except Exception as exc:
             self._logger.log(f"complete request failed: {exc}")
             return False, None, str(exc)
@@ -590,6 +607,7 @@ class DebugPreviewClient:
             return port
         self._logger.log("debug preview port unavailable")
         return None
+
     def _send(self, payload: dict) -> Tuple[bool, Optional[dict], Optional[str]]:
         port = self.ensure_port()
         if not port:
@@ -625,7 +643,9 @@ class DebugPreviewClient:
         err = response.get("error")
         return ok, data, err
 
-    def request(self, name: str, rows: int, cols: int, row_offset: int, col_offset: int) -> Tuple[bool, Optional[dict], Optional[str]]:
+    def request(
+        self, name: str, rows: int, cols: int, row_offset: int, col_offset: int
+    ) -> Tuple[bool, Optional[dict], Optional[str]]:
         return self._send(
             {
                 "op": "preview",
@@ -637,7 +657,9 @@ class DebugPreviewClient:
             }
         )
 
-    def complete(self, code: str, cursor_pos: int, debug: bool = True) -> Tuple[bool, Optional[dict], Optional[str]]:
+    def complete(
+        self, code: str, cursor_pos: int, debug: bool = True
+    ) -> Tuple[bool, Optional[dict], Optional[str]]:
         return self._send(
             {
                 "op": "complete",
@@ -651,7 +673,9 @@ class DebugPreviewClient:
 class RequestProcessor:
     """Route frontend JSON requests to kernel helpers."""
 
-    def __init__(self, channel: KernelChannel, preview_client: DebugPreviewClient, logger: Logger) -> None:
+    def __init__(
+        self, channel: KernelChannel, preview_client: DebugPreviewClient, logger: Logger
+    ) -> None:
         self._channel = channel
         self._preview = preview_client
         self._logger = logger
@@ -728,6 +752,7 @@ class RequestProcessor:
     def _handle_preview(self, req_id, args: dict) -> dict:
         name = args.get("name") or ""
         debug_mode = bool(args.get("debug"))
+
         def _int(value, default=0):
             try:
                 if value is None:
@@ -746,7 +771,9 @@ class RequestProcessor:
             col_offset = 0
         name_esc = str(name).replace("'", "\\'")
         if debug_mode:
-            ok, data, err = self._preview.request(name, max_rows, max_cols, row_offset, col_offset)
+            ok, data, err = self._preview.request(
+                name, max_rows, max_cols, row_offset, col_offset
+            )
             if not ok:
                 self._logger.log(f"debug preview socket fallback err={err}")
                 code = (
@@ -761,9 +788,7 @@ class RequestProcessor:
                 response["error"] = err or "debug preview failed"
             return response
 
-        code = (
-            f"__mi_preview('{name_esc}', max_rows={max_rows}, max_cols={max_cols}, row_offset={row_offset}, col_offset={col_offset})"
-        )
+        code = f"__mi_preview('{name_esc}', max_rows={max_rows}, max_cols={max_cols}, row_offset={row_offset}, col_offset={col_offset})"
         self._logger.log(
             f"preview exec code={KernelChannel._shorten(code)} debug={debug_mode}"
         )
@@ -790,10 +815,12 @@ class RequestProcessor:
             adj_cursor = cursor - len(prompt)
             if adj_cursor < 0:
                 adj_cursor = 0
-            return code[len(prompt):], adj_cursor, len(prompt)
+            return code[len(prompt) :], adj_cursor, len(prompt)
         return code, cursor, 0
 
-    def _debug_complete_internal(self, code: str, cursor: int) -> Tuple[bool, Optional[dict], Optional[str]]:
+    def _debug_complete_internal(
+        self, code: str, cursor: int
+    ) -> Tuple[bool, Optional[dict], Optional[str]]:
         """Ask the side-car server for completions; fall back to the kernel on error."""
         ok, data, err = self._preview.complete(code, cursor, True)
         if ok:
@@ -801,7 +828,9 @@ class RequestProcessor:
         self._logger.log(f"debug completion socket err={err}")
         return self._channel.complete(code, cursor)
 
-    def _debug_complete_helper(self, code: str, cursor: int) -> Tuple[bool, Optional[dict], Optional[str]]:
+    def _debug_complete_helper(
+        self, code: str, cursor: int
+    ) -> Tuple[bool, Optional[dict], Optional[str]]:
         """Execute __mi_debug_complete inside the kernel and fall back if needed."""
         try:
             code_expr = json.dumps(code)
@@ -814,7 +843,9 @@ class RequestProcessor:
         self._logger.log(f"debug completion helper err={err}")
         return self._channel.complete(code, cursor)
 
-    def _resolve_completion(self, code: str, cursor: int, debug: bool, style: str) -> Tuple[bool, Optional[dict], Optional[str]]:
+    def _resolve_completion(
+        self, code: str, cursor: int, debug: bool, style: str
+    ) -> Tuple[bool, Optional[dict], Optional[str]]:
         """Select the appropriate completion strategy for the request."""
         if not debug:
             return self._channel.complete(code, cursor)
@@ -855,7 +886,9 @@ class RequestProcessor:
                     pass
             result["data"] = data
         else:
-            self._logger.log(f"complete handler error={err} data_keys={list(data.keys()) if isinstance(data, dict) else '?'}")
+            self._logger.log(
+                f"complete handler error={err} data_keys={list(data.keys()) if isinstance(data, dict) else '?'}"
+            )
             result["ok"] = False
             result["error"] = err or "error"
         match_count = 0

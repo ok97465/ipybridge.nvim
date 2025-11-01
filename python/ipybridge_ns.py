@@ -92,9 +92,11 @@ def log_debug(message: str) -> None:
         pass
 
 
-def set_var_filters(names: Optional[Iterable[str]] = None,
-                    types_: Optional[Iterable[str]] = None,
-                    max_repr: Optional[int] = None) -> None:
+def set_var_filters(
+    names: Optional[Iterable[str]] = None,
+    types_: Optional[Iterable[str]] = None,
+    max_repr: Optional[int] = None,
+) -> None:
     """Update variable filtering preferences used by list/preview helpers."""
     if names is not None:
         _FILTERS["names"] = list(names)
@@ -118,9 +120,11 @@ def get_var_filters() -> Dict[str, Any]:
     }
 
 
-def collect_namespace(globals_dict: Optional[Mapping[str, Any]] = None,
-                      locals_dict: Optional[Mapping[str, Any]] = None,
-                      extra: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
+def collect_namespace(
+    globals_dict: Optional[Mapping[str, Any]] = None,
+    locals_dict: Optional[Mapping[str, Any]] = None,
+    extra: Optional[Mapping[str, Any]] = None,
+) -> Dict[str, Any]:
     """Merge the provided mappings into a new namespace dictionary."""
     namespace: Dict[str, Any] = {}
     if globals_dict:
@@ -209,14 +213,16 @@ def _sequence_overview(seq: Any, max_repr: int, kind: str) -> Optional[Dict[str,
         try:
             value = materialized[idx]
         except Exception:
-            items.append({
-                "index": idx,
-                "type": "?",
-                "kind": None,
-                "repr": "<unreadable>",
-                "previewable": False,
-                "path_index": idx if allow_index else None,
-            })
+            items.append(
+                {
+                    "index": idx,
+                    "type": "?",
+                    "kind": None,
+                    "repr": "<unreadable>",
+                    "previewable": False,
+                    "path_index": idx if allow_index else None,
+                }
+            )
             continue
         item_kind, _ = _value_kind(value)
         item_type = type(value).__name__
@@ -244,10 +250,12 @@ def _sequence_overview(seq: Any, max_repr: int, kind: str) -> Optional[Dict[str,
             previewable_count += 1
     remaining = length - limit
     if remaining > 0:
-        items.append({
-            "placeholder": True,
-            "more": remaining,
-        })
+        items.append(
+            {
+                "placeholder": True,
+                "more": remaining,
+            }
+        )
     return {
         "length": length,
         "items": items,
@@ -256,12 +264,9 @@ def _sequence_overview(seq: Any, max_repr: int, kind: str) -> Optional[Dict[str,
     }
 
 
-def _sequence_preview_payload(name: str,
-                              seq: Any,
-                              kind: str,
-                              rows_limit: int,
-                              row_offset: int,
-                              max_cols: int) -> Dict[str, Any]:
+def _sequence_preview_payload(
+    name: str, seq: Any, kind: str, rows_limit: int, row_offset: int, max_cols: int
+) -> Dict[str, Any]:
     materialized, allow_index = _sequence_materialize(seq, kind)
     if materialized is None:
         return {
@@ -311,14 +316,16 @@ def _sequence_preview_payload(name: str,
             else:
                 value = materialized[idx]
         except Exception:
-            items.append({
-                "index": idx,
-                "type": "?",
-                "kind": None,
-                "repr": "<unreadable>",
-                "previewable": False,
-                "path_index": None,
-            })
+            items.append(
+                {
+                    "index": idx,
+                    "type": "?",
+                    "kind": None,
+                    "repr": "<unreadable>",
+                    "previewable": False,
+                    "path_index": None,
+                }
+            )
             continue
         item_kind, _ = _value_kind(value)
         item_type = type(value).__name__
@@ -340,10 +347,12 @@ def _sequence_preview_payload(name: str,
         if entry["previewable"]:
             previewable_count += 1
     if end < length:
-        items.append({
-            "placeholder": True,
-            "more": length - end,
-        })
+        items.append(
+            {
+                "placeholder": True,
+                "more": length - end,
+            }
+        )
     payload: Dict[str, Any] = {
         "name": name,
         "kind": "object",
@@ -432,10 +441,12 @@ def _mapping_overview(mapping: Any, max_repr: int) -> Optional[Dict[str, Any]]:
             previewable_count += 1
     remaining = length - limit
     if remaining > 0:
-        preview.append({
-            "placeholder": True,
-            "more": remaining,
-        })
+        preview.append(
+            {
+                "placeholder": True,
+                "more": remaining,
+            }
+        )
     return {
         "length": length,
         "items": preview,
@@ -444,11 +455,9 @@ def _mapping_overview(mapping: Any, max_repr: int) -> Optional[Dict[str, Any]]:
     }
 
 
-def _mapping_preview_payload(name: str,
-                             mapping: Any,
-                             rows_limit: int,
-                             row_offset: int,
-                             max_cols: int) -> Dict[str, Any]:
+def _mapping_preview_payload(
+    name: str, mapping: Any, rows_limit: int, row_offset: int, max_cols: int
+) -> Dict[str, Any]:
     materialized = _sorted_mapping_items(mapping) or []
     length = len(materialized)
     row_base = row_offset
@@ -467,16 +476,18 @@ def _mapping_preview_payload(name: str,
         try:
             key, value = materialized[idx]
         except Exception:
-            items.append({
-                "index": idx,
-                "key": "<error>",
-                "key_type": "?",
-                "type": "?",
-                "kind": None,
-                "repr": "<unreadable>",
-                "previewable": False,
-                "path_accessor": None,
-            })
+            items.append(
+                {
+                    "index": idx,
+                    "key": "<error>",
+                    "key_type": "?",
+                    "type": "?",
+                    "kind": None,
+                    "repr": "<unreadable>",
+                    "previewable": False,
+                    "path_accessor": None,
+                }
+            )
             continue
         item_kind, _ = _value_kind(value)
         value_type = type(value).__name__
@@ -487,23 +498,27 @@ def _mapping_preview_payload(name: str,
         )
         if accessor:
             allow_paths = True
-        items.append({
-            "index": idx,
-            "key": _safe_key_repr(key),
-            "key_type": type(key).__name__,
-            "type": value_type,
-            "kind": item_kind,
-            "repr": value_repr,
-            "previewable": previewable,
-            "path_accessor": accessor,
-        })
+        items.append(
+            {
+                "index": idx,
+                "key": _safe_key_repr(key),
+                "key_type": type(key).__name__,
+                "type": value_type,
+                "kind": item_kind,
+                "repr": value_repr,
+                "previewable": previewable,
+                "path_accessor": accessor,
+            }
+        )
         if previewable:
             previewable_count += 1
     if end < length:
-        items.append({
-            "placeholder": True,
-            "more": length - end,
-        })
+        items.append(
+            {
+                "placeholder": True,
+                "more": length - end,
+            }
+        )
     return {
         "name": name,
         "kind": "dict",
@@ -587,13 +602,19 @@ def _describe_value(value: Any, max_repr: int) -> Dict[str, Any]:
         if overview:
             description["length"] = overview.get("length")
             description["sequence_items"] = overview.get("items")
-            description["sequence_previewable_count"] = overview.get("previewable_count")
-            description["sequence_previewable"] = bool(overview.get("previewable_count"))
+            description["sequence_previewable_count"] = overview.get(
+                "previewable_count"
+            )
+            description["sequence_previewable"] = bool(
+                overview.get("previewable_count")
+            )
             description["sequence_index_paths"] = overview.get("allow_index")
             if kind == "list":
                 description["list_items"] = overview.get("items")
                 description["previewable_items"] = overview.get("previewable_count")
-                description["list_previewable"] = bool(overview.get("previewable_count"))
+                description["list_previewable"] = bool(
+                    overview.get("previewable_count")
+                )
     elif kind == "dict":
         overview = _mapping_overview(value, max_repr)
         if overview:
@@ -604,10 +625,12 @@ def _describe_value(value: Any, max_repr: int) -> Dict[str, Any]:
     return description
 
 
-def list_variables(namespace: Optional[Mapping[str, Any]] = None,
-                   max_repr: Optional[int] = None,
-                   hide_names: Optional[Iterable[str]] = None,
-                   hide_types: Optional[Iterable[str]] = None) -> Dict[str, Dict[str, Any]]:
+def list_variables(
+    namespace: Optional[Mapping[str, Any]] = None,
+    max_repr: Optional[int] = None,
+    hide_names: Optional[Iterable[str]] = None,
+    hide_types: Optional[Iterable[str]] = None,
+) -> Dict[str, Dict[str, Any]]:
     """List user variables from the provided namespace."""
     max_repr_val = max_repr or _FILTERS["max_repr"]
     ns = namespace or {}
@@ -632,8 +655,9 @@ def list_variables(namespace: Optional[Mapping[str, Any]] = None,
     return out
 
 
-def resolve_path(path: str,
-                 namespace: Optional[Mapping[str, Any]] = None) -> Tuple[bool, Any, Optional[str]]:
+def resolve_path(
+    path: str, namespace: Optional[Mapping[str, Any]] = None
+) -> Tuple[bool, Any, Optional[str]]:
     """Resolve a dotted/indexed path inside the given namespace."""
     ns = namespace or globals()
     if not isinstance(path, str):
@@ -700,7 +724,7 @@ def resolve_path(path: str,
                 idx += 1
             else:
                 start = idx
-                if s[start:start + 1] == "-":
+                if s[start : start + 1] == "-":
                     start += 1
                 while idx < length and s[idx].isdigit():
                     idx += 1
@@ -722,7 +746,10 @@ def resolve_path(path: str,
 def _dataclass_preview(obj: Any, max_cols: int) -> Dict[str, Any]:
     items = []
     for field in dataclasses.fields(obj):
-        entry: Dict[str, Any] = {"name": field.name, "type": getattr(field.type, "__name__", str(field.type))}
+        entry: Dict[str, Any] = {
+            "name": field.name,
+            "type": getattr(field.type, "__name__", str(field.type)),
+        }
         try:
             value = getattr(obj, field.name)
         except Exception:
@@ -732,16 +759,20 @@ def _dataclass_preview(obj: Any, max_cols: int) -> Dict[str, Any]:
             continue
         kind, dtype = _value_kind(value)
         if kind == "ndarray":
-            entry.update({
-                "kind": kind,
-                "shape": _shape(value),
-                "dtype": dtype,
-            })
+            entry.update(
+                {
+                    "kind": kind,
+                    "shape": _shape(value),
+                    "dtype": dtype,
+                }
+            )
         elif kind == "dataframe":
-            entry.update({
-                "kind": kind,
-                "shape": _shape(value),
-            })
+            entry.update(
+                {
+                    "kind": kind,
+                    "shape": _shape(value),
+                }
+            )
         else:
             entry["kind"] = "value"
             entry["repr"] = _safe_repr(value, 120)
@@ -848,12 +879,14 @@ def _ctypes_array_preview(obj: Any, max_rows: int) -> Dict[str, Any]:
     }
 
 
-def preview_data(name: str,
-                 namespace: Optional[Mapping[str, Any]] = None,
-                 max_rows: int = 50,
-                 max_cols: int = 20,
-                 row_offset: int = 0,
-                 col_offset: int = 0) -> Dict[str, Any]:
+def preview_data(
+    name: str,
+    namespace: Optional[Mapping[str, Any]] = None,
+    max_rows: int = 50,
+    max_cols: int = 20,
+    row_offset: int = 0,
+    col_offset: int = 0,
+) -> Dict[str, Any]:
     """Build a preview payload for the given variable name."""
     ns = namespace or globals()
     ok, obj, err = resolve_path(name, ns)
@@ -983,12 +1016,16 @@ def preview_data(name: str,
         elif isinstance(obj, set):
             kind = "set"
         try:
-            return _sequence_preview_payload(name, obj, kind, rows_limit, row_offset, cols_limit)
+            return _sequence_preview_payload(
+                name, obj, kind, rows_limit, row_offset, cols_limit
+            )
         except Exception as exc:
             return {"name": name, "error": str(exc)}
     if isinstance(obj, dict):
         try:
-            return _mapping_preview_payload(name, obj, rows_limit, row_offset, cols_limit)
+            return _mapping_preview_payload(
+                name, obj, rows_limit, row_offset, cols_limit
+            )
         except Exception as exc:
             return {"name": name, "error": str(exc)}
 

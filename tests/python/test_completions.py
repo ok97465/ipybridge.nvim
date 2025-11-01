@@ -139,10 +139,12 @@ class DummyDebugger:
 
 
 def test_ipython_only_completion_uses_modern_api(monkeypatch, helpers):
-    shell = DummyShell([
-        _make_completion("alpha", 0, 5, "python"),
-        _make_completion("alpha_attr", 0, 5, "module"),
-    ])
+    shell = DummyShell(
+        [
+            _make_completion("alpha", 0, 5, "python"),
+            _make_completion("alpha_attr", 0, 5, "module"),
+        ]
+    )
     monkeypatch.setattr(helpers, "get_ipython", lambda: shell)
 
     result = helpers._mi_ipython_only_complete("alpha", 5)
@@ -157,10 +159,12 @@ def test_ipython_only_completion_uses_modern_api(monkeypatch, helpers):
 
 
 def test_debug_completion_merges_pdb_and_ipython(monkeypatch, helpers):
-    shell = DummyShell([
-        _make_completion("print", 0, 3, "python"),
-        _make_completion("printf", 0, 3, "python"),
-    ])
+    shell = DummyShell(
+        [
+            _make_completion("print", 0, 3, "python"),
+            _make_completion("printf", 0, 3, "python"),
+        ]
+    )
     debugger = DummyDebugger(shell, ["print"])
     monkeypatch.setattr(helpers, "_mi_active_debugger", debugger, raising=False)
     monkeypatch.setattr(helpers, "get_ipython", lambda: shell)

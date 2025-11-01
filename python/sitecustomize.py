@@ -61,7 +61,11 @@ class _ReadlineTabGuard:
                 original(command)
                 return
             try:
-                text = command.decode(errors="ignore") if isinstance(command, bytes) else str(command)
+                text = (
+                    command.decode(errors="ignore")
+                    if isinstance(command, bytes)
+                    else str(command)
+                )
             except Exception:
                 original(command)
                 return

@@ -153,7 +153,10 @@ def _myipy_normalize_breakpoints(raw):
                     existing = collected.get(line_no)
                     if existing is None:
                         if condition:
-                            collected[line_no] = {"line": line_no, "condition": condition}
+                            collected[line_no] = {
+                                "line": line_no,
+                                "condition": condition,
+                            }
                         else:
                             collected[line_no] = {"line": line_no}
                     elif condition:
@@ -413,7 +416,8 @@ class _DebugPreviewContext:
         if self.cols <= 0:
             self.cols = int(_PREVIEW_LIMITS.get("cols") or 20)
         _ipy_log_debug(
-            "debug context stored frame_id=%s namespace_items=%s" % (
+            "debug context stored frame_id=%s namespace_items=%s"
+            % (
                 self.frame_id if self.frame_id is not None else "none",
                 len(self.namespace) if isinstance(self.namespace, dict) else 0,
             )
@@ -878,7 +882,13 @@ def _myipy_write_json(path, obj):
         with io.open(path, "w", encoding="utf-8") as handle:
             json.dump(obj, handle, ensure_ascii=False)
     except Exception as exc:
-        _myipy_emit("preview", {"name": obj.get("name") if isinstance(obj, dict) else None, "error": str(exc)})
+        _myipy_emit(
+            "preview",
+            {
+                "name": obj.get("name") if isinstance(obj, dict) else None,
+                "error": str(exc),
+            },
+        )
 
 
 _DEBUG_PREVIEW = _DebugPreviewServer(_DebugPreviewContext())
@@ -1018,7 +1028,13 @@ def _myipy_write_json(path, obj):
         with io.open(path, "w", encoding="utf-8") as handle:
             json.dump(obj, handle, ensure_ascii=False)
     except Exception as exc:
-        _myipy_emit("preview", {"name": obj.get("name") if isinstance(obj, dict) else None, "error": str(exc)})
+        _myipy_emit(
+            "preview",
+            {
+                "name": obj.get("name") if isinstance(obj, dict) else None,
+                "error": str(exc),
+            },
+        )
 
 
 def _myipy_get_conn_file(__path=None):
@@ -1044,7 +1060,9 @@ def _myipy_purge_last_history():
         row = cursor.fetchone()
         maxline = row[0] if row else None
         if maxline is not None:
-            cursor.execute("DELETE FROM input WHERE session=? AND line=?", (session, maxline))
+            cursor.execute(
+                "DELETE FROM input WHERE session=? AND line=?", (session, maxline)
+            )
             try:
                 hm.db.commit()
             except Exception:
@@ -1089,7 +1107,9 @@ def _myipy_list_vars(max_repr=120, __path=None):
 
 def _myipy_preview(name, max_rows=50, max_cols=20, __path=None):
     namespace = _myipy_current_namespace()
-    data = _ipy_preview_data(name, namespace=namespace, max_rows=max_rows, max_cols=max_cols)
+    data = _ipy_preview_data(
+        name, namespace=namespace, max_rows=max_rows, max_cols=max_cols
+    )
     if __path:
         _myipy_write_json(__path, data)
     else:
@@ -1133,13 +1153,16 @@ def _myipy_emit_debug_vars(frame=None):
                 hide_types=hide_types,
             )
         _ipy_log_debug(
-            "debug locals size=%d globals size=%d frame=%s" % (
+            "debug locals size=%d globals size=%d frame=%s"
+            % (
                 len(locals_data),
                 len(globals_data),
-                'yes' if frame is not None else 'no',
+                "yes" if frame is not None else "no",
             )
         )
-        globals_ns = _ipy_collect_namespace((frame_globals and dict(frame_globals)) or globals())
+        globals_ns = _ipy_collect_namespace(
+            (frame_globals and dict(frame_globals)) or globals()
+        )
         globals_ns = _filter_debug_baseline(globals_ns)
         globals_data = _ipy_list_variables(
             namespace=globals_ns,
@@ -1170,7 +1193,9 @@ def _myipy_emit_debug_vars(frame=None):
                 queue = list(_child_preview_paths(name, preview, remaining))
                 while queue and remaining > 0:
                     child = queue.pop(0)
-                    child_preview = _cache_preview(child, namespace, rows, cols, visited, cache)
+                    child_preview = _cache_preview(
+                        child, namespace, rows, cols, visited, cache
+                    )
                     if child_preview is None:
                         continue
                     child_map[child] = child_preview
@@ -1217,10 +1242,12 @@ def _mi_completion_result(matches, cursor_start, cursor_end, sources=None):
                 source_map[key] = value
     items = []
     for match in ordered:
-        items.append({
-            "text": match,
-            "source": source_map.get(match),
-        })
+        items.append(
+            {
+                "text": match,
+                "source": source_map.get(match),
+            }
+        )
     metadata = {}
     if source_map:
         counts = {}
@@ -1336,6 +1363,7 @@ def _mi_ipython_complete(code, cursor_pos, dbg=None):
                     frame_payload = frame
             except Exception:
                 frame_payload = frame
+
     def _complete_with_jedi():
         completer = getattr(shell, "Completer", None)
         completions_fn = getattr(completer, "completions", None)
@@ -1358,7 +1386,9 @@ def _mi_ipython_complete(code, cursor_pos, dbg=None):
                     try:
                         stack.enter_context(provisionalcompleter())
                     except Exception as exc:
-                        if not getattr(_complete_with_jedi, "_provisional_failed", False):
+                        if not getattr(
+                            _complete_with_jedi, "_provisional_failed", False
+                        ):
                             _ipy_log_debug(f"provisional completer unavailable: {exc}")
                             _complete_with_jedi._provisional_failed = True
                 with warnings.catch_warnings():
@@ -1422,6 +1452,7 @@ def _mi_ipython_complete(code, cursor_pos, dbg=None):
         except Exception as exc:
             _ipy_log_debug(f"ipython complete failed: {exc}")
             return None
+
     modern = None
     try:
         if callable(set_frame):
