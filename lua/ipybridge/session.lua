@@ -33,6 +33,7 @@ function Session.new(opts)
 end
 
 local function resolve_sep()
+	-- Return the path separator and currently exported PYTHONPATH for the host OS.
 	local loop = vim.loop or vim.uv
 	local os_name = loop and loop.os_uname().sysname or ""
 	if os_name == "Windows_NT" then
@@ -48,6 +49,7 @@ function Session:build_console_env(state, conn_file)
 	end
 	local cmd_console = string.format("jupyter console --existing %s%s", conn_file, extra)
 	local env = {
+		-- Mark the console so the Python bootstrap knows to patch IPython prompts.
 		IPYBRIDGE_CONSOLE_PATCH = "1",
 		IPYBRIDGE_CONSOLE_PATCH_SILENT = "1",
 	}
@@ -59,6 +61,7 @@ function Session:build_console_env(state, conn_file)
 	if ok_py_path and type(py_module_path) == "string" and #py_module_path > 0 then
 		local py_root = vim.fs.dirname(py_module_path)
 		if py_root and #py_root > 0 then
+			-- Ensure the Python bootstrap helpers are discoverable when IPython starts.
 			local sep, current = resolve_sep()
 			if current:find(py_root, 1, true) then
 				env.PYTHONPATH = current
@@ -77,6 +80,7 @@ function Session:reset_state(state)
 	state._helpers_sent = false
 	state._helpers_pending = false
 	if state._helpers_path then
+		-- Clean up temporary helper files from previous runs so they never leak between sessions.
 		pcall(os.remove, state._helpers_path)
 		state._helpers_path = nil
 	end
@@ -111,6 +115,7 @@ end
 function Session:setup_terminal_keymaps(state)
 	pcall(function()
 		local term = state.term_instance
+		-- Keymaps rely on the terminal buffer still being alive, so we guard the setup.
 		if not term then
 			return
 		end
@@ -132,6 +137,7 @@ function Session:setup_terminal_keymaps(state)
 end
 
 function Session:collect_startup_instructions(state, cwd)
+	-- Build the list of IPython setup commands we want to replay once the console is ready.
 	local config = state.config
 	local startup_magics = {}
 	local warmup_code = nil
@@ -152,6 +158,7 @@ function Session:collect_startup_instructions(state, cwd)
 		if self.is_windows then
 			local is_qt = magic_backend == "qt" or magic_backend == "qt5" or magic_backend == "qt6"
 			if is_qt then
+				-- Prime the Qt event loop on Windows so the first plot does not hang the session.
 				warmup_code = table.concat({
 					"import matplotlib.pyplot as _ipybridge_warm_plt",
 					"_ipybridge_warm_plt.ion()",
@@ -225,6 +232,7 @@ function Session:run_deferred_startup(state, opts)
 	local delay = tonumber(state.config.sleep_ms_after_open) or 0
 
 	vim.defer_fn(function()
+		-- Run the startup sequence after a short delay so the kernel and ZMQ bridges are settled.
 		if not state.is_open() then
 			return
 		end
@@ -308,6 +316,7 @@ function Session:open(state, go_back, cb)
 		self:attach_breakpoints(state)
 
 		state.ensure_zmq(function(ok_zmq)
+			-- ZMQ bootstrap happens asynchronously; warn the user if the background channel never comes up.
 			if ok_zmq then
 				return
 			end
