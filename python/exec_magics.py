@@ -1,6 +1,8 @@
 """IPython magics and debugger helpers injected by ipybridge.nvim."""
 
 import base64
+import bdb
+import builtins
 import contextlib
 from contextlib import redirect_stdout
 import io
@@ -10,10 +12,11 @@ import os
 import re
 import shlex
 import sys
-import warnings
 import threading
 import time
 import traceback
+import types
+import warnings
 from IPython.core.magic import register_line_magic
 
 MODULE_B64 = "__MODULE_B64__"
@@ -130,6 +133,14 @@ except Exception:  # pragma: no cover
 
 
 def _mi_emit_vars_snapshot(frame=None):
+    debug_ns = globals().get("_mi_active_debug_namespace")
+    if frame is not None and debug_ns is not None:
+        sync = getattr(debug_ns, "sync_from_frame", None)
+        if callable(sync):
+            try:
+                sync(frame)
+            except Exception as exc:
+                _ipy_log_debug(f"debug namespace sync failed: {exc}")
     helper = globals().get("_myipy_emit_debug_vars")
     if callable(helper):
         try:
@@ -445,12 +456,64 @@ class _MiQtAwarePdb:
             return None
 
         class QtAwarePdb(Pdb):
+            def _mi_effective_ignore_eval_errors(self, file, line, frame):
+                """Evaluate conditional breakpoints without stopping on errors."""
+                possibles = bdb.Breakpoint.bplist.get((file, line))
+                if not possibles:
+                    return (None, None)
+                for bp in possibles:
+                    if not bp.enabled:
+                        continue
+                    if not bdb.checkfuncname(bp, frame):
+                        continue
+                    bp.hits += 1
+                    if not bp.cond:
+                        if bp.ignore > 0:
+                            bp.ignore -= 1
+                            continue
+                        return (bp, True)
+                    try:
+                        should_stop = eval(bp.cond, frame.f_globals, frame.f_locals)
+                    except Exception:
+                        continue
+                    if should_stop:
+                        if bp.ignore > 0:
+                            bp.ignore -= 1
+                            continue
+                        return (bp, True)
+                return (None, None)
+
+            def break_here(self, frame):
+                filename = self.canonic(frame.f_code.co_filename)
+                if filename not in self.breaks:
+                    return False
+                lineno = frame.f_lineno
+                if lineno not in self.breaks[filename]:
+                    lineno = frame.f_code.co_firstlineno
+                    if lineno not in self.breaks[filename]:
+                        return False
+
+                bp, flag = self._mi_effective_ignore_eval_errors(filename, lineno, frame)
+                if bp:
+                    self.currentbp = bp.number
+                    if flag and bp.temporary:
+                        self.do_clear(str(bp.number))
+                    return True
+                return False
+
+            def setup(self, frame, tb):
+                result = super().setup(frame, tb)
+                try:
+                    _mi_emit_vars_snapshot(getattr(self, "curframe", frame))
+                except Exception:
+                    pass
+                return result
+
             def interaction(self, *args, **kwargs):
                 self._mi_autoprint = True
                 _mi_emit_debug_status(True)
                 with _mi_qt_events():
                     try:
-                        _mi_emit_vars_snapshot(getattr(self, "curframe", None))
                         return super().interaction(*args, **kwargs)
                     finally:
                         try:
@@ -582,6 +645,111 @@ def _mi_exec_env(filename):
             g.pop("__file__", None)
         else:
             g["__file__"] = prev_file
+
+
+def _mi_acquire_user_namespace():
+    try:
+        from IPython import get_ipython
+
+        shell = get_ipython()
+    except Exception:
+        shell = None
+    if shell is None:
+        return None
+    try:
+        return getattr(shell, "user_ns", None)
+    except Exception:
+        return None
+
+
+class _MiDebugNamespace:
+    """Isolated execution namespace that syncs results back to IPython."""
+
+    __slots__ = (
+        "filename",
+        "module",
+        "globals",
+        "_prev_main",
+        "_user_ns",
+        "_skip_keys",
+    )
+
+    def __init__(self, filename):
+        self.filename = filename
+        self.module = None
+        self.globals = None
+        self._prev_main = None
+        self._user_ns = None
+        self._skip_keys = {
+            "__builtins__",
+            "__cached__",
+            "__doc__",
+            "__loader__",
+            "__package__",
+            "__spec__",
+        }
+
+    def __enter__(self):
+        self._user_ns = _mi_acquire_user_namespace()
+        module = types.ModuleType("__ipybridge_debug__")
+        module.__dict__["__name__"] = "__main__"
+        module.__dict__["__file__"] = self.filename
+        module.__dict__["__builtins__"] = builtins
+        self.module = module
+        self.globals = module.__dict__
+        self._prev_main = sys.modules.get("__main__")
+        sys.modules["__main__"] = module
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        if self._prev_main is None:
+            sys.modules.pop("__main__", None)
+        else:
+            sys.modules["__main__"] = self._prev_main
+
+    def commit(self):
+        if not self._user_ns:
+            return
+        try:
+            self._user_ns["__file__"] = self.filename
+            self._user_ns["__name__"] = "__main__"
+        except Exception:
+            pass
+        for key, value in self.globals.items():
+            if key in self._skip_keys or key.startswith("__"):
+                continue
+            self._user_ns[key] = value
+
+    def sync_from_frame(self, frame):
+        if not self._user_ns:
+            return
+        mappings = []
+        if frame is not None:
+            try:
+                frame_globals = getattr(frame, "f_globals", None)
+            except Exception:
+                frame_globals = None
+            try:
+                frame_locals = getattr(frame, "f_locals", None)
+            except Exception:
+                frame_locals = None
+            if frame_globals:
+                mappings.append(frame_globals)
+            if frame_locals and frame_locals is not frame_globals:
+                mappings.append(frame_locals)
+        if not mappings and self.globals:
+            mappings.append(self.globals)
+        for mapping in mappings:
+            try:
+                items = list(mapping.items())
+            except Exception:
+                continue
+            for key, value in items:
+                if not isinstance(key, str):
+                    continue
+                if key.startswith("__") or key in self._skip_keys:
+                    continue
+                self._user_ns[key] = value
 
 
 def _mi_resolve_cell(lines, index):
@@ -757,9 +925,24 @@ def debugfile(filename, cwd=None):
     try:
         with _mi_cwd(cwd):
             with _mi_exec_env(filename):
-                code = compile(source, filename, "exec")
-                dbg.reset()
-                dbg.runctx(code, glbs, glbs)
+                with _MiDebugNamespace(filename) as debug_ns:
+                    glbs["_mi_active_debug_namespace"] = debug_ns
+                    should_commit = False
+                    try:
+                        code = compile(source, filename, "exec")
+                        should_commit = True
+                        dbg.reset()
+                        dbg.runctx(code, debug_ns.globals, debug_ns.globals)
+                    finally:
+                        try:
+                            glbs.pop("_mi_active_debug_namespace", None)
+                        except Exception:
+                            glbs["_mi_active_debug_namespace"] = None
+                        if should_commit:
+                            try:
+                                debug_ns.commit()
+                            except Exception as exc:
+                                _ipy_log_debug(f"debug namespace commit failed: {exc}")
     except SystemExit:
         pass
     except Exception:
