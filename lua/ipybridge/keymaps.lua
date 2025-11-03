@@ -5,6 +5,16 @@ local api = vim.api
 
 local M = {}
 
+---Apply the default terminal-mode mappings using the provided setter helper.
+---@param set fun(lhs:string, rhs:(string|function), opts?:table|string)
+---@param opts table|nil
+function M.apply_terminal_defaults(set, opts)
+	opts = opts or {}
+	set("<leader>iv", opts.goto_vi, { desc = opts.goto_desc })
+	set("<Tab>", opts.handle_tab, { desc = opts.tab_desc })
+	set("<C-c>", opts.interrupt, { desc = opts.interrupt_desc })
+end
+
 -- Apply a set of sensible default keymaps and user commands.
 function M.apply_defaults()
 	local my = require("ipybridge")
@@ -21,9 +31,6 @@ function M.apply_defaults()
 
 	-- Global: back to editor
 	pcall(vim.keymap.set, "n", "<leader>iv", my.goto_vi, { silent = true, desc = "IPy: Back to editor" })
-	pcall(vim.keymap.set, "t", "<leader>iv", function()
-		my.goto_vi()
-	end, { silent = true, desc = "IPy: Back to editor" })
 
 	-- Variable explorer commands (global)
 	pcall(vim.keymap.set, "n", "<leader>vx", function()

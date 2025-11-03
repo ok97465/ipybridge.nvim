@@ -344,6 +344,8 @@ M.config = {
 	-- 'paste' : send as plain text using bracketed paste so the console shows
 	--           the code exactly as if it was typed (Spyder-like echo).
 	multiline_send_mode = "paste",
+	-- Extra terminal-mode keymaps applied after the IPython console buffer is created.
+	terminal_keymaps = nil,
 }
 
 local function get_start_line_cell(idx_seed)
@@ -385,6 +387,7 @@ M.setup = function(config)
 			var_repr_limit = { config.var_repr_limit, "n", true },
 			python_cmd = { config.python_cmd, "s", true },
 			debugfile_save_before_run = { config.debugfile_save_before_run, "b", true },
+			terminal_keymaps = { config.terminal_keymaps, "function", true },
 		})
 	end
 	M.config = vim.tbl_deep_extend("force", M.config, config or {})
@@ -486,6 +489,7 @@ session_manager = SessionManager.new({
 	exec_with_pipeline = exec_with_pipeline,
 	term_send = term_send,
 	warn_user = warn_user,
+	keymaps = keymaps,
 	is_windows = is_windows,
 })
 

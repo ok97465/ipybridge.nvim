@@ -28,6 +28,7 @@ function Session.new(opts)
 	self.exec_with_pipeline = dependency(opts, "exec_with_pipeline")
 	self.term_send = dependency(opts, "term_send")
 	self.warn_user = dependency(opts, "warn_user")
+	self.keymaps = dependency(opts, "keymaps")
 	self.is_windows = opts.is_windows and true or false
 	return self
 end
@@ -120,19 +121,33 @@ function Session:setup_terminal_keymaps(state)
 			return
 		end
 		local buf = term.buf_id
-		local goto_vi = state.goto_vi
-		vim.keymap.set("t", "<leader>iv", function()
-			if type(goto_vi) == "function" then
-				goto_vi()
+		local function define_terminal_map(lhs, rhs, opts)
+			local options = type(opts) == "table" and vim.deepcopy(opts) or {}
+			options.buffer = buf
+			if options.silent == nil then
+				options.silent = true
 			end
-		end, { buffer = buf, silent = true, desc = "IPy: Back to editor" })
+			vim.keymap.set("t", lhs, rhs, options)
+		end
+
 		self.cmp_bridge.ensure()
-		vim.keymap.set(
-			"t",
-			"<Tab>",
-			self.handle_terminal_tab,
-			{ buffer = buf, silent = true, desc = "IPy: Debug completion trigger" }
-		)
+
+		local config = state.config or {}
+		if config.set_default_keymaps ~= false then
+			self.keymaps.apply_terminal_defaults(define_terminal_map, {
+				goto_vi = state.goto_vi,
+				goto_desc = "IPy: Back to editor",
+				handle_tab = self.handle_terminal_tab,
+				tab_desc = "IPy: Debug completion trigger",
+				interrupt = state.interrupt,
+				interrupt_desc = "IPy: Keyboard interrupt",
+			})
+		end
+
+		local custom_maps = config.terminal_keymaps
+		if type(custom_maps) == "function" then
+			custom_maps(define_terminal_map)
+		end
 	end)
 end
 
@@ -268,8 +283,8 @@ function Session:run_deferred_startup(state, opts)
 					local r = tostring(reason or "")
 					self.warn_user(
 						"ipybridge: failed to run startup script via ZMQ; replaying in terminal ("
-							.. (r ~= "" and r or "unknown")
-							.. ")"
+						.. (r ~= "" and r or "unknown")
+						.. ")"
 					)
 					self.term_send(stmt)
 				end,

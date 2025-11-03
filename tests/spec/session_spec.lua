@@ -56,6 +56,13 @@ local function base_deps()
 			attach_session = function(_) end,
 			sync_with_kernel = function() end,
 		},
+		keymaps = {
+			apply_terminal_defaults = function(set, opts)
+				set("<leader>iv", opts.goto_vi, { desc = opts.goto_desc })
+				set("<Tab>", opts.handle_tab, { desc = opts.tab_desc })
+				set("<C-c>", opts.interrupt, { desc = opts.interrupt_desc })
+			end,
+		},
 		fs = {
 			joinpath = function(...)
 				local parts = { ... }
@@ -142,6 +149,32 @@ local function posix_vim(py_path)
 	}
 end
 
+local function extend_with_keymap(env)
+	local function deepcopy(value)
+		if type(value) ~= "table" then
+			return value
+		end
+		local copy = {}
+		for k, v in pairs(value) do
+			copy[k] = deepcopy(v)
+		end
+		return copy
+	end
+	env.deepcopy = deepcopy
+	env.keymaps = {}
+	env.keymap = {
+		set = function(mode, lhs, rhs, opts)
+			table.insert(env.keymaps, {
+				mode = mode,
+				lhs = lhs,
+				rhs = rhs,
+				opts = opts,
+			})
+		end,
+	}
+	return env
+end
+
 it("build_console_env merges pythonpath on Windows", function()
 	_G.vim = windows_vim("C:\\helpers;C:\\existing")
 	local session = fresh_session()
@@ -183,6 +216,89 @@ it("build_console_env sets pythonpath when missing on posix", function()
 		string.format("pythonpath should be set to helper root, got %s", tostring(env.PYTHONPATH))
 	)
 	assert(env.IPYBRIDGE_BREAKPOINT_FILE == nil, "breakpoint file should be absent")
+end)
+
+it("setup_terminal_keymaps applies defaults and custom mappings", function()
+	local vim_env = extend_with_keymap(posix_vim(""))
+	vim_env.tbl_extend = function(_, base, extra)
+		local merged = {}
+		for k, v in pairs(base or {}) do
+			merged[k] = v
+		end
+		for k, v in pairs(extra or {}) do
+			merged[k] = v
+		end
+		return merged
+	end
+	_G.vim = vim_env
+	local cmp_calls = 0
+	local session = fresh_session({
+		deps = {
+			cmp_bridge = {
+				ensure = function()
+					cmp_calls = cmp_calls + 1
+				end,
+			},
+		},
+	})
+	local invoked = { goto_vi = 0 }
+	local state = {
+		term_instance = { buf_id = 41 },
+	config = {
+		set_default_keymaps = true,
+		terminal_keymaps = function(set)
+			set("<C-z>", function()
+				invoked.custom = true
+			end, { silent = false, desc = "Custom" })
+		end,
+	},
+		goto_vi = function()
+			invoked.goto_vi = invoked.goto_vi + 1
+		end,
+		interrupt = function() end,
+	}
+	session:setup_terminal_keymaps(state)
+	assert(cmp_calls == 1, "cmp bridge ensure should be called once")
+	local seen = {}
+	for _, map in ipairs(vim_env.keymaps) do
+		seen[map.lhs] = map
+		assert(map.mode == "t", string.format("mapping %s should target terminal mode", tostring(map.lhs)))
+		assert(map.opts and map.opts.buffer == 41, "buffer-local mapping expected")
+	end
+	assert(seen["<leader>iv"], "default <leader>iv mapping missing")
+	assert(seen["<Tab>"], "default <Tab> mapping missing")
+	local ctrl_c = seen["<C-c>"]
+	assert(ctrl_c, "default <C-c> mapping missing")
+	assert(ctrl_c.opts.silent == true, "default interrupt mapping should stay silent")
+	assert(ctrl_c.opts.desc == "IPy: Keyboard interrupt", "default interrupt mapping should set description")
+	local custom = seen["<C-z>"]
+	assert(custom, "custom <C-z> mapping missing")
+	assert(custom.opts.silent == false, "custom mapping should keep explicit silent option")
+	assert(custom.opts.desc == "Custom", "custom mapping should keep description")
+end)
+
+it("setup_terminal_keymaps skips defaults when disabled", function()
+	local vim_env = extend_with_keymap(posix_vim(""))
+	_G.vim = vim_env
+	local session = fresh_session()
+	local state = {
+		term_instance = { buf_id = 99 },
+	config = {
+		set_default_keymaps = false,
+		terminal_keymaps = function(set)
+			set("<C-x>", "<C-x>", { desc = "noop" })
+		end,
+	},
+	}
+	session:setup_terminal_keymaps(state)
+	local seen = {}
+	for _, map in ipairs(vim_env.keymaps) do
+		seen[map.lhs] = map
+	end
+	assert(seen["<C-x>"], "custom map should be applied when defaults disabled")
+	assert(not seen["<leader>iv"], "default <leader>iv should not be applied when disabled")
+	assert(not seen["<Tab>"], "default <Tab> should not be applied when disabled")
+	assert(not seen["<C-c>"], "default <C-c> should not be applied when disabled")
 end)
 
 it("collect_startup_instructions assembles warmup and startup script", function()
