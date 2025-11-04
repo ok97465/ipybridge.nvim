@@ -18,6 +18,7 @@ local debug_vars = require("ipybridge.debug_vars")
 local breakpoints = require("ipybridge.breakpoints")
 local cmp_bridge = require("ipybridge.cmp_bridge")
 local debug_completion = require("ipybridge.debug_completion")
+local debug_sign = require("ipybridge.debug_sign")
 local Executor = require("ipybridge.executor")
 local SessionManager = require("ipybridge.session")
 local inspect = vim.inspect
@@ -147,14 +148,21 @@ local function handle_terminal_tab()
 	api.nvim_feedkeys(literal_tab, "tn", false)
 end
 
--- Reset debugger bookkeeping so UI can return to normal execution state.
-local function clear_debug_state()
+---Reset debugger bookkeeping so UI can return to normal execution state.
+---@param opts? table
+local function clear_debug_state(opts)
+	opts = type(opts) == "table" and opts or {}
+	local restore_signcolumn = opts.restore_signcolumn
+	if restore_signcolumn == nil then
+		restore_signcolumn = true
+	end
 	if type(M._debug_generation) == "number" and M._debug_generation > 0 then
 		M._debug_generation_complete = M._debug_generation
 	end
 	M._debug_active = false
 	M._debug_status_active = false
 	M._debug_window = nil
+	debug_sign.clear({ restore_signcolumn = restore_signcolumn })
 	prompt_buffer = ""
 end
 
@@ -849,7 +857,7 @@ local function send_debug_command(cmd, opts)
 	end
 	term_send_debug(cmd)
 	if opts and opts.deactivate then
-		clear_debug_state()
+		clear_debug_state({ restore_signcolumn = opts.restore_signcolumn })
 	end
 end
 
@@ -870,7 +878,7 @@ end
 
 ---Debugger continue (F12 equivalent).
 M.debug_continue = function()
-	send_debug_command("!continue", { deactivate = true })
+	send_debug_command("!continue", { deactivate = true, restore_signcolumn = false })
 end
 
 local function clamp_cursor_line(bufnr, line)
@@ -988,6 +996,7 @@ function M.on_debug_location(info)
 		pcall(vim.cmd, "normal! zv")
 		pcall(vim.cmd, "normal! zz")
 	end)
+	debug_sign.place(bufnr, line, target_win)
 	M._debug_window = target_win
 	local was_debug = M._debug_active
 	M._debug_active = true
