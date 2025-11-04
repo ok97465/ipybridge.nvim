@@ -83,6 +83,7 @@ Minimal helper to run IPython/Jupyter in a terminal split and send code from the
   - `2`: Reload all modules automatically (except excluded); recommended default.
   - `'disable'`: Do not configure or enable autoreload.
 - `multiline_send_mode` (string): How selections/cells are sent. `'exec'` executes a hex-encoded block via `exec()`; `'paste'`(default) sends a plain-text bracketed paste so the console echoes the code like typed.
+- `terminal_keymaps` (function|nil): Extra terminal-mode mappings appended after the defaults when the IPython console buffer opens. Provide a callback `function(set)` where `set(lhs, rhs, opts)` mirrors `vim.keymap.set` (mode/buffer handled automatically). Defaults for the terminal (`<leader>iv`, `<Tab>`, `<C-c>` → interrupt) are created only when `set_default_keymaps` is `true`.
 
 ## Cell Syntax
 
@@ -206,8 +207,9 @@ vim.api.nvim_create_autocmd('FileType', {
     vim.keymap.set('n', '<F5>', ipybridge.run_file, { buffer = true })
     vim.keymap.set('n', '<F6>', ipybridge.debug_file, { buffer = true })
     vim.keymap.set('n', '<leader>r', ipybridge.run_line, { buffer = true })
-    vim.keymap.set('n', '<leader>b', ipybridge.toggle_breakpoint, { buffer = true })
     vim.keymap.set('v', '<leader>r', ipybridge.run_lines, { buffer = true })
+    vim.keymap.set('n', '<leader>b', ipybridge.toggle_breakpoint, { buffer = true })
+    vim.keymap.set('n', '<leader>B', ipybridge.set_conditional_breakpoint, { buffer = true })
     vim.keymap.set('n', '<F9>', ipybridge.run_line, { buffer = true })
     vim.keymap.set('v', '<F9>', ipybridge.run_lines, { buffer = true })
     vim.keymap.set('n', '<F10>', ipybridge.debug_step_over, { buffer = true })
@@ -219,7 +221,16 @@ vim.api.nvim_create_autocmd('FileType', {
     vim.keymap.set('v', ']c', ipybridge.down_cell, { buffer = true })
     vim.keymap.set('v', '[c', ipybridge.up_cell,   { buffer = true })
     -- In the terminal buffer, set this (example):
-    -- vim.keymap.set('t', '<leader>iv', ipybridge.goto_vi, { buffer = <ipy_bufnr> })
+    -- Additional terminal keymaps can be managed via the `terminal_keymaps` option.
+  end,
+})
+
+-- Example: map key inside the IPython terminal to the interrupt helper.
+require('ipybridge').setup({
+  terminal_keymaps = function(set)
+    local ipy = require('ipybridge')
+    set('<C-c>', ipy.interrupt, { desc = 'IPy: Keyboard interrupt' })
+    set('<leader>iv', ipy.goto_vi, { desc = 'IPy: Back to editor' })
   end,
 })
 ```
