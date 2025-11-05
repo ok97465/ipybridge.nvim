@@ -288,6 +288,8 @@ local function fresh_init()
 		"ipybridge.py_module",
 		"ipybridge.debug.scope",
 		"ipybridge.debug.breakpoints",
+		"ipybridge.core.debug",
+		"ipybridge.core.terminal",
 		"ipybridge.cmp_bridge",
 		"ipybridge.exec_magics",
 		"ipybridge.zmq_client",

@@ -19,6 +19,8 @@ local breakpoints = require("ipybridge.debug.breakpoints")
 local cmp_bridge = require("ipybridge.cmp_bridge")
 local debug_completion = require("ipybridge.debug.completion")
 local debug_sign = require("ipybridge.debug.sign")
+local Debug = require("ipybridge.core.debug")
+local Terminal = require("ipybridge.core.terminal")
 local Executor = require("ipybridge.executor")
 local SessionManager = require("ipybridge.session")
 local inspect = vim.inspect
@@ -27,7 +29,6 @@ local uv = vim.uv
 local is_windows = uv.os_uname().sysname == "Windows_NT"
 -- Use LF newline by default; Windows-specific cases are handled explicitly.
 local newline = "\n"
-local prompt_buffer = ""
 
 local queue_exec_request
 local after_helpers
@@ -42,67 +43,6 @@ local function warn_user(message)
 	vim.schedule(function()
 		vim.notify(tostring(message), vim.log.levels.WARN)
 	end)
-end
-
-local function normalize_newlines(text)
-	if type(text) ~= "string" then
-		return text
-	end
-	if not is_windows then
-		return text
-	end
-	-- Collapse CRLF so downstream logic can reason about a single kind of newline.
-	return text:gsub("\r\n", "\n")
-end
-
-local function has_escape_byte(text)
-	if type(text) ~= "string" then
-		return false
-	end
-	return text:find("\27", 1, true) ~= nil
-end
-
-local function should_use_windows_multiline(text, opts)
-	if not is_windows then
-		return false
-	end
-	if type(text) ~= "string" or text == "" then
-		return false
-	end
-	opts = type(opts) == "table" and opts or {}
-	if opts.raw or opts.mode == "ipdb" then
-		return false
-	end
-	if opts.force_multiline then
-		return true
-	end
-	if has_escape_byte(text) then
-		return false
-	end
-	local _, newline_count = text:gsub("\n", "")
-	if newline_count == 0 then
-		return false
-	end
-	if newline_count > 1 then
-		return true
-	end
-	-- Single LF that is not the terminal newline means we have embedded content.
-	return text:sub(-1) ~= "\n"
-end
-
-local function apply_windows_multiline(text)
-	if type(text) ~= "string" or text == "" then
-		return text
-	end
-	local has_final_lf = text:sub(-1) == "\n"
-	local body = has_final_lf and text:sub(1, -2) or text
-	if body ~= "" then
-		body = body:gsub("\n", "\r")
-	end
-	if has_final_lf then
-		return body .. "\n"
-	end
-	return body
 end
 
 -- Core state for the plugin. Comments are in English; see README for usage.
@@ -129,141 +69,15 @@ local M = {
 	_term_exit_expected = false,
 }
 
-local function trigger_cmp_completion()
-	if not M._debug_active then
-		return false
-	end
-	if not cmp_bridge.ensure() then
-		return false
-	end
-	return cmp_bridge.trigger()
-end
+local with_terminal
+local term_send
+local term_send_line
+local term_send_debug
 
--- Always try to surface nvim-cmp when TAB is pressed inside the terminal.
-local function handle_terminal_tab()
-	if trigger_cmp_completion() then
-		return
-	end
-	local literal_tab = api.nvim_replace_termcodes("<Tab>", true, false, true)
-	api.nvim_feedkeys(literal_tab, "tn", false)
-end
-
----Reset debugger bookkeeping so UI can return to normal execution state.
----@param opts? table
-local function clear_debug_state(opts)
-	opts = type(opts) == "table" and opts or {}
-	local restore_signcolumn = opts.restore_signcolumn
-	if restore_signcolumn == nil then
-		restore_signcolumn = true
-	end
-	if type(M._debug_generation) == "number" and M._debug_generation > 0 then
-		M._debug_generation_complete = M._debug_generation
-	end
-	M._debug_active = false
-	M._debug_status_active = false
-	M._debug_window = nil
-	debug_sign.clear({ restore_signcolumn = restore_signcolumn })
-	prompt_buffer = ""
-end
-
-local function strip_ansi_sequences(text)
-	if type(text) ~= "string" then
-		return ""
-	end
-	return text:gsub("\27%[[%d;?]*[%a~]", "")
-end
-
-local function observe_terminal_chunk(chunk)
-	if type(chunk) ~= "string" or chunk == "" then
-		return
-	end
-	local cleaned = strip_ansi_sequences(chunk):gsub("\r", "")
-	if cleaned == "" then
-		return
-	end
-	prompt_buffer = prompt_buffer .. cleaned
-	local idx = prompt_buffer:match(".*\n()")
-	if idx then
-		prompt_buffer = prompt_buffer:sub(idx)
-	end
-	local trimmed = prompt_buffer:gsub("^%s+", "")
-	if trimmed:match("^In %[[0-9]+%]:%s*$") then
-		if M._debug_active then
-			clear_debug_state()
-		end
-		prompt_buffer = ""
-	elseif #prompt_buffer > 256 then
-		prompt_buffer = prompt_buffer:sub(-256)
-	end
-end
-
--- Ensure the IPython terminal exists before executing the provided callback.
-local function with_terminal(go_back, cb)
-	if type(cb) ~= "function" then
-		return
-	end
-	if M.is_open() then
-		cb(true)
-		return
-	end
-	M.open(go_back, function(ok)
-		if ok then
-			cb(true)
-		end
-	end)
-end
-
-local function term_send(payload, opts)
-	if not M.term_instance then
-		return
-	end
-	if type(payload) ~= "string" then
-		return
-	end
-	local options = {}
-	if type(opts) == "table" then
-		for k, v in pairs(opts) do
-			options[k] = v
-		end
-	end
-	if is_windows and not options.mode and not options.raw and M._debug_active then
-		options.mode = "ipdb"
-	end
-	if payload == "" and not options.append_newline then
-		return
-	end
-	local text = payload
-	if options.append_newline then
-		text = text .. newline
-	end
-	text = normalize_newlines(text)
-	if is_windows then
-		if options.mode == "ipdb" then
-			local sanitized = text:gsub("[\r\n]+$", "")
-			if sanitized == "" then
-				return
-			end
-			M.term_instance:send(sanitized .. "\r")
-			return
-		end
-		if should_use_windows_multiline(text, options) then
-			text = apply_windows_multiline(text)
-		end
-	end
-	M.term_instance:send(text)
-end
-
-local function term_send_line(payload)
-	term_send(payload or "", { append_newline = true })
-end
-
-local function term_send_debug(payload)
-	if is_windows then
-		term_send(payload, { mode = "ipdb" })
-	else
-		term_send(payload, { append_newline = true })
-	end
-end
+local clear_debug_state
+local handle_terminal_tab
+local observe_terminal_chunk
+local send_debug_command
 
 -- Cell markers must be exactly: start of line '#', one space, then at least '%%'.
 -- Examples matched: '# %%', '# %% Import'. Examples NOT matched: '  # %%', '#%%'.
@@ -298,6 +112,45 @@ end
 local queue_exec_request -- forward declaration for deferred ZMQ exec
 local after_helpers -- forward declaration for helper gating
 local exec_with_pipeline -- forward declaration for unified execution path
+
+local debug = Debug.new({
+	state = M,
+	cmp_bridge = cmp_bridge,
+	debug_sign = debug_sign,
+	debug_vars = debug_vars,
+	warn_user = warn_user,
+	fn = fn,
+	normalize_path = normalize_path,
+	is_open = function()
+		return M.term_instance ~= nil and type(M.term_instance.job_id) == "number" and M.term_instance.job_id > 0
+	end,
+})
+
+local terminal = Terminal.new({
+	state = M,
+	is_windows = is_windows,
+	newline = newline,
+	warn_user = warn_user,
+	open = function(go_back, cb)
+		if type(M.open) == "function" then
+			return M.open(go_back, cb)
+		end
+	end,
+	is_open = function()
+		return M.term_instance ~= nil and type(M.term_instance.job_id) == "number" and M.term_instance.job_id > 0
+	end,
+})
+
+with_terminal = terminal.with_terminal
+term_send = terminal.term_send
+term_send_line = terminal.term_send_line
+term_send_debug = terminal.term_send_debug
+
+clear_debug_state = debug.clear_state
+handle_terminal_tab = debug.handle_terminal_tab
+observe_terminal_chunk = debug.observe_terminal_chunk
+send_debug_command = debug.send_command
+debug.set_terminal_senders(term_send, term_send_debug)
 
 ---Toggle a breakpoint at the current cursor line for the active Python buffer.
 function M.toggle_breakpoint()
@@ -576,6 +429,12 @@ function M._sync_var_filters()
 	})
 	M._last_filters_signature = signature
 end
+
+debug.set_sync_handler(function()
+	if type(M._sync_var_filters) == "function" then
+		M._sync_var_filters()
+	end
+end)
 
 function M._digest_vars_snapshot(snapshot)
 	return debug_vars.digest_snapshot(M, snapshot)
@@ -881,139 +740,16 @@ M.debug_continue = function()
 	send_debug_command("!continue", { deactivate = true, restore_signcolumn = false })
 end
 
-local function clamp_cursor_line(bufnr, line)
-	local max_line = api.nvim_buf_line_count(bufnr)
-	if line < 1 then
-		return 1
-	end
-	if line > max_line then
-		return max_line
-	end
-	return line
-end
-
-local function calc_column_from_source(source)
-	if type(source) ~= "string" or source == "" then
-		return 0
-	end
-	local first = source:find("%S")
-	if not first then
-		return 0
-	end
-	return first - 1
-end
-
 ---Handle explicit debugger status updates from the Python helpers.
 ---@param info table
 function M.on_debug_status(info)
-	if type(info) ~= "table" then
-		return
-	end
-	local active = info.active
-	if active == nil then
-		return
-	end
-	if active == true then
-		if M._debug_status_active ~= true then
-			M._debug_generation = (M._debug_generation or 0) + 1
-		end
-		M._debug_status_active = true
-		local was_debug = M._debug_active
-		M._debug_active = true
-		if not was_debug then
-			M._sync_var_filters()
-		end
-		return
-	end
-	clear_debug_state()
+	debug.on_status(info)
 end
 
 ---Handle debug location payload emitted from the embedded debugger.
 ---@param info table
 function M.on_debug_location(info)
-	if type(info) ~= "table" then
-		return
-	end
-	local generation = tonumber(M._debug_generation) or 0
-	local completed = tonumber(M._debug_generation_complete) or 0
-	if generation <= completed then
-		return
-	end
-	local file = info.file or info.filename
-	local line = info.line
-	if not file or not line then
-		return
-	end
-	if type(line) ~= "number" then
-		line = tonumber(line)
-	end
-	if not line then
-		return
-	end
-	local abs = normalize_path(file)
-	if not abs then
-		return
-	end
-	local bufnr = fn.bufadd(abs)
-	if bufnr <= 0 then
-		return
-	end
-	fn.bufload(bufnr)
-	-- Make sure the buffer stays listed so UI extensions can display it.
-	if api.nvim_buf_is_valid(bufnr) then
-		pcall(api.nvim_buf_set_option, bufnr, "buflisted", true)
-		pcall(api.nvim_buf_set_option, bufnr, "bufhidden", "hide")
-	end
-	line = clamp_cursor_line(bufnr, line)
-	local col = calc_column_from_source(info.source)
-	local preferred = M._debug_window
-	if preferred and not api.nvim_win_is_valid(preferred) then
-		preferred = nil
-	end
-	local target_win = preferred
-	if not target_win then
-		for _, win in ipairs(api.nvim_list_wins()) do
-			if api.nvim_win_is_valid(win) and api.nvim_win_get_buf(win) == bufnr then
-				target_win = win
-				break
-			end
-		end
-		if not target_win then
-			target_win = api.nvim_get_current_win()
-		end
-	end
-	if not target_win or not api.nvim_win_is_valid(target_win) then
-		return
-	end
-	if api.nvim_win_get_buf(target_win) ~= bufnr then
-		pcall(api.nvim_win_set_buf, target_win, bufnr)
-	end
-	if api.nvim_get_current_win() ~= target_win then
-		pcall(api.nvim_set_current_win, target_win)
-	end
-	api.nvim_win_call(target_win, function()
-		pcall(api.nvim_win_set_cursor, target_win, { line, col })
-		pcall(vim.cmd, "normal! zv")
-		pcall(vim.cmd, "normal! zz")
-	end)
-	debug_sign.place(bufnr, line, target_win)
-	M._debug_window = target_win
-	local was_debug = M._debug_active
-	M._debug_active = true
-	M._debug_status_active = true
-	if not was_debug then
-		M._sync_var_filters()
-	end
-	local func_name = info["function"] or info.func
-	if type(func_name) == "string" and func_name ~= "" and func_name ~= "<module>" then
-		M._debug_scope = "locals"
-	else
-		M._debug_scope = "globals"
-	end
-	if M._debug_active then
-		M._latest_vars = debug_vars.current_scope(M, M._debug_scope == "locals")
-		debug_vars.push_to_explorer(M)
-	end
+	debug.on_location(info)
 end
 
 local function deliver_vars_to_explorer(payload)
