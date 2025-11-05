@@ -6,7 +6,7 @@ package.path = table.concat({
 	package.path,
 }, ";")
 
-local debug_scope = require("ipybridge.debug_scope")
+local debug_scope = require("ipybridge.debug.scope")
 
 -- Exercises debug scope resolver fallbacks and precedence rules.
 

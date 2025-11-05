@@ -213,9 +213,9 @@ local function fresh_breakpoints()
 		}
 	end
 
-	package.loaded["ipybridge.breakpoints"] = nil
+	package.loaded["ipybridge.debug.breakpoints"] = nil
 	local prev_vim = stub_vim(ctx)
-	local mod = require("ipybridge.breakpoints")
+	local mod = require("ipybridge.debug.breakpoints")
 	_G.vim = prev_vim
 
 	return mod, ctx

@@ -1,7 +1,7 @@
 -- Debug-aware variable helpers for ipybridge.nvim.
 -- Encapsulates snapshot digestion, preview lookup, and explorer updates.
 
-local debug_scope = require("ipybridge.debug_scope")
+local debug_scope = require("ipybridge.debug.scope")
 
 local DebugVars = {}
 

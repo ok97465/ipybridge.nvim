@@ -286,8 +286,8 @@ local function fresh_init()
 		"ipybridge.utils",
 		"ipybridge.keymaps",
 		"ipybridge.py_module",
-		"ipybridge.debug_scope",
-		"ipybridge.breakpoints",
+		"ipybridge.debug.scope",
+		"ipybridge.debug.breakpoints",
 		"ipybridge.cmp_bridge",
 		"ipybridge.exec_magics",
 		"ipybridge.zmq_client",
@@ -387,7 +387,7 @@ local function fresh_init()
 		}
 	end
 
-	package.preload["ipybridge.debug_scope"] = function()
+	package.preload["ipybridge.debug.scope"] = function()
 		return {
 			sanitize_scope = function(scope)
 				return scope
@@ -395,7 +395,7 @@ local function fresh_init()
 		}
 	end
 
-	package.preload["ipybridge.breakpoints"] = function()
+	package.preload["ipybridge.debug.breakpoints"] = function()
 		return {
 			ensure_support = function()
 				ctx.breakpoints_support = true

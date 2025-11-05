@@ -1,7 +1,4 @@
--- Completion source that exposes ipdb-aware suggestions through nvim-cmp.
--- We use a very small state layer so TAB can populate completions inside the
--- terminal buffer that hosts ipdb.
-local debug_completion = require("ipybridge.debug_completion")
+local debug_completion = require("ipybridge.debug.completion")
 
 local M = {}
 

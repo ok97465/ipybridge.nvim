@@ -23,8 +23,8 @@ local function it(name, fn)
 end
 
 local function fresh_module(ctx)
-	package.loaded["ipybridge.debug_completion"] = nil
-	package.preload["ipybridge.debug_completion"] = nil
+	package.loaded["ipybridge.debug.completion"] = nil
+	package.preload["ipybridge.debug.completion"] = nil
 
 	local prev_vim = _G.vim
 	_G.vim = {
@@ -33,7 +33,7 @@ local function fresh_module(ctx)
 			cb()
 		end,
 	}
-	local mod = require("ipybridge.debug_completion")
+	local mod = require("ipybridge.debug.completion")
 	_G.vim = prev_vim
 	return mod
 end

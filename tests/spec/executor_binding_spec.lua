@@ -206,7 +206,7 @@ local function setup_env()
 		end,
 	}
 
-	package.loaded["ipybridge.debug_vars"] = {
+	package.loaded["ipybridge.debug.vars"] = {
 		digest_snapshot = function()
 			return {}
 		end,
@@ -219,7 +219,7 @@ local function setup_env()
 		push_to_explorer = function() end,
 	}
 
-	package.loaded["ipybridge.breakpoints"] = {
+	package.loaded["ipybridge.debug.breakpoints"] = {
 		ensure_support = function() end,
 		refresh_signs = function() end,
 		get_file_path = function()
@@ -242,7 +242,7 @@ local function setup_env()
 		end,
 	}
 
-	package.loaded["ipybridge.debug_completion"] = {}
+	package.loaded["ipybridge.debug.completion"] = {}
 
 	package.loaded["ipybridge.dispatch"] = {
 		handle = function() end,

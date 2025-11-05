@@ -86,8 +86,8 @@ local function with_stubbed_vim(run)
 	register_window(10, { signcolumn = "auto:1" })
 	register_window(11, { valid = false })
 
-	package.loaded["ipybridge.debug_sign"] = nil
-	local debug_sign = require("ipybridge.debug_sign")
+	package.loaded["ipybridge.debug.sign"] = nil
+	local debug_sign = require("ipybridge.debug.sign")
 
 	local status, err = pcall(run, {
 		debug_sign = debug_sign,
