@@ -10,9 +10,20 @@ local M = {}
 ---@param opts table|nil
 function M.apply_terminal_defaults(set, opts)
 	opts = opts or {}
-	set("<leader>iv", opts.goto_vi, { desc = opts.goto_desc })
-	set("<Tab>", opts.handle_tab, { desc = opts.tab_desc })
-	set("<C-c>", opts.interrupt, { desc = opts.interrupt_desc })
+	local my = require("ipybridge")
+	local function map(lhs, rhs, desc)
+		set(lhs, rhs, { desc = desc })
+	end
+
+	map("<Tab>", opts.handle_tab, "IPy: Debug completion trigger")
+	map("<C-c>", opts.interrupt, "IPy: Keyboard interrupt")
+	map("<leader>iv", my.goto_vi, "IPy: Back to editor")
+	map("<F5>", my.run_file, "IPy: Run file (%run)")
+	map("<F6>", my.debug_file, "IPy: Debug file (%debugfile)")
+	map("<F10>", my.debug_step_over, "IPy: Debug step over (F10)")
+	map("<F11>", my.debug_step_into, "IPy: Debug step into (F11)")
+	map("<S-F11>", my.debug_step_out, "IPy: Debug step out (Shift+F11)")
+	map("<F12>", my.debug_continue, "IPy: Debug continue (F12)")
 end
 
 -- Apply a set of sensible default keymaps and user commands.

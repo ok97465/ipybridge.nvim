@@ -55,14 +55,39 @@ local function base_deps()
 			end,
 			attach_session = function(_) end,
 			sync_with_kernel = function() end,
-		},
-		keymaps = {
-			apply_terminal_defaults = function(set, opts)
-				set("<leader>iv", opts.goto_vi, { desc = opts.goto_desc })
-				set("<Tab>", opts.handle_tab, { desc = opts.tab_desc })
-				set("<C-c>", opts.interrupt, { desc = opts.interrupt_desc })
-			end,
-		},
+	},
+	keymaps = {
+		apply_terminal_defaults = function(set, opts)
+			local my = package.loaded["ipybridge"]
+			if not my then
+				my = {
+					goto_vi = function() end,
+					run_file = function() end,
+					debug_file = function() end,
+					debug_step_over = function() end,
+					debug_step_into = function() end,
+					debug_step_out = function() end,
+					debug_continue = function() end,
+				}
+				package.loaded["ipybridge"] = my
+			end
+			local function map(lhs, rhs, desc)
+				if rhs == nil then
+					return
+				end
+				set(lhs, rhs, { desc = desc })
+			end
+			map("<Tab>", opts.handle_tab, "IPy: Debug completion trigger")
+			map("<C-c>", opts.interrupt, "IPy: Keyboard interrupt")
+			map("<leader>iv", my.goto_vi, "IPy: Back to editor")
+			map("<F5>", my.run_file, "IPy: Run file (%run)")
+			map("<F6>", my.debug_file, "IPy: Debug file (%debugfile)")
+			map("<F10>", my.debug_step_over, "IPy: Debug step over (F10)")
+			map("<F11>", my.debug_step_into, "IPy: Debug step into (F11)")
+			map("<S-F11>", my.debug_step_out, "IPy: Debug step out (Shift+F11)")
+			map("<F12>", my.debug_continue, "IPy: Debug continue (F12)")
+		end,
+	},
 		fs = {
 			joinpath = function(...)
 				local parts = { ... }
@@ -232,7 +257,18 @@ it("setup_terminal_keymaps applies defaults and custom mappings", function()
 	end
 	_G.vim = vim_env
 	local cmp_calls = 0
-	local session = fresh_session({
+	local stub_module = {
+		goto_vi = function() end,
+		run_file = function() end,
+		debug_file = function() end,
+		debug_step_over = function() end,
+		debug_step_into = function() end,
+		debug_step_out = function() end,
+		debug_continue = function() end,
+	}
+	local previous_module = package.loaded["ipybridge"]
+	package.loaded["ipybridge"] = stub_module
+	local session, deps = fresh_session({
 		deps = {
 			cmp_bridge = {
 				ensure = function()
@@ -241,21 +277,15 @@ it("setup_terminal_keymaps applies defaults and custom mappings", function()
 			},
 		},
 	})
-	local invoked = { goto_vi = 0 }
 	local state = {
 		term_instance = { buf_id = 41 },
 	config = {
 		set_default_keymaps = true,
 		terminal_keymaps = function(set)
-			set("<C-z>", function()
-				invoked.custom = true
-			end, { silent = false, desc = "Custom" })
+			set("<C-z>", function() end, { silent = false, desc = "Custom" })
 		end,
 	},
-		goto_vi = function()
-			invoked.goto_vi = invoked.goto_vi + 1
-		end,
-		interrupt = function() end,
+	interrupt = function() end,
 	}
 	session:setup_terminal_keymaps(state)
 	assert(cmp_calls == 1, "cmp bridge ensure should be called once")
@@ -265,16 +295,50 @@ it("setup_terminal_keymaps applies defaults and custom mappings", function()
 		assert(map.mode == "t", string.format("mapping %s should target terminal mode", tostring(map.lhs)))
 		assert(map.opts and map.opts.buffer == 41, "buffer-local mapping expected")
 	end
-	assert(seen["<leader>iv"], "default <leader>iv mapping missing")
 	assert(seen["<Tab>"], "default <Tab> mapping missing")
+	assert(
+		seen["<Tab>"].rhs == deps.handle_terminal_tab,
+		"default <Tab> should use terminal tab handler"
+	)
+	assert(seen["<leader>iv"], "default <leader>iv mapping missing")
+	assert(
+		seen["<leader>iv"].rhs == stub_module.goto_vi,
+		"default <leader>iv should use ipybridge goto_vi"
+	)
 	local ctrl_c = seen["<C-c>"]
 	assert(ctrl_c, "default <C-c> mapping missing")
 	assert(ctrl_c.opts.silent == true, "default interrupt mapping should stay silent")
 	assert(ctrl_c.opts.desc == "IPy: Keyboard interrupt", "default interrupt mapping should set description")
+	assert(ctrl_c.rhs == state.interrupt, "default interrupt mapping should use session interrupt")
+	local f5 = seen["<F5>"]
+	assert(f5, "default <F5> mapping missing")
+	assert(f5.rhs == stub_module.run_file, "default <F5> should use ipybridge run_file")
+	assert(f5.opts.desc == "IPy: Run file (%run)", "default <F5> mapping should set description")
+	local f6 = seen["<F6>"]
+	assert(f6, "default <F6> mapping missing")
+	assert(f6.rhs == stub_module.debug_file, "default <F6> should use ipybridge debug_file")
+	assert(f6.opts.desc == "IPy: Debug file (%debugfile)", "default <F6> mapping should set description")
+	local f10 = seen["<F10>"]
+	assert(f10, "default <F10> mapping missing")
+	assert(f10.rhs == stub_module.debug_step_over, "default <F10> should use ipybridge debug_step_over")
+	assert(f10.opts.desc == "IPy: Debug step over (F10)", "default <F10> mapping should set description")
+	local f11 = seen["<F11>"]
+	assert(f11, "default <F11> mapping missing")
+	assert(f11.rhs == stub_module.debug_step_into, "default <F11> should use ipybridge debug_step_into")
+	assert(f11.opts.desc == "IPy: Debug step into (F11)", "default <F11> mapping should set description")
+	local sf11 = seen["<S-F11>"]
+	assert(sf11, "default <S-F11> mapping missing")
+	assert(sf11.rhs == stub_module.debug_step_out, "default <S-F11> should use ipybridge debug_step_out")
+	assert(sf11.opts.desc == "IPy: Debug step out (Shift+F11)", "default <S-F11> mapping should set description")
+	local f12 = seen["<F12>"]
+	assert(f12, "default <F12> mapping missing")
+	assert(f12.rhs == stub_module.debug_continue, "default <F12> should use ipybridge debug_continue")
+	assert(f12.opts.desc == "IPy: Debug continue (F12)", "default <F12> mapping should set description")
 	local custom = seen["<C-z>"]
 	assert(custom, "custom <C-z> mapping missing")
 	assert(custom.opts.silent == false, "custom mapping should keep explicit silent option")
 	assert(custom.opts.desc == "Custom", "custom mapping should keep description")
+	package.loaded["ipybridge"] = previous_module
 end)
 
 it("setup_terminal_keymaps skips defaults when disabled", function()
@@ -299,6 +363,12 @@ it("setup_terminal_keymaps skips defaults when disabled", function()
 	assert(not seen["<leader>iv"], "default <leader>iv should not be applied when disabled")
 	assert(not seen["<Tab>"], "default <Tab> should not be applied when disabled")
 	assert(not seen["<C-c>"], "default <C-c> should not be applied when disabled")
+	assert(not seen["<F5>"], "default <F5> should not be applied when disabled")
+	assert(not seen["<F6>"], "default <F6> should not be applied when disabled")
+	assert(not seen["<F10>"], "default <F10> should not be applied when disabled")
+	assert(not seen["<F11>"], "default <F11> should not be applied when disabled")
+	assert(not seen["<S-F11>"], "default <S-F11> should not be applied when disabled")
+	assert(not seen["<F12>"], "default <F12> should not be applied when disabled")
 end)
 
 it("collect_startup_instructions assembles warmup and startup script", function()
