@@ -200,6 +200,7 @@ _PDB_ALIAS_MAP = {
     "!step": "step",
     "!continue": "continue",
     "!return": "return",
+    "!exit": "quit",
 }
 _mi_qt_pump_thread = None
 _mi_gui_enabled = False
@@ -701,6 +702,20 @@ class _MiDebugNamespace:
         sys.modules["__main__"] = module
         return self
 
+    def seed_from_user_ns(self):
+        if not self._user_ns or not self.globals:
+            return
+        try:
+            items = list(self._user_ns.items())
+        except Exception:
+            return
+        for key, value in items:
+            if not isinstance(key, str):
+                continue
+            if key in self._skip_keys or key.startswith("__"):
+                continue
+            self.globals[key] = value
+
     def __exit__(self, exc_type, exc, tb):
         if self._prev_main is None:
             sys.modules.pop("__main__", None)
@@ -834,13 +849,10 @@ def _runfile_magic(line):
     runfile(path, cwd)
 
 
-def debugfile(filename, cwd=None):
+def _debug_execute_source(label, source, filename, cwd=None, seed_user_ns=False):
     pdb_cls = _MiQtAwarePdb.get()
     if pdb_cls is None:
-        print("debugfile: IPython debugger is unavailable")
-        return
-    source = _mi_read_text(filename, "debugfile")
-    if source is None:
+        print(f"{label}: IPython debugger is unavailable")
         return
     try:
         if _mi_plt is not None:
@@ -927,6 +939,11 @@ def debugfile(filename, cwd=None):
             with _mi_exec_env(filename):
                 with _MiDebugNamespace(filename) as debug_ns:
                     glbs["_mi_active_debug_namespace"] = debug_ns
+                    if seed_user_ns:
+                        try:
+                            debug_ns.seed_from_user_ns()
+                        except Exception as exc:
+                            _ipy_log_debug(f"debug namespace seed failed: {exc}")
                     should_commit = False
                     try:
                         code = compile(source, filename, "exec")
@@ -981,6 +998,41 @@ def debugfile(filename, cwd=None):
             pass
 
 
+def debugfile(filename, cwd=None):
+    source = _mi_read_text(filename, "debugfile")
+    if source is None:
+        return
+    _debug_execute_source("debugfile", source, filename, cwd, seed_user_ns=False)
+
+
+def debugcell(cell_index, filename, cwd=None):
+    text = _mi_read_text(filename, "debugcell")
+    if text is None:
+        return
+    lines = text.splitlines()
+
+    region, start_line, total = _mi_resolve_cell(lines, cell_index)
+    if region is None:
+        if total == 0:
+            print(f"debugcell: no cell markers found in {filename}")
+        else:
+            try:
+                idx = int(cell_index)
+            except Exception:
+                idx = cell_index
+            print(f"debugcell: cell {idx} out of range (total {total})")
+        return
+
+    start, end = region
+    cell_lines = lines[start:end]
+    if not cell_lines:
+        print("debugcell: selected cell is empty")
+        return
+    prefix = "\n" * start_line
+    source = prefix + "\n".join(cell_lines)
+    _debug_execute_source("debugcell", source, filename, cwd, seed_user_ns=True)
+
+
 @register_line_magic("debugfile")
 def _debugfile_magic(line):
     try:
@@ -994,3 +1046,19 @@ def _debugfile_magic(line):
     path = parts[0]
     cwd = parts[1] if len(parts) > 1 else None
     debugfile(path, cwd)
+
+
+@register_line_magic("debugcell")
+def _debugcell_magic(line):
+    try:
+        parts = shlex.split(line)
+    except Exception:
+        print("Usage: %debugcell <index> <path> [cwd]")
+        return
+    if len(parts) < 2:
+        print("Usage: %debugcell <index> <path> [cwd]")
+        return
+    idx = parts[0]
+    path = parts[1]
+    cwd = parts[2] if len(parts) > 2 else None
+    debugcell(idx, path, cwd)

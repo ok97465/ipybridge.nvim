@@ -411,6 +411,9 @@ local function fresh_init()
 			sync_with_kernel = function()
 				ctx.breakpoints_synced = true
 			end,
+			push = function()
+				ctx.breakpoints_pushed = (ctx.breakpoints_pushed or 0) + 1
+			end,
 		}
 	end
 
@@ -600,6 +603,39 @@ it("run_cell defers runcell call until helpers are ready", function()
 		end
 	end
 	assert(runcell_idx, "runcell command should be sent")
+end)
+
+it("debug_cell pushes breakpoints and triggers debugcell command", function()
+	local init_mod, ctx = fresh_init()
+	ctx.file_exists = true
+	ctx.buf_lines = {
+		"# %% cell1",
+		'print("top")',
+		"# %% cell2",
+		'print("bottom")',
+	}
+	ctx.cursor_line = 4
+
+	init_mod.debug_cell()
+
+	local helper_request = false
+	for _, req in ipairs(ctx.zmq_requests or {}) do
+		if req.op == "exec" and type(req.args) == "table" and tostring(req.args.code):find('print("magic")') then
+			helper_request = true
+			break
+		end
+	end
+	assert(helper_request, "helper bootstrap should execute via ZMQ")
+	assert(ctx.breakpoints_pushed == 1, "breakpoints should be pushed before debugcell")
+
+	local debugcell_idx
+	for idx, payload in ipairs(ctx.term_payloads or {}) do
+		if payload:match("debugcell%(") then
+			debugcell_idx = idx
+			break
+		end
+	end
+	assert(debugcell_idx, "debugcell command should be sent")
 end)
 
 local all_ok = true

@@ -180,6 +180,8 @@ M.config = {
 	runfile_save_before_run = true,
 	-- Save buffer before calling debugfile to ensure the file content is current
 	debugfile_save_before_run = true,
+	-- Save buffer before calling debugcell to ensure the file content is current
+	debugcell_save_before_run = true,
 	-- Working directory mode for executing run_cell/run_file: 'file' | 'pwd' | 'none'
 	--  - 'file': cd to the current file's directory before executing
 	--  - 'pwd' : cd to Neovim's current working directory before executing
@@ -236,6 +238,18 @@ local function get_stop_line_cell(idx_offset)
 	return n_lines, false
 end
 
+local function count_cells_before(line_start)
+	local upper = math.max((line_start or 1) - 1, 0)
+	local pre_lines = api.nvim_buf_get_lines(0, 0, upper, false)
+	local idx = 0
+	for _, ln in ipairs(pre_lines) do
+		if CELL_RE:match_str(ln) ~= nil then
+			idx = idx + 1
+		end
+	end
+	return idx
+end
+
 M.setup = function(config)
 	if config ~= nil then
 		vim.validate({
@@ -248,6 +262,7 @@ M.setup = function(config)
 			var_repr_limit = { config.var_repr_limit, "n", true },
 			python_cmd = { config.python_cmd, "s", true },
 			debugfile_save_before_run = { config.debugfile_save_before_run, "b", true },
+			debugcell_save_before_run = { config.debugcell_save_before_run, "b", true },
 			terminal_keymaps = { config.terminal_keymaps, "function", true },
 		})
 	end
@@ -740,6 +755,11 @@ M.debug_continue = function()
 	send_debug_command("!continue", { deactivate = true, restore_signcolumn = false })
 end
 
+---Exit the debugger and restore normal terminal input.
+M.quit_debug = function()
+	send_debug_command("!exit", { deactivate = true, restore_signcolumn = true })
+end
+
 ---Handle explicit debugger status updates from the Python helpers.
 ---@param info table
 function M.on_debug_status(info)
@@ -999,6 +1019,95 @@ function M.ensure_zmq(cb)
 end
 
 ---Run the current cell delimited by lines starting with "# %%".
+M.debug_cell = function()
+	local abs_path = fn.expand("%:p")
+	if not (abs_path and #abs_path > 0) then
+		warn_user("ipybridge: unable to resolve file path for debugcell; run aborted")
+		return
+	end
+	local idx_line_cursor = api.nvim_win_get_cursor(0)[1]
+	local line_start = get_start_line_cell(idx_line_cursor)
+	local line_stop, has_next_cell = get_stop_line_cell(idx_line_cursor + 1)
+
+	if vim.bo.modified and M.config.debugcell_save_before_run ~= false then
+		pcall(vim.cmd, "write")
+	end
+	if vim.bo.modified or not utils.file_exists(abs_path) then
+		warn_user("ipybridge: file must be saved before debugcell can run")
+		return
+	end
+
+	local win = api.nvim_get_current_win()
+	if win and api.nvim_win_is_valid(win) then
+		M._debug_window = win
+	else
+		M._debug_window = nil
+	end
+
+	local idx = count_cells_before(line_start)
+
+	with_terminal(true, function()
+		if not M.is_open() then
+			return
+		end
+		M._send_helpers_if_needed()
+		M._ensure_runcell_helpers(function(ok)
+			if not ok then
+				warn_user("ipybridge: debug helpers unavailable; debugcell aborted")
+				return
+			end
+			breakpoints.push()
+			local cwd_arg = resolve_exec_cwd(abs_path)
+			local safe = utils.py_quote_single(abs_path)
+			local safecwd = nil
+			if cwd_arg and #cwd_arg > 0 then
+				safecwd = utils.py_quote_single(cwd_arg)
+			end
+			local dispatched = false
+			local function dispatch_debugcell()
+				if dispatched then
+					return
+				end
+				dispatched = true
+				if safecwd then
+					term_send(string.format("debugcell(%d, '%s','%s')\n", idx, safe, safecwd))
+				else
+					term_send(string.format("debugcell(%d, '%s')\n", idx, safe))
+				end
+				local was_debug = M._debug_active
+				M._debug_generation = (M._debug_generation or 0) + 1
+				if M._debug_generation > 0 then
+					M._debug_generation_complete = M._debug_generation - 1
+				end
+				M._debug_active = true
+				M._debug_status_active = true
+				if not was_debug then
+					M._sync_var_filters()
+				end
+				if has_next_cell then
+					local idx_line = math.min(line_stop + 1, api.nvim_buf_line_count(0))
+					api.nvim_win_set_cursor(0, { idx_line, 0 })
+				end
+			end
+			exec_with_pipeline("_myipy_reset_debug_baseline()", {
+				require_helpers = true,
+				on_success = dispatch_debugcell,
+				on_error = function(reason)
+					local r = tostring(reason or "")
+					warn_user(
+						"ipybridge: failed to reset debug baseline via ZMQ; falling back to terminal call ("
+							.. (r ~= "" and r or "unknown")
+							.. ")"
+					)
+					term_send("_myipy_reset_debug_baseline()\n")
+					dispatch_debugcell()
+				end,
+			})
+		end)
+	end)
+end
+
+---Run the current cell delimited by lines starting with "# %%".
 M.run_cell = function()
 	local idx_line_cursor = api.nvim_win_get_cursor(0)[1]
 	local line_start = get_start_line_cell(idx_line_cursor)
@@ -1020,14 +1129,7 @@ M.run_cell = function()
 	end
 	-- Determine working directory to pass into runcell (no global %cd)
 	-- Count cell index by markers strictly matching '^# %%+'
-	local pre_lines = api.nvim_buf_get_lines(0, 0, math.max(line_start - 1, 0), false)
-	local idx = 0
-	for _, ln in ipairs(pre_lines) do
-		local s = CELL_RE:match_str(ln)
-		if s ~= nil then
-			idx = idx + 1
-		end
-	end
+	local idx = count_cells_before(line_start)
 	with_terminal(true, function()
 		if not M.is_open() then
 			return

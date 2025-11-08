@@ -69,6 +69,7 @@ Minimal helper to run IPython/Jupyter in a terminal split and send code from the
 - `runcell_save_before_run` (boolean): Save the buffer before runcell execution (default `true`).
 - `runfile_save_before_run` (boolean): Save the buffer before runfile execution (default `true`).
 - `debugfile_save_before_run` (boolean): Save the buffer before `%debugfile` execution (default `true`).
+- `debugcell_save_before_run` (boolean): Save the buffer before `%debugcell` execution (default `true`).
 - `exec_cwd_mode` (string): Working directory behavior for `run_cell` / `run_file`.
   - `'file'`: change directory to the current file's directory before executing
   - `'pwd'`: change directory to Neovim's `getcwd()` (default)
@@ -141,6 +142,7 @@ Minimal helper to run IPython/Jupyter in a terminal split and send code from the
 - The plugin computes the current cell index (0-based) and calls `runcell(index, <current file path>, <cwd according to exec_cwd_mode>)`.
 - If `runcell_save_before_run = true` (default), the buffer is saved first to ensure the helper runs the latest contents.
 - If the buffer is unsaved or the file path is missing, the plugin falls back to sending the cell text directly.
+- `%debugcell` shares the same helper stack so you can debug the current cell while keeping the console namespace and Spyder-style breakpoints in sync. The buffer must also be saved (controlled via `debugcell_save_before_run`).
 
 ## Runfile Magic
 - The helper also defines `runfile(path, cwd=None)` and registers `%runfile`.
@@ -161,8 +163,10 @@ Minimal helper to run IPython/Jupyter in a terminal split and send code from the
   - `<leader>ti` → toggle IPython terminal
   - `<leader>ii` → focus IPython terminal
   - `<leader><CR>` → run current cell (`# %%` delimited)
+  - `<leader>d<CR>` → debug current cell (`# %%` delimited)
   - `F5` → run current file (`%run`)
   - `F6` → debug current file (`%debugfile`)
+  - `Shift+F6` → exit debugger
   - `<leader>r` → run current line
   - `<leader>b` → toggle debugger breakpoint
   - `<leader>B` → toggle conditional breakpoint
@@ -206,6 +210,7 @@ vim.api.nvim_create_autocmd('FileType', {
     vim.keymap.set('n', '<leader><CR>', ipybridge.run_cell, { buffer = true })
     vim.keymap.set('n', '<F5>', ipybridge.run_file, { buffer = true })
     vim.keymap.set('n', '<F6>', ipybridge.debug_file, { buffer = true })
+    vim.keymap.set('n', '<S-F6>', ipybridge.quit_debug, { buffer = true })
     vim.keymap.set('n', '<leader>r', ipybridge.run_line, { buffer = true })
     vim.keymap.set('v', '<leader>r', ipybridge.run_lines, { buffer = true })
     vim.keymap.set('n', '<leader>b', ipybridge.toggle_breakpoint, { buffer = true })
