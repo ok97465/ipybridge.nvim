@@ -86,6 +86,7 @@ function M.apply_buffer(bufnr)
 	set("n", "<leader>iv", my.goto_vi, "IPy: Back to editor")
 	-- Run current cell
 	set("n", "<leader><CR>", my.run_cell, "IPy: Run cell")
+	set("n", "<leader>d<CR>", my.debug_cell, "IPy: Debug cell")
 	-- Run current file
 	set("n", "<F5>", my.run_file, "IPy: Run file (%run)")
 	set("n", "<F6>", my.debug_file, "IPy: Debug file (%debugfile)")

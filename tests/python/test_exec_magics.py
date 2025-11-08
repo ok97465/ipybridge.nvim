@@ -80,6 +80,11 @@ def test_runcell_magic_registered(monkeypatch):
     assert "runcell" in registered
 
 
+def test_debugcell_magic_registered(monkeypatch):
+    _, registered = _load_exec_magics(monkeypatch)
+    assert "debugcell" in registered
+
+
 def test_conditional_breakpoint_ignores_eval_errors(monkeypatch, tmp_path):
     module, _ = _load_exec_magics(monkeypatch)
     pdb_cls = module._MiQtAwarePdb.get()
@@ -176,6 +181,74 @@ def test_debugfile_uses_isolated_namespace(monkeypatch, tmp_path):
 
     assert user_ns["foo"] == "foo"
     assert user_ns["foo_exists_before"] is False
+
+
+def test_debugcell_shares_namespace_and_breakpoints(monkeypatch, tmp_path):
+    module, _ = _load_exec_magics(monkeypatch)
+
+    monkeypatch.setattr(module, "_mi_start_qt_pump", lambda *a, **k: None)
+    monkeypatch.setattr(module, "_mi_enable_matplotlib", lambda *a, **k: None)
+    monkeypatch.setattr(module, "_mi_enable_gui", lambda *a, **k: None)
+
+    script_path = tmp_path / "cells.py"
+    script_path.write_text(
+        "# %%\n" "counter = 1\n" "# %%\n" "counter = counter + 1\n",
+        encoding="utf-8",
+    )
+
+    module.__dict__["__ipybridge_breakpoints__"] = {str(script_path): [4]}
+
+    class DummyShell:
+        def __init__(self):
+            self.user_ns = module.__dict__
+
+    monkeypatch.setattr(sys.modules["IPython"], "get_ipython", lambda: DummyShell())
+
+    debuggers = []
+
+    class RecorderDebugger(bdb.Bdb):
+        def __init__(self):
+            super().__init__()
+            self.shell = types.SimpleNamespace(
+                colors="linux", hooks=types.SimpleNamespace(synchronize_with_editor=None)
+            )
+            self.prompt = ""
+            self.seen_breaks = []
+            debuggers.append(self)
+
+        def clear_all_breaks(self):
+            self.seen_breaks.clear()
+
+        def set_break(self, filename, lineno, cond=None):
+            self.seen_breaks.append((filename, lineno, cond))
+
+        def reset(self):
+            pass
+
+        def runctx(self, code, glbs, locs):
+            exec(code, glbs, locs)
+
+        def set_trace(self, *_args, **_kwargs):
+            pass
+
+    monkeypatch.setattr(
+        module._MiQtAwarePdb,
+        "get",
+        classmethod(lambda cls: RecorderDebugger),
+    )
+
+    module.runcell(0, str(script_path))
+    assert module.__dict__["counter"] == 1
+
+    module.debugcell(1, str(script_path))
+    assert module.__dict__["counter"] == 2
+
+    module.runcell(1, str(script_path))
+    assert module.__dict__["counter"] == 3
+
+    assert debuggers, "debugger should be instantiated"
+    latest = debuggers[-1]
+    assert any(line == 4 for _, line, _ in latest.seen_breaks)
 
 
 def test_emit_vars_snapshot_syncs_namespace(monkeypatch):
