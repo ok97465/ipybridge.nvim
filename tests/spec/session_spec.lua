@@ -64,6 +64,7 @@ local function base_deps()
 					goto_vi = function() end,
 					run_file = function() end,
 					debug_file = function() end,
+					quit_debug = function() end,
 					debug_step_over = function() end,
 					debug_step_into = function() end,
 					debug_step_out = function() end,
@@ -82,6 +83,7 @@ local function base_deps()
 			map("<leader>iv", my.goto_vi, "IPy: Back to editor")
 			map("<F5>", my.run_file, "IPy: Run file (%run)")
 			map("<F6>", my.debug_file, "IPy: Debug file (%debugfile)")
+			map("<S-F6>", my.quit_debug, "IPy: Quit debugger (!exit)")
 			map("<F10>", my.debug_step_over, "IPy: Debug step over (F10)")
 			map("<F11>", my.debug_step_into, "IPy: Debug step into (F11)")
 			map("<S-F11>", my.debug_step_out, "IPy: Debug step out (Shift+F11)")
@@ -261,6 +263,7 @@ it("setup_terminal_keymaps applies defaults and custom mappings", function()
 		goto_vi = function() end,
 		run_file = function() end,
 		debug_file = function() end,
+		quit_debug = function() end,
 		debug_step_over = function() end,
 		debug_step_into = function() end,
 		debug_step_out = function() end,
@@ -318,6 +321,10 @@ it("setup_terminal_keymaps applies defaults and custom mappings", function()
 	assert(f6, "default <F6> mapping missing")
 	assert(f6.rhs == stub_module.debug_file, "default <F6> should use ipybridge debug_file")
 	assert(f6.opts.desc == "IPy: Debug file (%debugfile)", "default <F6> mapping should set description")
+	local sf6 = seen["<S-F6>"]
+	assert(sf6, "default <S-F6> mapping missing")
+	assert(sf6.rhs == stub_module.quit_debug, "default <S-F6> should use ipybridge quit_debug")
+	assert(sf6.opts.desc == "IPy: Quit debugger (!exit)", "default <S-F6> mapping should set description")
 	local f10 = seen["<F10>"]
 	assert(f10, "default <F10> mapping missing")
 	assert(f10.rhs == stub_module.debug_step_over, "default <F10> should use ipybridge debug_step_over")
@@ -365,6 +372,7 @@ it("setup_terminal_keymaps skips defaults when disabled", function()
 	assert(not seen["<C-c>"], "default <C-c> should not be applied when disabled")
 	assert(not seen["<F5>"], "default <F5> should not be applied when disabled")
 	assert(not seen["<F6>"], "default <F6> should not be applied when disabled")
+	assert(not seen["<S-F6>"], "default <S-F6> should not be applied when disabled")
 	assert(not seen["<F10>"], "default <F10> should not be applied when disabled")
 	assert(not seen["<F11>"], "default <F11> should not be applied when disabled")
 	assert(not seen["<S-F11>"], "default <S-F11> should not be applied when disabled")

@@ -740,6 +740,11 @@ M.debug_continue = function()
 	send_debug_command("!continue", { deactivate = true, restore_signcolumn = false })
 end
 
+---Exit the debugger and restore normal terminal input.
+M.quit_debug = function()
+	send_debug_command("!exit", { deactivate = true, restore_signcolumn = true })
+end
+
 ---Handle explicit debugger status updates from the Python helpers.
 ---@param info table
 function M.on_debug_status(info)

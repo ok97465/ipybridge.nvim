@@ -163,6 +163,7 @@ Minimal helper to run IPython/Jupyter in a terminal split and send code from the
   - `<leader><CR>` → run current cell (`# %%` delimited)
   - `F5` → run current file (`%run`)
   - `F6` → debug current file (`%debugfile`)
+  - `Shift+F6` → exit debugger
   - `<leader>r` → run current line
   - `<leader>b` → toggle debugger breakpoint
   - `<leader>B` → toggle conditional breakpoint
@@ -206,6 +207,7 @@ vim.api.nvim_create_autocmd('FileType', {
     vim.keymap.set('n', '<leader><CR>', ipybridge.run_cell, { buffer = true })
     vim.keymap.set('n', '<F5>', ipybridge.run_file, { buffer = true })
     vim.keymap.set('n', '<F6>', ipybridge.debug_file, { buffer = true })
+    vim.keymap.set('n', '<S-F6>', ipybridge.quit_debug, { buffer = true })
     vim.keymap.set('n', '<leader>r', ipybridge.run_line, { buffer = true })
     vim.keymap.set('v', '<leader>r', ipybridge.run_lines, { buffer = true })
     vim.keymap.set('n', '<leader>b', ipybridge.toggle_breakpoint, { buffer = true })

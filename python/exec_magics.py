@@ -200,6 +200,7 @@ _PDB_ALIAS_MAP = {
     "!step": "step",
     "!continue": "continue",
     "!return": "return",
+    "!exit": "quit",
 }
 _mi_qt_pump_thread = None
 _mi_gui_enabled = False
