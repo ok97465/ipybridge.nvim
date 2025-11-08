@@ -14,18 +14,59 @@ Minimal helper to run IPython/Jupyter in a terminal split and send code from the
 - Breakpoints you toggle in Neovim are respected; the gutter indicator in the GIF shows the active stop line.
 - Matplotlib stays interactive even while the debugger pauses execution, letting you pan and zoom figures mid-inspection.
 - The variable explorer stays in sync with the paused frame, making it easy to examine arrays and custom structures.
-- Completions inside `ipdb` come from `nvim-cmp`, giving you the same rich suggestions you rely on during normal editing.
+- Completions inside `ipdb` come from your completion engine (`nvim-cmp` or `blink.cmp`), giving you the same rich suggestions you rely on during normal editing.
 
 ![demo debugger gif](https://github.com/ok97465/ipybridge.nvim/raw/main/doc/demo_debug.gif)
 
 ## Requirements
 
 - Neovim 0.11 or newer
-- [`nvim-cmp`](https://github.com/hrsh7th/nvim-cmp) (used to render TAB completion inside ipdb)
+- Completion engine: [`nvim-cmp`](https://github.com/hrsh7th/nvim-cmp) or [`blink.cmp`](https://github.com/Saghen/blink.cmp). ipybridge auto-detects whichever is available (defaults to nvim-cmp when both are installed, but you can reorder via `completion.engine_priority`).
 - Python with Jupyter/IPython
   - `jupyter` (for `jupyter console`)
   - `ipykernel`, `jupyter_client`, `pyzmq` (for variable explorer / preview)
   - `ipython` (for the console experience)
+
+## Debugger Completion Engines
+
+ipybridge streams ipdb suggestions into whichever completion engine you use in the terminal window.
+
+- **nvim-cmp** – ipybridge ships the `ipybridge_debug_hint` source. Include it in the sources you enable for terminal buffers (ipybridge also registers it automatically when the debugger starts). Example:
+
+  ```lua
+  local cmp = require("cmp")
+  cmp.setup({
+    sources = cmp.config.sources({
+      { name = "ipybridge_debug_hint" },
+    }, {
+      { name = "buffer" },
+      { name = "path" },
+    }),
+  })
+  ```
+
+- **blink.cmp** – enable terminal support (`term.enabled = true`) and blink will consume the `IpyBridge` provider that ipybridge registers automatically. Example:
+
+  ```lua
+  require("blink.cmp").setup({
+    term = {
+      enabled = true,
+      sources = {
+        default = { "ipybridge_debug_hint" }, -- shows up in the UI as “IpyBridge”
+      },
+    },
+  })
+  ```
+
+When both engines are installed, nvim-cmp is preferred by default. Override the order inside `require("ipybridge").setup` to pick your favorite engine. The list is also an allow-list, so engines you omit are ignored entirely:
+
+```lua
+require("ipybridge").setup({
+  completion = {
+    engine_priority = { "blink.cmp", "nvim-cmp" }, -- prefer blink when both are present
+  },
+})
+```
 
 ## Installation (lazy.nvim)
 - Example:

@@ -17,6 +17,7 @@ local py_module = require("ipybridge.py_module")
 local debug_vars = require("ipybridge.debug.vars")
 local breakpoints = require("ipybridge.debug.breakpoints")
 local cmp_bridge = require("ipybridge.cmp_bridge")
+local cmp_constants = require("ipybridge.cmp_bridge.constants")
 local debug_completion = require("ipybridge.debug.completion")
 local debug_sign = require("ipybridge.debug.sign")
 local Debug = require("ipybridge.core.debug")
@@ -209,6 +210,9 @@ M.config = {
 	multiline_send_mode = "paste",
 	-- Extra terminal-mode keymaps applied after the IPython console buffer is created.
 	terminal_keymaps = nil,
+	completion = {
+		engine_priority = vim.deepcopy(cmp_constants.default_engine_priority),
+	},
 }
 
 local function get_start_line_cell(idx_seed)
@@ -264,9 +268,16 @@ M.setup = function(config)
 			debugfile_save_before_run = { config.debugfile_save_before_run, "b", true },
 			debugcell_save_before_run = { config.debugcell_save_before_run, "b", true },
 			terminal_keymaps = { config.terminal_keymaps, "function", true },
+			completion = { config.completion, "table", true },
 		})
+		if config.completion and config.completion.engine_priority ~= nil then
+			vim.validate({
+				engine_priority = { config.completion.engine_priority, "table" },
+			})
+		end
 	end
 	M.config = vim.tbl_deep_extend("force", M.config, config or {})
+	cmp_bridge.configure(M.config.completion or {})
 
 	breakpoints.ensure_support()
 
