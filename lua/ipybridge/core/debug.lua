@@ -153,6 +153,14 @@ function Debug.new(ctx)
 		if type(info) ~= "table" then
 			return
 		end
+		local previous_win = vim.api.nvim_get_current_win()
+		local restore_terminal_focus = false
+		if state.term_instance and state.term_instance.win_id then
+			local term_win = state.term_instance.win_id
+			if term_win and vim.api.nvim_win_is_valid(term_win) and previous_win == term_win then
+				restore_terminal_focus = true
+			end
+		end
 		local generation = tonumber(state._debug_generation) or 0
 		local completed = tonumber(state._debug_generation_complete) or 0
 		if generation <= completed then
@@ -231,6 +239,23 @@ function Debug.new(ctx)
 		if state._debug_active then
 			state._latest_vars = debug_vars.current_scope(state, state._debug_scope == "locals")
 			debug_vars.push_to_explorer(state)
+		end
+		if restore_terminal_focus then
+			vim.schedule(function()
+				local term = state.term_instance
+				if not term then
+					return
+				end
+				local term_win = term.win_id
+				if not (term_win and vim.api.nvim_win_is_valid(term_win)) then
+					return
+				end
+				if vim.api.nvim_get_current_win() ~= term_win then
+					pcall(vim.api.nvim_set_current_win, term_win)
+				end
+				term:scroll_to_bottom()
+				term:startinsert()
+			end)
 		end
 	end
 
