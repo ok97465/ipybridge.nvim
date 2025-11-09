@@ -19,6 +19,7 @@ local specs = {
 	"tests.spec.debug_focus_spec",
 	"tests.spec.debug_sign_spec",
 	"tests.spec.debug_scope_spec",
+	"tests.spec.cmp_bridge_spec",
 }
 
 local any_fail = false
