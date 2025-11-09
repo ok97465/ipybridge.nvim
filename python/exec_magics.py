@@ -209,6 +209,7 @@ _PDB_ALIAS_MAP = {
 }
 _mi_qt_pump_thread = None
 _mi_gui_enabled = False
+_mi_qt_loop_running = False
 
 
 def _mi_read_text(path, label):
@@ -454,7 +455,7 @@ def _mi_enable_matplotlib(backends=_MI_QT_BACKENDS):
     return False
 
 
-def _mi_enable_gui(backends=_MI_QT_BACKENDS):
+def _mi_enable_gui(backends=_MI_QT_BACKENDS, *, allow_backend_fallback=True):
     global _mi_gui_enabled
     if _mi_gui_enabled:
         return True
@@ -482,18 +483,31 @@ def _mi_enable_gui(backends=_MI_QT_BACKENDS):
                 return True
             except Exception:
                 continue
-    if _mi_enable_matplotlib(backends):
+    if allow_backend_fallback and _mi_enable_matplotlib(backends):
         _mi_gui_enabled = True
         return True
     return False
 
 
+def _mi_maybe_start_qt_loop(interval=0.03):
+    global _mi_qt_loop_running
+    if _mi_qt_loop_running:
+        return
+    backend_hint = _mi_matplotlib_backend_hint()
+    if not backend_hint:
+        return
+    try:
+        _mi_enable_gui(allow_backend_fallback=False)
+    except TypeError:  # pragma: no cover - compat guard
+        _mi_enable_gui()
+    _mi_start_qt_pump(interval)
+    _mi_qt_loop_running = True
+
+
 @contextlib.contextmanager
 def _mi_qt_events(interval=0.03):
     _mi_patch_kernel_input()
-    _mi_enable_matplotlib()
-    _mi_enable_gui()
-    _mi_start_qt_pump(interval)
+    _mi_maybe_start_qt_loop(interval)
     try:
         yield
     finally:
@@ -703,6 +717,8 @@ class _MiQtAwarePdb:
                             pass
                     else:
                         _ipy_log_debug(f"matplotlib magic failed: {exc}")
+                else:
+                    _mi_maybe_start_qt_loop()
                 return True
 
         cls._cls = QtAwarePdb
@@ -951,7 +967,6 @@ def _debug_execute_source(label, source, filename, cwd=None, seed_user_ns=False)
         return
     try:
         if _mi_plt is not None:
-            _mi_start_qt_pump()
             if not hasattr(_mi_plt, "_myipy_orig_show"):
                 _mi_plt._myipy_orig_show = _mi_plt.show
 
@@ -971,8 +986,7 @@ def _debug_execute_source(label, source, filename, cwd=None, seed_user_ns=False)
                 _mi_plt.show = _mi_debug_show
     except Exception:
         pass
-    _mi_enable_matplotlib()
-    _mi_enable_gui()
+    _mi_maybe_start_qt_loop()
     glbs = globals()
     dbg = pdb_cls()
     glbs["_mi_active_debugger"] = dbg
