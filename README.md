@@ -13,8 +13,8 @@ Minimal helper to run IPython/Jupyter in a terminal split and send code from the
 - Debug sessions run through IPython's `debugfile`, so this plugin natively supports step-by-step debugging.
 - Breakpoints you toggle in Neovim are respected; the gutter indicator in the GIF shows the active stop line.
 - Matplotlib stays interactive even while the debugger pauses execution, letting you pan and zoom figures mid-inspection.
-- The variable explorer stays in sync with the paused frame, making it easy to examine arrays and custom structures.
-- Completions inside `ipdb` come from your completion engine (`nvim-cmp` or `blink.cmp`), giving you the same rich suggestions you rely on during normal editing.
+- The variable explorer examines arrays and custom structures.
+- Completions inside `ipdb` come from your completion engine (`nvim-cmp` or `blink.cmp`), giving you the suggestions.
 
 ![demo debugger gif](https://github.com/ok97465/ipybridge.nvim/raw/main/doc/demo_debug.gif)
 
@@ -31,7 +31,7 @@ Minimal helper to run IPython/Jupyter in a terminal split and send code from the
 
 ipybridge streams ipdb suggestions into whichever completion engine you use in the terminal window.
 
-- **nvim-cmp** – ipybridge ships the `ipybridge_debug_hint` source. Include it in the sources you enable for terminal buffers (ipybridge also registers it automatically when the debugger starts). Example:
+- **nvim-cmp** – ipybridge ships the `ipybridge_debug_hint` source. Include it in the sources you enable for terminal buffers. Example:
 
   ```lua
   local cmp = require("cmp")
@@ -63,7 +63,7 @@ When both engines are installed, nvim-cmp is preferred by default. Override the 
 ```lua
 require("ipybridge").setup({
   completion = {
-    engine_priority = { "blink.cmp", "nvim-cmp" }, -- prefer blink when both are present
+    engine_priority = { "blink.cmp", "nvim-cmp" },
   },
 })
 ```
@@ -94,6 +94,7 @@ require("ipybridge").setup({
         runcell_save_before_run = true,  -- save buffer before runcell to use up-to-date file
         runfile_save_before_run = true,  -- save buffer before runfile to use up-to-date file
         debugfile_save_before_run = true, -- save buffer before debugfile to use up-to-date file
+        debugcell_save_before_run = true, -- save buffer before debugcell to use up-to-date file
 
         -- Variable explorer / preview (ZMQ backend requires ipykernel + jupyter_client + pyzmq)
         viewer_max_rows = 30,
@@ -107,7 +108,7 @@ require("ipybridge").setup({
 
 ### Configuration
 - `profile_name` (string|nil): IPython profile passed as `--profile=<name>`. If `nil`, the flag is omitted.
-- `startup_script` (string): If this file exists under current working directory, `ipython -i <startup_script>` is used; otherwise the plugin sends a minimal set of numeric imports automatically.
+- `startup_script` (string): If this file exists under current working directory, `ipython -i <startup_script>` is used.
 - `sleep_ms_after_open` (number): Milliseconds to wait (non-blocking) before running initial setup such as `%matplotlib` or `%load_ext autoreload`.
 - `set_default_keymaps` (boolean, default: `true`): Apply buffer-local keymaps for Python files only.
 
@@ -124,7 +125,6 @@ require("ipybridge").setup({
   - `'pwd'`: change directory to Neovim's `getcwd()` (default)
   - `'none'`: do not change directory
 - `viewer_max_rows` / `viewer_max_cols` (numbers): DataFrame/ndarray preview limits.
-- `simple_prompt` (boolean): Use simplified prompt in Jupyter console. Defaults to `false` for richer colors/UI.
 - `ipython_colors` (string|nil): Color scheme applied via IPython's `%colors` magic (e.g., `Linux`, `LightBG`, `NoColor`). Some jupyter-console versions ignore CLI flags; this runtime magic is used for portability.
 - `hidden_var_names` (string[]): Variable names to hide in the Variable Explorer (exact match; supports `*` suffix for prefix match). Example: `{ 'pi', 'newaxis' }`.
 - `hidden_type_names` (string[]): Type names to hide (exact or prefix with `*`). Examples: `{ 'ZMQInteractiveShell', 'Axes', 'Figure', 'AxesSubplot' }`.
@@ -142,74 +142,80 @@ require("ipybridge").setup({
 
 ### Debugging
 
-- `<leader>b` toggles a persistent breakpoint sign at the cursor and sends the updated list to the IPython debugger.
-- `%debugfile <path> [cwd]` mirrors Spyder's helper and runs the current file under an IPython `Pdb` instance.
+- `<leader>b` toggles a breakpoint.
 - The helper pumps the Qt event loop while the debugger waits, so Matplotlib (Qt backends) stays interactive without manual `plt.pause()` calls.
 - Default shortcuts:
-  - `F6` → launch `%debugfile` for the active buffer (uses `exec_cwd_mode` to set the working directory)
+  - `F6` → launch `%debugfile` for the active buffer
+  - `Shift+F6` → exit debug
   - `F10` → `next`
   - `F11` → `step`
   - `Shift+F11` → `return`
   - `F12` → `continue`
-- `%debugfile` becomes available automatically once the console starts; no manual `%load_ext` needed.
 
 ## API
 
+### Setup & state
 - `require('ipybridge').setup(opts)` — Configure the plugin.
-- `require('ipybridge').toggle()` — Toggle the IPython terminal split.
+- `require('ipybridge').apply_default_keymaps()` — Recreate the autocmds, buffer maps, and user commands that ship with ipybridge.
+- `require('ipybridge').apply_buffer_keymaps(bufnr)` — Apply the Python buffer mappings to a specific buffer.
+- `require('ipybridge').is_open()` — Return `true` when the IPython terminal split is alive.
+
+### Terminal control
 - `require('ipybridge').open(go_back)` — Open the terminal. If `go_back` is `true`, jump back to the previous window after initialization.
 - `require('ipybridge').close()` — Close the terminal job if running.
+- `require('ipybridge').toggle()` — Toggle the IPython terminal split.
 - `require('ipybridge').goto_ipy()` — Focus the IPython split and enter insert mode.
 - `require('ipybridge').goto_vi()` — Return focus from the IPython split to the previous window.
+
+### Execution helpers
 - `require('ipybridge').run_file()` — Run the current file via `%run <filebase>` in IPython.
+- `require('ipybridge').debug_file()` — Run the current file in `%debugfile`.
+- `require('ipybridge').run_cell()` — Run the current cell and move the cursor to the beginning of the next one.
+- `require('ipybridge').debug_cell()` — Debug the current cell via `%debugcell`.
 - `require('ipybridge').run_line()` — Send the current line, then move the cursor down.
 - `require('ipybridge').run_lines()` — Send the current visual selection (linewise) to IPython.
 - `require('ipybridge').send_lines(start_line, end_line)` — Send lines `[start_line, end_line)` by 0-indexed range.
 - `require('ipybridge').run_cmd(cmd)` — Send an arbitrary command string.
-- `require('ipybridge').run_cell()` — Run the current cell and move the cursor to the beginning of the next one.
 - `require('ipybridge').up_cell()` / `down_cell()` — Move to the previous/next cell.
 
-## Notes
+### Debugger controls
+- `require('ipybridge').debug_step_over()` — Issue `next` inside ipdb.
+- `require('ipybridge').debug_step_into()` — Issue `step`.
+- `require('ipybridge').debug_step_out()` — Issue `return`.
+- `require('ipybridge').debug_continue()` — Resume execution and hide debugger UI.
+- `require('ipybridge').quit_debug()` — Exit ipdb and restore the terminal to normal mode.
+- `require('ipybridge').toggle_breakpoint()` — Toggle a breakpoint on the current line.
+- `require('ipybridge').set_conditional_breakpoint()` — Prompt for a condition before adding a breakpoint.
 
-- On open, the plugin starts a Jupyter kernel and attaches a `jupyter console --existing` in a `botright vsplit`.
-- Matplotlib: if configured, the backend is set via `%matplotlib`, and the debugger keeps Qt windows responsive by processing events in the background.
-- If `startup_script` exists in the current working directory, it is executed in the console; otherwise minimal numeric imports are sent.
-- Multi-line sending mode is configurable:
-  - Default is `'exec'` which hex-encodes the selection and executes it via `exec()` (robust; minimal echo).
-  - Set `multiline_send_mode = 'paste'` to send plain text using bracketed paste (ESC[200~ ... ESC[201~) so IPython shows the exact code as if it was typed (similar to Spyder).
-- Cell detection uses a `# %%`-style marker and is implemented with `vim.regex` and `vim.iter` (Neovim 0.11+ APIs) for clarity and performance.
-- When `set_default_keymaps` is enabled, keymaps are also applied to already-open Python buffers at startup.
+### Variable explorer & data viewer
+- `require('ipybridge').var_explorer_open()` — Open the variable explorer and request the latest snapshot.
+- `require('ipybridge').var_explorer_refresh()` — Refresh the explorer (live locals/globals while debugging).
+- `require('ipybridge').request_preview(name[, opts])` — Request a preview payload for `name` (used by `:IpybridgePreview`).
 
-## Matplotlib Backend / GUI Windows
+### Plot viewer & kernel helpers
+- `require('ipybridge').plot_open()` — Open the browser-based plot history.
+- `require('ipybridge').plot_next()` / `plot_prev()` — Cycle through captured plots.
+- `require('ipybridge').plot_delete()` — Delete the current plot from history.
+- `require('ipybridge').plot_clear()` — Clear the entire plot history buffer.
+- `require('ipybridge').plot_status()` — Print the current plot index/count.
+- `require('ipybridge').interrupt()` — Send an interrupt signal (Ctrl+C equivalent)
 
-- Set `matplotlib_backend` to a value accepted by `%matplotlib` (e.g. `'qt'`, `'inline'`, `'macosx'`, `'tk'`, `'agg'`).
-- Qt requires `PyQt5` or `PySide6`. Tk requires Tk support. macOS may require framework build Python.
-- The browser plot viewer (when enabled) forces `%matplotlib inline` internally so snapshots are deterministic; switch back to `%matplotlib inline` whenever you want the history pane to resume recording.
 
 ## Plot Viewer (Spyder-style History)
 
-- Enable with `plot_viewer.mode = "browser"` inside `require("ipybridge").setup({ ... })`. The kernel bootstrap spins up a localhost HTTP + SSE server, Neovim grabs the URL via OSC, and (when `auto_open = true`) your default browser opens automatically. Reopen the page with `<leader>po` or `:IpybridgePlots`.
+- Enable with `plot_viewer.mode = "browser"` inside `require("ipybridge").setup({ ... })`. Reopen the page with `<leader>po` or `:IpybridgePlots`.
 - The plot pane forces `%matplotlib inline`. Only this backend is captured; switching to `%matplotlib qt` (or any other backend) pauses history until you return to `%matplotlib inline`.
-- Every `plt.show()` / `plt.savefig()` call snapshots the active figures via `FigureCanvasAgg`, stores up to `history` PNGs, and streams `plot-added`, `plot-removed`, and `plot-selected` events to the browser UI so thumbnails stay in sync without polling.
-- Use the browser controls or editor shortcuts (`]p`, `[p`, `<leader>pd`, `<leader>pc`, `:IpybridgePlotNext`, `:IpybridgePlotDelete`, etc.) to cycle through history or drop entries. Neovim keymaps talk to the same runtime over ZMQ, so they keep working even when the tab is in the background.
-- Neovim automatically refreshes the viewer status via ZMQ right after startup, so `<leader>po`/`:IpybridgePlots` can open the browser even before any console output occurs.
-- The browser UI keeps previews on the right-hand pane while a narrow thumbnail rail (no timestamps or figure numbers) stays on the left, making it easy to focus on the active figure.
-- Switching away from `%matplotlib inline` (for example `%matplotlib qt`) automatically pauses snapshots; the viewer badge turns red and shows “paused”. Run `%matplotlib inline` to resume recording.
+- Use the browser controls or editor shortcuts (`]p`, `[p`, `<leader>pd`, `<leader>pc`, `:IpybridgePlotNext`, `:IpybridgePlotDelete`, etc.) to cycle through history or drop entries.
 
-## Spyder-like Runcell
+## Runcell(Spyder-style)
 
-- The helper defines `runcell(index, path, cwd=None)` and a `%runcell` line magic. Cells are delimited by lines matching `^# %%+`.
-- The plugin computes the current cell index (0-based) and calls `runcell(index, <current file path>, <cwd according to exec_cwd_mode>)`.
-- If `runcell_save_before_run = true` (default), the buffer is saved first to ensure the helper runs the latest contents.
-- If the buffer is unsaved or the file path is missing, the plugin falls back to sending the cell text directly.
-- `%debugcell` shares the same helper stack so you can debug the current cell while keeping the console namespace and Spyder-style breakpoints in sync. The buffer must also be saved (controlled via `debugcell_save_before_run`).
+- `%debugcell` shares the same helper stack so you can debug the current cell while keeping the console namespace and Spyder-style breakpoints in sync.
 
-## Runfile Magic
-- The helper also defines `runfile(path, cwd=None)` and registers `%runfile`.
+## Runfile(Spyder-style)
 - `run_file()` uses `runfile('<abs_path>', '<cwd>')` to avoid changing the global working directory.
 
-## Variable Explorer & Data Viewer (ZMQ)
-- Open the variable explorer and request current variables from the kernel over a lightweight ZMQ backend.
+## Variable Explorer & Data Viewer
+
 - Requirements: `ipykernel`, `jupyter_client`, `pyzmq` (in the Python environment of the kernel).
 - Default keymaps:
   - `<leader>vx` → open variable explorer
@@ -218,10 +224,13 @@ require("ipybridge").setup({
   - `q` → close, `r` → refresh, `<CR>` → open preview when available (DataFrame/ndarray/dataclass/ctypes or truncated repr)
 - Preview window shows DataFrame/ndarray/object summaries; press `r` to refresh, `q` to close. In the viewer, `<CR>` on a dataclass/ctypes field drills down (e.g., `yy.b`, `hh.h2`).
 
-## Default Keymaps (Python buffers only)
+## Default Keymaps
+
+### Python buffers
 - Normal:
   - `<leader>ti` → toggle IPython terminal
   - `<leader>ii` → focus IPython terminal
+  - `<leader>iv` → back to the editor window
   - `<leader><CR>` → run current cell (`# %%` delimited)
   - `<leader>d<CR>` → debug current cell (`# %%` delimited)
   - `F5` → run current file (`%run`)
@@ -236,27 +245,46 @@ require("ipybridge").setup({
   - `Shift+F11` → debugger step out
   - `F12` → debugger continue
   - `]c` / `[c` → next/prev cell
-  - `<leader>vx` → variable explorer (global command also available)
+  - `<leader>vx` → open variable explorer
   - `<leader>vr` → refresh variables
 - Visual:
   - `<leader>r` → run selection
   - `F9` → run selection
   - `]c` / `[c` → next/prev cell
 
+### IPython terminal
+- `<Tab>` → trigger debugger completion hints inside `ipdb`
+- `<C-c>` → send an interrupt to the kernel
+- `<leader>iv` → leave terminal-mode and jump back to the previous window
+- `F5` → run current file (`%run`)
+- `F6` → debug current file (`%debugfile`)
+- `Shift+F6` → exit debugger (`!exit`)
+- `F10` → debugger step over
+- `F11` → debugger step into
+- `Shift+F11` → debugger step out
+- `F12` → debugger continue
+
 ### Global
-- Normal/Terminal:
-  - `<leader>iv` → back to editor (works anywhere; exits terminal and jumps back)
+- `<leader>iv` → back to editor (works anywhere; exits terminal and jumps back)
+- `<leader>vx` → open variable explorer from any buffer
+- `<leader>vr` → refresh variables from any buffer
+- `<leader>po` → open the plot viewer in a browser
+- `]p` / `[p` → next/prev stored plot
+- `<leader>pd` → delete the current plot snapshot
+- `<leader>pc` → clear the plot history
 
 ### User Commands
 - `:IpybridgeVars` → open variable explorer
 - `:IpybridgeVarsRefresh` → refresh variables
+- `:IpybridgePreview <name>` → open preview for a variable or path (supports dotted/indexed paths, e.g., `yy.b`, `yy.c`, `hh.h2`, `arr[0]`)
 - `:IpybridgeDebugFile` → debug the current file via `%debugfile`
 - `:IpybridgeInterrupt` → send an interrupt signal to the connected kernel (Ctrl+C equivalent)
-- `:IpybridgePreview <name>` → open preview for a variable or path (supports dotted/indexed paths, e.g., `yy.b`, `yy.c`, `hh.h2`, `arr[0]`)
-
-### Terminal Buffers
-- Terminal mode:
-  - `<leader>iv` → back to editor (works in any terminal buffer)
+- `:IpybridgePlots` → open the plot viewer (browser UI)
+- `:IpybridgePlotNext` → show the next captured plot
+- `:IpybridgePlotPrev` → show the previous captured plot
+- `:IpybridgePlotDelete` → delete the currently focused plot snapshot
+- `:IpybridgePlotClear` → clear all stored plot snapshots
+- `:IpybridgePlotStatus` → print the current plot index/count
 
 ## Manual Mappings Example
 ```lua
@@ -299,23 +327,3 @@ require('ipybridge').setup({
   end,
 })
 ```
-
-## Troubleshooting
-- Ensure `ipython` is installed and discoverable in your environment.
-- For variable explorer and preview, ensure `ipykernel`, `jupyter_client`, and `pyzmq` are installed in the kernel’s environment.
-- If the split opens but does not accept input, check your terminal integration or try a different shell.
-- Windows console sequences are handled, but some terminals may require different escape behavior.
-
-## Developer Notes
-- Modules and responsibilities:
-  - `lua/ipybridge/init.lua`: public API and orchestration of features.
-  - `lua/ipybridge/term_ipy.lua`: terminal split wrapper (open/send/scroll/cleanup).
-  - `lua/ipybridge/utils.lua`: small utilities (quoting, selection range, exec helpers).
-  - `lua/ipybridge/keymaps.lua`: default keymaps and user commands.
-  - `lua/ipybridge/kernel.lua`: standalone ipykernel lifecycle and connection file.
-  - `lua/ipybridge/zmq_client.lua`: NDJSON ZMQ bridge to the kernel (vars/preview).
-  - `lua/ipybridge/dispatch.lua`: routes decoded messages to UI modules.
-  - `lua/ipybridge/var_explorer.lua`: variable explorer floating window.
-  - `lua/ipybridge/data_viewer.lua`: preview window for arrays/dataframes/objects.
-  - `lua/ipybridge/exec_magics.lua`: IPython runcell/runfile execution magics.
-- Public API remains the same; internals are split for readability and maintenance.
