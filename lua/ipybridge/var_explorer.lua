@@ -1,5 +1,6 @@
--- Variable explorer UI for ipybridge.nvim.
--- Manages floating window lifecycle while delegating row formatting.
+-- Floating variable explorer for ipybridge.nvim.
+-- Owns the window, keymaps, and drill-down logic while delegating row
+-- formatting to viewer.var_renderer.
 
 local api = vim.api
 local Renderer = require("ipybridge.viewer.var_renderer")

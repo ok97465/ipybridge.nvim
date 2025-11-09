@@ -1,3 +1,5 @@
+-- Runtime glue that wires editor keymaps/autocmds to the chosen completion engine.
+-- Ensures terminal buffers gain navigation bindings and cancels menus on keypress.
 local engines = require("ipybridge.cmp_bridge.engines")
 local env = require("ipybridge.cmp_bridge.env")
 
@@ -137,4 +139,3 @@ function Runtime.trigger()
 end
 
 return Runtime
-

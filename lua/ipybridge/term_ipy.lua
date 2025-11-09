@@ -1,3 +1,6 @@
+-- Thin wrapper around a dedicated terminal buffer used to host IPython.
+-- Handles OSC parsing, split/window/bookkeeping, and message dispatch to the
+-- rest of the plugin.
 -- Neovim 0.11+ is required by the plugin entry.
 -- This module assumes those APIs are available.
 local vim = vim

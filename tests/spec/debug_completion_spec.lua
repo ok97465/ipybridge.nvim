@@ -1,3 +1,4 @@
+-- Specs for the Lua-side debugger completion request helper.
 package.path = table.concat({
 	"tests/?.lua",
 	"tests/?/init.lua",

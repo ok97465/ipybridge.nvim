@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Backend process used by ipybridge.nvim to query kernel state via ZMQ."""
+"""Standalone helper process that proxies editor requests to the IPython kernel.
+
+Parses CLI flags, builds the bootstrap payload, manages a BlockingKernelClient,
+tracks debug ports / comm replies, and exposes a thin ZMQ-like protocol that
+the Neovim plugin drives for completion, inspection, and execution.
+"""
 
 from __future__ import annotations
 

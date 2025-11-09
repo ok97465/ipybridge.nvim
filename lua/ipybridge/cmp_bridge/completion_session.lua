@@ -1,3 +1,6 @@
+-- Manages a single completion request/response conversation with the bridge.
+-- Builds request context, dispatches via providers, and annotates items with
+-- cursor metadata for downstream engines.
 local providers = require("ipybridge.cmp_bridge.providers")
 
 local M = {}

@@ -1,3 +1,5 @@
+"""Tests for the sitecustomize shim that patches jupyter-console behavior."""
+
 import builtins
 import importlib.util
 import sys

@@ -1,3 +1,4 @@
+-- Specs that ensure the debug helper focuses buffers/windows correctly.
 package.path = table.concat({
 	"tests/?.lua",
 	"tests/?/init.lua",

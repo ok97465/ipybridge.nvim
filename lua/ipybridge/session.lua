@@ -1,5 +1,6 @@
--- Session manager isolates terminal bootstrap logic from init.lua.
--- It keeps responsibilities focused and easier to extend.
+-- Session manager that owns terminal bootstrap/orchestration.
+-- Handles console environment setup, helper uploads, breakpoint wiring, and
+-- terminal keymaps so init.lua stays lean.
 local Session = {}
 Session.__index = Session
 

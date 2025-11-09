@@ -1,3 +1,5 @@
+"""pytest configuration that exposes the repo root to import hooks."""
+
 import sys
 from pathlib import Path
 

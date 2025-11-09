@@ -1,4 +1,9 @@
-"""Bootstrap helpers executed inside the target IPython kernel."""
+"""Bootstrap helpers imported into the user kernel by ipybridge.nvim.
+
+The module patches kernel control handlers, manages comm traffic, maintains
+debug snapshots, tracks breakpoints, and exposes data preview / completion
+utilities that the Neovim side can invoke over ZMQ.
+"""
 
 import base64
 import io

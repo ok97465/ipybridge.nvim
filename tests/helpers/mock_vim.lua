@@ -1,3 +1,5 @@
+-- Lightweight vim.lua mock used by Lua specs.
+-- Captures notifications and scheduled callbacks for assertions.
 local MockVim = {}
 
 function MockVim.new()

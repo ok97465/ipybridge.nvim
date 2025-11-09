@@ -1,3 +1,5 @@
+-- Completion providers shared by both nvim-cmp and blink.cmp backends.
+-- Build snippets for ipdb commands and debugger completions fetched over ZMQ.
 local debug_completion = require("ipybridge.debug.completion")
 local env = require("ipybridge.cmp_bridge.env")
 

@@ -1,3 +1,5 @@
+-- Manages the sign shown for the current debug line inside tracked buffers.
+-- Encapsulates sign definition, placement, and temporary signcolumn tweaks.
 local vim = vim
 local api = vim.api
 local fn = vim.fn

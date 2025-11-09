@@ -1,5 +1,6 @@
--- Data viewer UI for DataFrame/ndarray/object preview.
--- Window orchestration lives here; rendering logic resides in viewer.renderers.
+-- Floating window UI for DataFrame/ndarray/object previews.
+-- Owns buffer/window lifecycle, paging logic, and delegates rendering to
+-- viewer.renderers so variable previews feel native in Neovim.
 
 local api = vim.api
 local Renderers = require("ipybridge.viewer.renderers")

@@ -1,3 +1,5 @@
+"""Unit tests for the bootstrap helpers that run inside IPython kernels."""
+
 import base64
 import os
 import sys

@@ -1,3 +1,6 @@
+-- Shared glue used by custom cmp/blink sources to stream debugger completions.
+-- Keeps track of inflight sessions, deduplicates empty responses, and plumbs
+-- metadata onto completion items.
 local completion_session = require("ipybridge.cmp_bridge.completion_session")
 
 local M = {}

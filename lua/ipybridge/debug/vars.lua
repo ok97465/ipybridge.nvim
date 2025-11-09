@@ -1,5 +1,6 @@
--- Debug-aware variable helpers for ipybridge.nvim.
--- Encapsulates snapshot digestion, preview lookup, and explorer updates.
+-- Debug-aware variable helpers shared by the session and explorer UIs.
+-- Responsible for digesting snapshots pushed from the kernel, selecting
+-- the active scope, caching previews, and forwarding updates to the viewer.
 
 local debug_scope = require("ipybridge.debug.scope")
 

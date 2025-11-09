@@ -1,4 +1,5 @@
 #!/usr/bin/env lua
+-- Simple test harness that loads each Lua spec sequentially.
 package.path = table.concat({
 	"tests/?.lua",
 	"tests/?/init.lua",

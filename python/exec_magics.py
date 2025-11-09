@@ -1,4 +1,9 @@
-"""IPython magics and debugger helpers injected by ipybridge.nvim."""
+"""IPython runtime helpers that keep the Neovim bridge in sync with a kernel.
+
+The module installs custom magics, debugger signalers, variable snapshotters,
+and OSC emitters so the editor can track execution state, surface structured
+output, and control IPython sessions remotely.
+"""
 
 import base64
 import bdb

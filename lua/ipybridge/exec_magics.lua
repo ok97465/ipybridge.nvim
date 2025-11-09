@@ -1,5 +1,5 @@
--- IPython execution magics for ipybridge.nvim
--- Provides Python code string that defines runcell/runfile line magics.
+-- Builds the Python snippet that registers ipybridge's runcell/debug magics.
+-- Loads the templates from the bundled python sources and substitutes payloads.
 
 local py_module = require("ipybridge.py_module")
 

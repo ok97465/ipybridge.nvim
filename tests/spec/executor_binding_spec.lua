@@ -1,3 +1,4 @@
+-- Specs confirming the executor binds helpers/runcell uploads correctly.
 package.path = table.concat({
 	"tests/?.lua",
 	"tests/?/init.lua",

@@ -1,3 +1,5 @@
+-- Small helpers for discovering the active ipybridge terminal/session state.
+-- Provides predicates for cmp/blink backends and utilities for feeding input.
 local M = {}
 
 function M.current_bridge()

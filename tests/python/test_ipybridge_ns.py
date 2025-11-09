@@ -1,3 +1,5 @@
+"""Tests for the reusable namespace helpers shared with the kernel."""
+
 import importlib.util
 from pathlib import Path
 

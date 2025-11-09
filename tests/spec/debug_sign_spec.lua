@@ -1,3 +1,4 @@
+-- Specs around the debug sign helper (placement, highlighting, cleanup).
 package.path = table.concat({
 	"tests/?.lua",
 	"tests/?/init.lua",

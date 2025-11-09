@@ -1,5 +1,6 @@
--- Python module utilities for ipybridge.nvim
--- Provides helpers to locate bundled Python modules and encode them.
+-- Python module utilities for ipybridge.nvim.
+-- Locates bundled Python files, caches their contents, and returns raw or
+-- base64-encoded strings so Lua can embed bootstrap helpers.
 
 local M = {}
 

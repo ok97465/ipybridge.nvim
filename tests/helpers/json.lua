@@ -1,3 +1,5 @@
+-- Minimal JSON encode/decode helpers for the Lua specs.
+-- Mirrors vim.json.decode/encode just enough for the tests to stay deterministic.
 local Json = {}
 
 local fallback_nil = setmetatable({}, {

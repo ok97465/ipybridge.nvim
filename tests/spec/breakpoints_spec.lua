@@ -1,3 +1,4 @@
+-- Lua spec covering the breakpoint manager (signs, file sync, conditions).
 package.path = table.concat({
 	"tests/?.lua",
 	"tests/?/init.lua",

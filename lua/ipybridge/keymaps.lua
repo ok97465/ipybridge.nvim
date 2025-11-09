@@ -1,5 +1,5 @@
--- Keymap helpers for ipybridge.nvim
--- Comments in English; concise and explicit descriptions.
+-- Keymap helpers for ipybridge.nvim.
+-- Applies buffer/terminal defaults, user commands, and keeps descriptions consistent.
 
 local api = vim.api
 

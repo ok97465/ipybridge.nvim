@@ -1,3 +1,6 @@
+-- Main entry point for ipybridge.nvim.
+-- Wires together the terminal manager, ZMQ executor, debugger helpers,
+-- completion bridge, and command surface exposed to users.
 -- This plugin requires Neovim 0.11 or newer.
 -- Fail fast on older versions to prevent undefined behavior.
 if vim.fn.has("nvim-0.11") ~= 1 then

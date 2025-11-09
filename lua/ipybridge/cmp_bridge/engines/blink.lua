@@ -1,3 +1,5 @@
+-- Engine adapter that configures blink.cmp to host the ipybridge source.
+-- Handles provider registration, menu lifecycle, and selection plumbing.
 local blink = require("ipybridge.cmp_bridge.blink")
 local constants = require("ipybridge.cmp_bridge.constants")
 

@@ -1,3 +1,5 @@
+-- Utility helpers for cleaning and selecting debugger scopes.
+-- Sanitizes snapshots coming from Python and picks the best table to display.
 local M = {}
 
 -- Remove private/sentinel entries so the explorer only sees user facing bindings.

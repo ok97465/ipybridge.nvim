@@ -1,5 +1,6 @@
 -- Variable explorer renderer.
--- Produces lines and drill-down mappings for variable snapshots.
+-- Turns structured snapshot payloads into aligned rows and drill-down metadata
+-- that the var_explorer window consumes.
 
 local VarRenderer = {}
 

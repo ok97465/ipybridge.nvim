@@ -1,3 +1,4 @@
+-- Specs covering the terminal wrapper (OSC parsing, window mgmt, send helpers).
 package.path = table.concat({
 	"tests/?.lua",
 	"tests/?/init.lua",

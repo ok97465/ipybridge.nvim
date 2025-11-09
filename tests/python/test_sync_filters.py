@@ -1,3 +1,5 @@
+"""Tests the tiny script that syncs explorer filters inside the kernel."""
+
 import io
 import json
 from pathlib import Path

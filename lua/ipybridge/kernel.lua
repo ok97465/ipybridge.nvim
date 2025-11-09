@@ -1,5 +1,6 @@
--- Kernel management for ipybridge.nvim
--- Starts/stops a standalone Jupyter kernel and exposes its connection file.
+-- Kernel management helpers.
+-- Launches a standalone IPython kernel, tracks its connection file, polls for
+-- readiness, and exposes stop/ensure helpers to the rest of the plugin.
 
 local uv = vim.uv
 local fn = vim.fn

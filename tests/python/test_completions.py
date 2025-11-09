@@ -1,3 +1,5 @@
+"""Tests covering the completion helpers embedded in bootstrap_helpers."""
+
 import base64
 import importlib
 import sys

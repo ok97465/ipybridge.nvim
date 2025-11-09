@@ -1,3 +1,5 @@
+-- Engine adapter for nvim-cmp so ipybridge completions work inside terminals.
+-- Handles cmp API patching, menu lifecycle helpers, and source registration.
 local constants = require("ipybridge.cmp_bridge.constants")
 local env = require("ipybridge.cmp_bridge.env")
 local completion_apply = require("ipybridge.cmp_bridge.completion_apply")

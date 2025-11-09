@@ -1,3 +1,4 @@
+-- Specs covering the kernel launcher (ensure/stop and file polling).
 package.path = table.concat({
 	"tests/?.lua",
 	"tests/?/init.lua",

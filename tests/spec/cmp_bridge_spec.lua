@@ -1,3 +1,4 @@
+-- Lua specs that exercise the completion bridge engines/sources/runtime.
 package.path = table.concat({
 	"tests/?.lua",
 	"tests/?/init.lua",

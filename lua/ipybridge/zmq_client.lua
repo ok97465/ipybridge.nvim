@@ -1,8 +1,6 @@
 -- ZMQ client manager for ipybridge.nvim.
--- Responsibilities:
---  1. Spawn and supervise the helper Python process.
---  2. Decode line-delimited JSON responses.
---  3. Route replies back to request callbacks with error isolation.
+-- Spawns the helper Python process, decodes line-delimited JSON replies, and
+-- routes responses back to Lua callbacks with basic supervision/error handling.
 
 local fn = vim.fn
 

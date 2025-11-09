@@ -1,3 +1,5 @@
+"""Integration-style tests for the myipy_kernel_client helper process."""
+
 import builtins
 import importlib.util
 import io

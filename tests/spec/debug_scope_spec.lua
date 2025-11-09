@@ -1,3 +1,4 @@
+-- Specs that exercise the debug scope sanitizer and resolver logic.
 package.path = table.concat({
 	"tests/?.lua",
 	"tests/?/init.lua",

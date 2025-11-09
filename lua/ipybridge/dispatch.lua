@@ -1,3 +1,5 @@
+-- Message dispatcher for OSC payloads emitted by the kernel helpers.
+-- Allows modules to register handlers for tags such as vars/preview/debug_*.
 local M = {}
 
 local registry = {}

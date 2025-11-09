@@ -1,5 +1,6 @@
 -- Execution pipeline manager for ipybridge.nvim.
--- Handles helper bootstrap, runcell helpers, ZMQ queueing, and pending exec flush.
+-- Coordinates helper bootstrap uploads, runcell injection, queued ZMQ exec
+-- requests, and retries so editor actions reach the running kernel reliably.
 
 local py_module = require("ipybridge.py_module")
 

@@ -1,4 +1,6 @@
--- Debugger completion helper for ipybridge.nvim.
+-- Debugger completion helper that proxies completion requests over ZMQ.
+-- Tracks request generations, schedules callbacks on the main loop, and
+-- emits structured errors so the UI knows when completions are unavailable.
 
 local unpack = unpack or table.unpack
 

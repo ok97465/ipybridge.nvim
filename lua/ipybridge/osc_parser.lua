@@ -1,6 +1,6 @@
 -- OSC (Operating System Command) payload decoder.
--- Responsible for extracting hidden messages emitted by python.exec_magics
--- and returning visible terminal text to the caller.
+-- Extracts hidden JSON blobs emitted by python.exec_magics, forwards them to
+-- Lua callbacks, and returns only human-visible terminal text to callers.
 
 local OscParser = {}
 OscParser.__index = OscParser

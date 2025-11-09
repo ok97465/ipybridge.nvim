@@ -1,3 +1,4 @@
+-- Specs exercising the top-level ipybridge module wiring and commands.
 package.path = table.concat({
 	"tests/?.lua",
 	"tests/?/init.lua",

@@ -1,3 +1,6 @@
+-- Engine registry that abstracts over different completion frontends.
+-- Keeps track of registered adapters (nvim-cmp/blink), picks the best one,
+-- and proxies lifecycle actions (ensure/show/close/accept/etc.).
 local M = {}
 
 local registry = {}

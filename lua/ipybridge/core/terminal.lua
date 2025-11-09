@@ -1,5 +1,6 @@
 -- Terminal helpers responsible for sending data into the IPython REPL and
 -- ensuring the split exists before executing actions.
+-- Handles Windows newline quirks, ipdb-specific modes, and lazy terminal setup.
 
 local Terminal = {}
 

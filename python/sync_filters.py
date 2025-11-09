@@ -1,4 +1,9 @@
-"""Synchronise variable explorer filters inside the kernel."""
+"""Small script injected into the kernel to sync explorer filters/logging.
+
+It deserializes the filter payload embedded by the Neovim side, calls into
+bootstrap helpers to update the namespace filter settings, and flips the debug
+logging flag if requested.
+"""
 
 import json
 import sys

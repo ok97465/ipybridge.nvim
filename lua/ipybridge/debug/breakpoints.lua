@@ -1,5 +1,6 @@
--- Breakpoint management for ipybridge.nvim
--- Encapsulates storage, sign rendering, and kernel synchronization.
+-- Breakpoint management for ipybridge.nvim.
+-- Keeps an in-memory map, renders sign markers, pushes updates to the helper
+-- Python process, and keeps a shared JSON file in sync with kernel state.
 
 local vim = vim
 local api = vim.api

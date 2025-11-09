@@ -1,3 +1,4 @@
+-- Specs for the OSC dispatch router (registration and lazy handlers).
 package.path = table.concat({
 	"tests/?.lua",
 	"tests/?/init.lua",

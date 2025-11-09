@@ -1,3 +1,5 @@
+-- nvim-cmp source that feeds live debugger completions into terminal buffers.
+-- Reuses the shared streaming helper and closes the menu when nothing matches.
 local env = require("ipybridge.cmp_bridge.env")
 local source_common = require("ipybridge.cmp_bridge.sources.common")
 

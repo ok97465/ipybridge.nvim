@@ -1,4 +1,9 @@
-"""Shared variable explorer helpers for ipybridge.nvim."""
+"""Shared namespace helpers for the variable explorer and previews.
+
+Provides filter management, structured repr builders, logging hooks, and
+preview serializers for common container / numpy / pandas objects so the UI
+can inspect kernel variables without importing heavy dependencies twice.
+"""
 
 from __future__ import annotations
 

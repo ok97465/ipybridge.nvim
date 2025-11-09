@@ -1,3 +1,4 @@
+-- Specs for the shared Lua utility helpers (selection ranges, quoting, etc.).
 package.path = table.concat({
 	"tests/?.lua",
 	"tests/?/init.lua",

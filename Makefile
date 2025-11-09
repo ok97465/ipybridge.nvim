@@ -1,3 +1,5 @@
+# Helper targets for running the Lua and Python test suites during development.
+# Variables can be overridden (LUA, PYTEST) so CI and contributors stay aligned.
 .PHONY: test test.lua test.py
 
 LUA ?= lua

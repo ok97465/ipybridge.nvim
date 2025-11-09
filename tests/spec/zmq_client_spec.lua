@@ -1,3 +1,4 @@
+-- Specs for the Lua-side ZMQ client wrapper (JSON buffering, callbacks, job IO).
 package.path = table.concat({
 	"tests/?.lua",
 	"tests/?/init.lua",

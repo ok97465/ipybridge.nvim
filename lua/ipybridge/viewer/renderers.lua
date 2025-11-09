@@ -1,5 +1,6 @@
 -- Preview renderers for ipybridge.nvim data viewer.
--- Each renderer transforms kernel payloads into buffer lines and drill-down maps.
+-- Converts payloads (tables, sequences, arrays, pandas frames, etc.) into
+-- buffer-friendly lines and metadata so the floating viewer stays reactive.
 
 local Renderers = {}
 

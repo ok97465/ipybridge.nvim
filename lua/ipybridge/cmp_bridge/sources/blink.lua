@@ -1,3 +1,6 @@
+-- blink.cmp source that surfaces ipybridge debugger completions.
+-- Converts blink request contexts into bridge requests and applies accepted
+-- items directly inside the terminal buffer.
 local blink = require("ipybridge.cmp_bridge.blink")
 local env = require("ipybridge.cmp_bridge.env")
 local completion_apply = require("ipybridge.cmp_bridge.completion_apply")

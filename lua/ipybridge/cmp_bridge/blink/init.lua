@@ -1,3 +1,5 @@
+-- Lightweight wrapper around blink.cmp so we can call into it safely.
+-- Handles lazy loading, protected calls, and consistent warning messages.
 local MODULE_NAME = "blink.cmp"
 
 local M = {}

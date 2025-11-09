@@ -1,3 +1,4 @@
+-- Specs validating the floating data viewer UI and renderer plumbing.
 package.path = table.concat({
 	"tests/?.lua",
 	"tests/?/init.lua",

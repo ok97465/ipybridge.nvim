@@ -1,3 +1,5 @@
+-- Utilities for turning LSP-style completion items into terminal edits.
+-- Computes spans relative to the prompt and injects keystrokes into the REPL.
 local env = require("ipybridge.cmp_bridge.env")
 
 local M = {}

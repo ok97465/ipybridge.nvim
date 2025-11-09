@@ -1,5 +1,6 @@
--- Utility helpers for ipybridge.nvim
--- All comments are written in English per user request.
+-- Utility helpers shared across the plugin.
+-- Covers filesystem checks, Python quoting helpers, selection math, and Python
+-- exec payload builders.
 
 local uv = (vim and (vim.uv or vim.loop)) or nil
 local api = vim.api

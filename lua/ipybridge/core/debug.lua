@@ -1,5 +1,6 @@
 -- Debug helper routines extracted from the main module to keep init.lua lean.
--- Handles cmp integration, terminal prompt observation, and debug status events.
+-- Handles cmp integration, terminal prompt observation, debug status events,
+-- and orchestrates communication with the terminal-facing state machine.
 
 local Debug = {}
 

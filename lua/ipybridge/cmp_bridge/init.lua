@@ -1,3 +1,6 @@
+-- Entry point for the cmp bridge subsystem.
+-- Registers engine adapters, exposes configuration hooks, and routes trigger
+-- requests through the runtime helpers.
 local constants = require("ipybridge.cmp_bridge.constants")
 local engines = require("ipybridge.cmp_bridge.engines")
 local providers = require("ipybridge.cmp_bridge.providers")

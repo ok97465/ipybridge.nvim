@@ -1,3 +1,5 @@
+"""Regression tests for the exec_magics helpers injected into kernels."""
+
 import base64
 import bdb
 import sys

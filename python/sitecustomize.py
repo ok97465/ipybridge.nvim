@@ -1,4 +1,9 @@
-"""Runtime patches for jupyter-console launched by ipybridge.nvim."""
+"""Runtime patches that make jupyter-console/ipdb cooperate with Neovim.
+
+When the bridge launches a console this module suppresses readline TAB
+completion, proxies prompt_toolkit input, and surfaces diagnostic logging so
+editor completion engines remain responsive even inside ipdb.
+"""
 
 from __future__ import annotations
 

@@ -1,3 +1,4 @@
+-- Specs around the variable explorer window (rendering, drilldown, keymaps).
 package.path = table.concat({
 	"tests/?.lua",
 	"tests/?/init.lua",

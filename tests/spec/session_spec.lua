@@ -1,3 +1,4 @@
+-- Specs validating the session manager bootstrap, env building, and hooks.
 package.path = table.concat({
 	"tests/?.lua",
 	"tests/?/init.lua",
