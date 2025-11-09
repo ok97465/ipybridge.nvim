@@ -253,6 +253,27 @@ def test_debugcell_shares_namespace_and_breakpoints(monkeypatch, tmp_path):
     assert any(line == 4 for _, line, _ in latest.seen_breaks)
 
 
+def test_ipdb_handles_matplotlib_magic(monkeypatch):
+    module, _ = _load_exec_magics(monkeypatch)
+    pdb_cls = module._MiQtAwarePdb.get()
+    assert pdb_cls is not None
+
+    class DummyShell:
+        def __init__(self):
+            self.calls = []
+
+        def run_line_magic(self, name, arg):
+            self.calls.append((name, arg))
+
+    debugger = pdb_cls()
+    shell = DummyShell()
+    debugger.shell = shell
+
+    debugger.default("   %matplotlib   inline  ")
+
+    assert shell.calls == [("matplotlib", "inline")]
+
+
 def test_emit_vars_snapshot_syncs_namespace(monkeypatch):
     module, _ = _load_exec_magics(monkeypatch)
 

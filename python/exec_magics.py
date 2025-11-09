@@ -569,6 +569,8 @@ class _MiQtAwarePdb:
                 handled = self._mi_apply_alias(line)
                 if handled is not None:
                     return handled
+                if self._mi_handle_matplotlib_magic(line):
+                    return None
                 return super().default(line)
 
             def _error_exc(self):
@@ -614,6 +616,43 @@ class _MiQtAwarePdb:
                 except Exception:
                     pass
                 return result
+
+            def _mi_handle_matplotlib_magic(self, line):
+                if not line:
+                    return False
+                try:
+                    text = line.strip()
+                except Exception:
+                    text = line
+                if not text.startswith("%"):
+                    return False
+                if text.startswith("%%"):
+                    return False
+                text = text[1:].lstrip()
+                if not text:
+                    return False
+                parts = text.split(None, 1)
+                magic_name = parts[0].strip()
+                magic_key = magic_name.lower()
+                if magic_key not in {"matplotlib", "pylab"}:
+                    return False
+                arg = parts[1].strip() if len(parts) > 1 else ""
+                shell = getattr(self, "shell", None)
+                runner = getattr(shell, "run_line_magic", None)
+                if not callable(runner):
+                    return False
+                try:
+                    runner(magic_name, arg)
+                except Exception as exc:
+                    handler = getattr(self, "error", None)
+                    if callable(handler):
+                        try:
+                            handler(str(exc))
+                        except Exception:
+                            pass
+                    else:
+                        _ipy_log_debug(f"matplotlib magic failed: {exc}")
+                return True
 
         cls._cls = QtAwarePdb
         return cls._cls
