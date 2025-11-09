@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+	<meta charset="utf-8" />
+	<title>ipybridge.nvim · Plot Viewer</title>
+	
+	<link rel="stylesheet" href="app.css?token=__PLOT_TOKEN__" />
+</head>
+
+<body>
+	<header>
+		<h1>ipybridge · Plots</h1>
+		<div id="backend-pill">Backend: –</div>
+		<div class="controls">
+			<button id="btn-open">Open in new tab</button>
+			<button id="btn-prev">← Prev</button>
+			<button id="btn-next">Next →</button>
+			<button id="btn-delete">Delete</button>
+			<button id="btn-clear">Clear all</button>
+		</div>
+	</header>
+	<main>
+		<aside id="thumbnails"></aside>
+		<section id="viewer">
+			<div id="preview">
+				<div id="placeholder">Run <code>plt.show()</code> to capture the first figure.</div>
+				<img id="preview-image" alt="plot preview" style="display:none" />
+			</div>
+			<div id="details"></div>
+		</section>
+	</main>
+	
+	<script defer src="app.js?token=__PLOT_TOKEN__"></script>
+</body>
+
+</html>

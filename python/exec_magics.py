@@ -209,6 +209,7 @@ _PDB_ALIAS_MAP = {
 }
 _mi_qt_pump_thread = None
 _mi_gui_enabled = False
+_mi_qt_loop_running = False
 
 
 def _mi_read_text(path, label):
@@ -233,24 +234,75 @@ def _mi_exec_source(source, filename, cwd=None):
                 _mi_print_exception()
 
 
-def _mi_get_qapp():
-    candidates = [
-        ("qtpy.QtWidgets", "QApplication"),
-        ("PyQt6.QtWidgets", "QApplication"),
-        ("PySide6.QtWidgets", "QApplication"),
-        ("PyQt5.QtWidgets", "QApplication"),
-        ("PySide2.QtWidgets", "QApplication"),
-    ]
-    for mod_name, cls_name in candidates:
-        try:
-            module = __import__(mod_name, fromlist=[cls_name])
-            cls = getattr(module, cls_name)
-            app = cls.instance()
-            if app is None:
-                continue
-            return app
-        except Exception:
+def _mi_matplotlib_backend_hint():
+    """Return the active Matplotlib backend name if it points to Qt."""
+    source = _mi_plt or sys.modules.get("matplotlib")
+    getter = getattr(source, "get_backend", None)
+    if not callable(getter):
+        return None
+    try:
+        backend = getter()
+    except Exception:
+        return None
+    if not backend:
+        return None
+    backend = str(backend).lower()
+    return backend if "qt" in backend else None
+
+
+def _mi_iter_loaded_qt_modules():
+    """Yield Qt-related modules that are already loaded in sys.modules."""
+    backend_hint = _mi_matplotlib_backend_hint()
+    modules = []
+    seen = set()
+    for name, module in list(sys.modules.items()):
+        if module is None or name in seen:
             continue
+        lowered = name.lower()
+        if "qt" not in lowered and not lowered.startswith(("pyqt", "pyside")):
+            continue
+        modules.append((name, module))
+        seen.add(name)
+    if backend_hint:
+        modules.sort(
+            key=lambda item: (
+                0 if backend_hint in item[0].lower() else 1,
+                item[0],
+            )
+        )
+    else:
+        modules.sort(key=lambda item: item[0])
+    for _, module in modules:
+        yield module
+
+
+def _mi_qapp_from_module(module):
+    """Return the QApplication instance exposed by the given module."""
+    candidates = []
+    direct = getattr(module, "QApplication", None)
+    if direct is not None:
+        candidates.append(direct)
+    widgets = getattr(module, "QtWidgets", None)
+    if widgets is not None:
+        nested = getattr(widgets, "QApplication", None)
+        if nested is not None:
+            candidates.append(nested)
+    for cls in candidates:
+        instance = None
+        try:
+            instance = cls.instance() if hasattr(cls, "instance") else None
+        except Exception:
+            instance = None
+        if instance is not None:
+            return instance
+    return None
+
+
+def _mi_get_qapp():
+    for module in _mi_iter_loaded_qt_modules():
+        app = _mi_qapp_from_module(module)
+        if app is not None:
+            return app
     return None
 
 
@@ -403,7 +455,7 @@ def _mi_enable_matplotlib(backends=_MI_QT_BACKENDS):
     return False
 
 
-def _mi_enable_gui(backends=_MI_QT_BACKENDS):
+def _mi_enable_gui(backends=_MI_QT_BACKENDS, *, allow_backend_fallback=True):
     global _mi_gui_enabled
     if _mi_gui_enabled:
         return True
@@ -431,18 +483,31 @@ def _mi_enable_gui(backends=_MI_QT_BACKENDS):
                 return True
             except Exception:
                 continue
-    if _mi_enable_matplotlib(backends):
+    if allow_backend_fallback and _mi_enable_matplotlib(backends):
         _mi_gui_enabled = True
         return True
     return False
 
 
+def _mi_maybe_start_qt_loop(interval=0.03):
+    global _mi_qt_loop_running
+    if _mi_qt_loop_running:
+        return
+    backend_hint = _mi_matplotlib_backend_hint()
+    if not backend_hint:
+        return
+    try:
+        _mi_enable_gui(allow_backend_fallback=False)
+    except TypeError:  # pragma: no cover - compat guard
+        _mi_enable_gui()
+    _mi_start_qt_pump(interval)
+    _mi_qt_loop_running = True
+
+
 @contextlib.contextmanager
 def _mi_qt_events(interval=0.03):
     _mi_patch_kernel_input()
-    _mi_enable_matplotlib()
-    _mi_enable_gui()
-    _mi_start_qt_pump(interval)
+    _mi_maybe_start_qt_loop(interval)
     try:
         yield
     finally:
@@ -569,6 +634,8 @@ class _MiQtAwarePdb:
                 handled = self._mi_apply_alias(line)
                 if handled is not None:
                     return handled
+                if self._mi_handle_matplotlib_magic(line):
+                    return None
                 return super().default(line)
 
             def _error_exc(self):
@@ -614,6 +681,45 @@ class _MiQtAwarePdb:
                 except Exception:
                     pass
                 return result
+
+            def _mi_handle_matplotlib_magic(self, line):
+                if not line:
+                    return False
+                try:
+                    text = line.strip()
+                except Exception:
+                    text = line
+                if not text.startswith("%"):
+                    return False
+                if text.startswith("%%"):
+                    return False
+                text = text[1:].lstrip()
+                if not text:
+                    return False
+                parts = text.split(None, 1)
+                magic_name = parts[0].strip()
+                magic_key = magic_name.lower()
+                if magic_key not in {"matplotlib", "pylab"}:
+                    return False
+                arg = parts[1].strip() if len(parts) > 1 else ""
+                shell = getattr(self, "shell", None)
+                runner = getattr(shell, "run_line_magic", None)
+                if not callable(runner):
+                    return False
+                try:
+                    runner(magic_name, arg)
+                except Exception as exc:
+                    handler = getattr(self, "error", None)
+                    if callable(handler):
+                        try:
+                            handler(str(exc))
+                        except Exception:
+                            pass
+                    else:
+                        _ipy_log_debug(f"matplotlib magic failed: {exc}")
+                else:
+                    _mi_maybe_start_qt_loop()
+                return True
 
         cls._cls = QtAwarePdb
         return cls._cls
@@ -861,7 +967,6 @@ def _debug_execute_source(label, source, filename, cwd=None, seed_user_ns=False)
         return
     try:
         if _mi_plt is not None:
-            _mi_start_qt_pump()
             if not hasattr(_mi_plt, "_myipy_orig_show"):
                 _mi_plt._myipy_orig_show = _mi_plt.show
 
@@ -881,8 +986,7 @@ def _debug_execute_source(label, source, filename, cwd=None, seed_user_ns=False)
                 _mi_plt.show = _mi_debug_show
     except Exception:
         pass
-    _mi_enable_matplotlib()
-    _mi_enable_gui()
+    _mi_maybe_start_qt_loop()
     glbs = globals()
     dbg = pdb_cls()
     glbs["_mi_active_debugger"] = dbg

@@ -83,6 +83,13 @@ require("ipybridge").setup({
         -- Matplotlib backend
         matplotlib_backend = nil,        -- e.g. 'qt', 'inline', 'macosx', 'tk', 'agg'
 
+        -- Browser-based plot history
+        plot_viewer = {
+          mode = "browser",             -- "browser" or "off"
+          auto_open = true,             -- open the viewer automatically
+          history = 40,                 -- max snapshots to keep
+        },
+
         -- Spyder-like runcell/runfile support
         runcell_save_before_run = true,  -- save buffer before runcell to use up-to-date file
         runfile_save_before_run = true,  -- save buffer before runfile to use up-to-date file
@@ -107,6 +114,7 @@ require("ipybridge").setup({
 ### Additional options
 
 - `matplotlib_backend` (string|nil): `qt`, `inline`, `macosx`, `tk`, `agg`
+- `plot_viewer` (table): configure Spyder-style history. Fields: `mode = "browser"|"off"`, `auto_open`, and `history` (snapshot cap). `auto_open = true` starts by forcing `%matplotlib inline`.
 - `runcell_save_before_run` (boolean): Save the buffer before runcell execution (default `true`).
 - `runfile_save_before_run` (boolean): Save the buffer before runfile execution (default `true`).
 - `debugfile_save_before_run` (boolean): Save the buffer before `%debugfile` execution (default `true`).
@@ -176,6 +184,17 @@ require("ipybridge").setup({
 
 - Set `matplotlib_backend` to a value accepted by `%matplotlib` (e.g. `'qt'`, `'inline'`, `'macosx'`, `'tk'`, `'agg'`).
 - Qt requires `PyQt5` or `PySide6`. Tk requires Tk support. macOS may require framework build Python.
+- The browser plot viewer (when enabled) forces `%matplotlib inline` internally so snapshots are deterministic; switch back to `%matplotlib inline` whenever you want the history pane to resume recording.
+
+## Plot Viewer (Spyder-style History)
+
+- Enable with `plot_viewer.mode = "browser"` inside `require("ipybridge").setup({ ... })`. The kernel bootstrap spins up a localhost HTTP + SSE server, Neovim grabs the URL via OSC, and (when `auto_open = true`) your default browser opens automatically. Reopen the page with `<leader>po` or `:IpybridgePlots`.
+- The plot pane forces `%matplotlib inline`. Only this backend is captured; switching to `%matplotlib qt` (or any other backend) pauses history until you return to `%matplotlib inline`.
+- Every `plt.show()` / `plt.savefig()` call snapshots the active figures via `FigureCanvasAgg`, stores up to `history` PNGs, and streams `plot-added`, `plot-removed`, and `plot-selected` events to the browser UI so thumbnails stay in sync without polling.
+- Use the browser controls or editor shortcuts (`]p`, `[p`, `<leader>pd`, `<leader>pc`, `:IpybridgePlotNext`, `:IpybridgePlotDelete`, etc.) to cycle through history or drop entries. Neovim keymaps talk to the same runtime over ZMQ, so they keep working even when the tab is in the background.
+- Neovim automatically refreshes the viewer status via ZMQ right after startup, so `<leader>po`/`:IpybridgePlots` can open the browser even before any console output occurs.
+- The browser UI keeps previews on the right-hand pane while a narrow thumbnail rail (no timestamps or figure numbers) stays on the left, making it easy to focus on the active figure.
+- Switching away from `%matplotlib inline` (for example `%matplotlib qt`) automatically pauses snapshots; the viewer badge turns red and shows “paused”. Run `%matplotlib inline` to resume recording.
 
 ## Spyder-like Runcell
 

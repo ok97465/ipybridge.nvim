@@ -4,6 +4,7 @@
 
 local uv = vim.uv
 local fn = vim.fn
+local py_module = require("ipybridge.py_module")
 
 local K = {
 	job = nil,
@@ -11,6 +12,33 @@ local K = {
 }
 
 local M = {}
+
+local function helpers_root()
+	local ok, path = pcall(py_module.path, "bootstrap_helpers.py")
+	if not ok or type(path) ~= "string" or path == "" then
+		return nil
+	end
+	local dir = vim.fs.dirname(path)
+	return dir
+end
+
+local function build_env()
+	local root = helpers_root()
+	if not root then
+		return nil
+	end
+	local loop = vim.loop or vim.uv
+	local sysname = loop and loop.os_uname().sysname or ""
+	local sep = sysname == "Windows_NT" and ";" or ":"
+	local current = vim.env.PYTHONPATH or (loop and loop.os_getenv("PYTHONPATH")) or ""
+	if current and current ~= "" then
+		if current:find(root, 1, true) then
+			return { PYTHONPATH = current }
+		end
+		return { PYTHONPATH = root .. sep .. current }
+	end
+	return { PYTHONPATH = root }
+end
 
 -- Ensure a standalone Jupyter kernel is running and return its connection file via callback.
 -- cb(ok:boolean, conn_file:string|nil)
@@ -27,6 +55,7 @@ function M.ensure(python_cmd, cb)
 		on_exit = function()
 			K.job = nil
 		end,
+		env = build_env(),
 	})
 	if job <= 0 then
 		if cb then

@@ -253,6 +253,92 @@ def test_debugcell_shares_namespace_and_breakpoints(monkeypatch, tmp_path):
     assert any(line == 4 for _, line, _ in latest.seen_breaks)
 
 
+def test_ipdb_handles_matplotlib_magic(monkeypatch):
+    module, _ = _load_exec_magics(monkeypatch)
+    pdb_cls = module._MiQtAwarePdb.get()
+    assert pdb_cls is not None
+
+    class DummyShell:
+        def __init__(self):
+            self.calls = []
+
+        def run_line_magic(self, name, arg):
+            self.calls.append((name, arg))
+
+    debugger = pdb_cls()
+    shell = DummyShell()
+    debugger.shell = shell
+
+    debugger.default("   %matplotlib   inline  ")
+
+    assert shell.calls == [("matplotlib", "inline")]
+
+
+def test_qt_loop_only_starts_for_qt_backend(monkeypatch):
+    module, _ = _load_exec_magics(monkeypatch)
+    module._mi_qt_loop_running = False
+    monkeypatch.setattr(module, "_mi_patch_kernel_input", lambda: None)
+
+    calls = []
+
+    def fake_gui(*_args, **_kwargs):
+        calls.append("gui")
+        return True
+
+    def fake_pump(interval=0.03):
+        calls.append(("pump", interval))
+
+    monkeypatch.setattr(module, "_mi_enable_gui", fake_gui)
+    monkeypatch.setattr(module, "_mi_start_qt_pump", fake_pump)
+
+    monkeypatch.setattr(module, "_mi_matplotlib_backend_hint", lambda: None)
+    with module._mi_qt_events():
+        pass
+    assert calls == []
+
+    module._mi_qt_loop_running = False
+    monkeypatch.setattr(module, "_mi_matplotlib_backend_hint", lambda: "qt5agg")
+    with module._mi_qt_events():
+        pass
+    assert calls == ["gui", ("pump", 0.03)]
+
+    module._mi_qt_loop_running = False
+
+
+def test_qt_loop_starts_after_matplotlib_magic(monkeypatch):
+    module, _ = _load_exec_magics(monkeypatch)
+    pdb_cls = module._MiQtAwarePdb.get()
+    assert pdb_cls is not None
+
+    backend_state = {"value": None}
+    module._mi_qt_loop_running = False
+    pump_calls = []
+
+    monkeypatch.setattr(module, "_mi_matplotlib_backend_hint", lambda: backend_state["value"])
+    monkeypatch.setattr(module, "_mi_start_qt_pump", lambda interval=0.03: pump_calls.append(interval))
+    monkeypatch.setattr(module, "_mi_enable_gui", lambda *a, **k: True)
+
+    class DummyShell:
+        def __init__(self):
+            self.calls = []
+
+        def run_line_magic(self, name, arg):
+            self.calls.append((name, arg))
+            backend_state["value"] = "qt5agg" if arg.strip().startswith("qt") else None
+
+    debugger = pdb_cls()
+    debugger.shell = DummyShell()
+
+    debugger.default("%matplotlib inline")
+    assert pump_calls == []
+
+    debugger.default("%matplotlib qt")
+    assert pump_calls == [0.03]
+    assert debugger.shell.calls == [("matplotlib", "inline"), ("matplotlib", "qt")]
+
+    module._mi_qt_loop_running = False
+
+
 def test_emit_vars_snapshot_syncs_namespace(monkeypatch):
     module, _ = _load_exec_magics(monkeypatch)
 

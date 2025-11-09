@@ -126,4 +126,12 @@ M.register("debug_status", function(message)
 	handler(message.data or {})
 end)
 
+M.register("plot_server", function(message)
+	local ok, viewer = pcall(require, "ipybridge.viewer.plot")
+	if not ok or not viewer then
+		return
+	end
+	viewer.on_server_event(message.data or message)
+end)
+
 return M
