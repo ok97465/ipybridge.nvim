@@ -1043,6 +1043,15 @@ def _debug_execute_source(label, source, filename, cwd=None, seed_user_ns=False)
         sys.breakpointhook = dbg.set_trace
     except Exception:
         old_break_hook = None
+    auto_import_block = None
+    if label == "debugfile":
+        helper_imports = glbs.get("_myipy_get_debugfile_imports")
+        if callable(helper_imports):
+            candidate = helper_imports()
+            if isinstance(candidate, str):
+                candidate = candidate.strip()
+                if candidate:
+                    auto_import_block = candidate
     try:
         with _mi_cwd(cwd):
             with _mi_exec_env(filename):
@@ -1055,6 +1064,11 @@ def _debug_execute_source(label, source, filename, cwd=None, seed_user_ns=False)
                             _ipy_log_debug(f"debug namespace seed failed: {exc}")
                     should_commit = False
                     try:
+                        if auto_import_block:
+                            try:
+                                exec(auto_import_block, debug_ns.globals, debug_ns.globals)
+                            except Exception as exc:
+                                print(f"debugfile auto import failed: {exc}")
                         code = compile(source, filename, "exec")
                         should_commit = True
                         dbg.reset()

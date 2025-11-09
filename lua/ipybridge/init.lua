@@ -68,6 +68,7 @@ local M = {
 	_debug_scope = "globals",
 	_debug_window = nil,
 	_last_filters_signature = nil,
+	_debugfile_imports_signature = nil,
 	_pending_exec = {},
 	_helpers_waiters = {},
 	-- Guard against double-cleanup when the user types `exit` inside IPython.
@@ -200,6 +201,8 @@ M.config = {
 	-- Variable explorer: hide variables by exact name or type name (supports '*' suffix as prefix wildcard)
 	hidden_var_names = { "pi", "newaxis", "MODULE_B64" },
 	hidden_type_names = { "ZMQInteractiveShell", "Axes", "Figure", "AxesSubplot" },
+	-- Import statements (single string) injected into the debugfile namespace before ipdb starts.
+	debugfile_auto_imports = "",
 	-- ZMQ backend debug logs (Python client prints to stderr)
 	zmq_debug = false,
 	-- IPython autoreload: 1, 2, or 'disable' (default 2)
@@ -288,6 +291,7 @@ M.setup = function(config)
 			python_cmd = { config.python_cmd, "s", true },
 			debugfile_save_before_run = { config.debugfile_save_before_run, "b", true },
 			debugcell_save_before_run = { config.debugcell_save_before_run, "b", true },
+			debugfile_auto_imports = { config.debugfile_auto_imports, "s", true },
 			terminal_keymaps = { config.terminal_keymaps, "function", true },
 			completion = { config.completion, "table", true },
 		})
@@ -324,6 +328,7 @@ M.setup = function(config)
 
 	if M.is_open() then
 		M._sync_var_filters()
+		M._sync_debugfile_imports()
 	end
 end
 
@@ -508,6 +513,54 @@ function M._sync_var_filters()
 	M._last_filters_signature = signature
 end
 
+function M._sync_debugfile_imports(cb)
+	if not M.is_open() then
+		if type(cb) == "function" then
+			cb(false)
+		end
+		return
+	end
+	M._send_helpers_if_needed()
+	local block = vim.trim(M.config.debugfile_auto_imports or "")
+	local payload = encode_json(block)
+	local signature = payload
+	if M._debugfile_imports_signature == signature then
+		if type(cb) == "function" then
+			cb(true)
+		end
+		return
+	end
+	local template = py_module.source("set_debugfile_imports.py")
+	local script = template:gsub("__IMPORTS_JSON__", payload)
+	exec_with_pipeline(script, {
+		require_helpers = true,
+		on_error = function(reason)
+			if M._debugfile_imports_signature == signature then
+				M._debugfile_imports_signature = nil
+			end
+			local r = tostring(reason or "")
+			if r == "helpers_failed" or r == "zmq_unavailable" or r == "conn_file_unavailable" then
+				vim.defer_fn(function()
+					if M.is_open() then
+						M._sync_debugfile_imports()
+					end
+				end, 150)
+				return
+				end
+				warn_user("ipybridge: failed to sync debugfile imports via ZMQ (" .. (r ~= "" and r or "unknown") .. ")")
+				if type(cb) == "function" then
+					cb(false)
+				end
+			end,
+			on_success = function()
+				M._debugfile_imports_signature = signature
+				if type(cb) == "function" then
+					cb(true)
+				end
+			end,
+	})
+end
+
 debug.set_sync_handler(function()
 	if type(M._sync_var_filters) == "function" then
 		M._sync_var_filters()
@@ -653,55 +706,63 @@ M.debug_file = function()
 		if not M.is_open() then
 			return
 		end
-		M._send_helpers_if_needed()
-		M._ensure_runcell_helpers(function(ok)
-			if not ok then
-				warn_user("ipybridge: debug helpers unavailable; debugfile aborted")
-				return
-			end
-			breakpoints.push()
-			local cwd_arg = resolve_exec_cwd(abs_path)
-			local safe = utils.py_quote_single(abs_path)
-			local safecwd = nil
-			if cwd_arg and #cwd_arg > 0 then
-				safecwd = utils.py_quote_single(cwd_arg)
-			end
-			local debugfile_sent = false
-			local function dispatch_debugfile()
-				if debugfile_sent then
+		local function start_debugfile()
+			M._send_helpers_if_needed()
+			M._ensure_runcell_helpers(function(ok)
+				if not ok then
+					warn_user("ipybridge: debug helpers unavailable; debugfile aborted")
 					return
 				end
-				debugfile_sent = true
-				if safecwd then
-					term_send(string.format("debugfile('%s','%s')\n", safe, safecwd))
-				else
-					term_send(string.format("debugfile('%s')\n", safe))
+				breakpoints.push()
+				local cwd_arg = resolve_exec_cwd(abs_path)
+				local safe = utils.py_quote_single(abs_path)
+				local safecwd = nil
+				if cwd_arg and #cwd_arg > 0 then
+					safecwd = utils.py_quote_single(cwd_arg)
 				end
-				local was_debug = M._debug_active
-				M._debug_generation = (M._debug_generation or 0) + 1
-				if M._debug_generation > 0 then
-					M._debug_generation_complete = M._debug_generation - 1
+				local debugfile_sent = false
+				local function dispatch_debugfile()
+					if debugfile_sent then
+						return
+					end
+					debugfile_sent = true
+					if safecwd then
+						term_send(string.format("debugfile('%s','%s')\n", safe, safecwd))
+					else
+						term_send(string.format("debugfile('%s')\n", safe))
+					end
+					local was_debug = M._debug_active
+					M._debug_generation = (M._debug_generation or 0) + 1
+					if M._debug_generation > 0 then
+						M._debug_generation_complete = M._debug_generation - 1
+					end
+					M._debug_active = true
+					M._debug_status_active = true
+					if not was_debug then
+						M._sync_var_filters()
+					end
 				end
-				M._debug_active = true
-				M._debug_status_active = true
-				if not was_debug then
-					M._sync_var_filters()
-				end
+				exec_with_pipeline("_myipy_reset_debug_baseline()", {
+					require_helpers = true,
+					on_success = dispatch_debugfile,
+					on_error = function(reason)
+						local r = tostring(reason or "")
+						warn_user(
+							"ipybridge: failed to reset debug baseline via ZMQ; falling back to terminal call ("
+								.. (r ~= "" and r or "unknown")
+								.. ")"
+						)
+						term_send("_myipy_reset_debug_baseline()\n")
+						dispatch_debugfile()
+					end,
+				})
+			end)
+		end
+		M._sync_debugfile_imports(function(ok)
+			if not ok and vim.trim(M.config.debugfile_auto_imports or "") ~= "" then
+				warn_user("ipybridge: debugfile auto imports unavailable; continuing without them")
 			end
-			exec_with_pipeline("_myipy_reset_debug_baseline()", {
-				require_helpers = true,
-				on_success = dispatch_debugfile,
-				on_error = function(reason)
-					local r = tostring(reason or "")
-					warn_user(
-						"ipybridge: failed to reset debug baseline via ZMQ; falling back to terminal call ("
-							.. (r ~= "" and r or "unknown")
-							.. ")"
-					)
-					term_send("_myipy_reset_debug_baseline()\n")
-					dispatch_debugfile()
-				end,
-			})
+			start_debugfile()
 		end)
 	end)
 end

@@ -97,6 +97,7 @@ function Session:reset_state(state)
 	state._runcell_waiters = {}
 	state._zmq_ready = false
 	state._last_filters_signature = nil
+	state._debugfile_imports_signature = nil
 	state._pending_exec = {}
 	state._helpers_waiters = {}
 end

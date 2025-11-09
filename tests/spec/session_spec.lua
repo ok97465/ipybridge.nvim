@@ -431,6 +431,7 @@ it("reset_state clears transient fields and removes files", function()
 		_runcell_waiters = { 1 },
 		_zmq_ready = true,
 		_last_filters_signature = {},
+		_debugfile_imports_signature = {},
 		_pending_exec = { key = true },
 		_helpers_waiters = { 1 },
 	}
@@ -446,6 +447,7 @@ it("reset_state clears transient fields and removes files", function()
 	assert(next(state._runcell_waiters) == nil, "runcell waiters not cleared")
 	assert(state._zmq_ready == false, "zmq flag not reset")
 	assert(state._last_filters_signature == nil, "filters signature not cleared")
+	assert(state._debugfile_imports_signature == nil, "debugfile imports signature not cleared")
 	assert(next(state._pending_exec) == nil, "pending exec queue not cleared")
 	assert(next(state._helpers_waiters) == nil, "helpers waiters not cleared")
 end)

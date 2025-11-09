@@ -72,6 +72,7 @@ _MAX_CHILD_PREVIEWS = 40
 
 # Track baseline object ids captured at debug start so stale globals stay hidden.
 _DEBUG_BASELINE = {}
+_DEBUGFILE_IMPORTS = ""
 
 _BREAKPOINT_FILE_ENV = "IPYBRIDGE_BREAKPOINT_FILE"
 _BREAKPOINT_STATE = {"path": None, "signature": None, "data": {}}
@@ -118,6 +119,17 @@ def _myipy_reset_debug_baseline(frame=None):
         namespace = {}
     _DEBUG_BASELINE.clear()
     _DEBUG_BASELINE.update(_debug_baseline_snapshot(namespace))
+
+
+def _myipy_set_debugfile_imports(import_block):
+    global _DEBUGFILE_IMPORTS
+    if not isinstance(import_block, str):
+        import_block = ""
+    _DEBUGFILE_IMPORTS = import_block.strip()
+
+
+def _myipy_get_debugfile_imports():
+    return _DEBUGFILE_IMPORTS
 
 
 def _myipy_normalize_breakpoints(raw):

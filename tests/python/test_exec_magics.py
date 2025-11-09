@@ -53,6 +53,47 @@ def _load_exec_magics(monkeypatch):
     return module, registered
 
 
+def _prepare_debugfile_runtime(monkeypatch, module, user_ns):
+    monkeypatch.setattr(module, "_mi_start_qt_pump", lambda *a, **k: None)
+    monkeypatch.setattr(module, "_mi_enable_matplotlib", lambda *a, **k: None)
+    monkeypatch.setattr(module, "_mi_enable_gui", lambda *a, **k: None)
+    module.__dict__["_mi_acquire_user_namespace"] = lambda: user_ns
+
+    captured = {}
+
+    class FakeDebugger(bdb.Bdb):
+        def __init__(self):
+            super().__init__()
+            self.shell = types.SimpleNamespace(
+                colors="linux", hooks=types.SimpleNamespace(synchronize_with_editor=None)
+            )
+            self.prompt = ""
+            self.quitting = False
+
+        def clear_all_breaks(self):
+            pass
+
+        def set_break(self, *_args, **_kwargs):
+            pass
+
+        def reset(self):
+            pass
+
+        def runctx(self, code, glbs, locs):
+            exec(code, glbs, locs)
+            captured["globals"] = dict(glbs)
+
+        def set_trace(self, *_args, **_kwargs):
+            pass
+
+    monkeypatch.setattr(
+        module._MiQtAwarePdb,
+        "get",
+        classmethod(lambda cls: FakeDebugger),
+    )
+    return captured
+
+
 def test_runcell_executes_cells(monkeypatch, tmp_path):
     module, _ = _load_exec_magics(monkeypatch)
     file_path = tmp_path / "sample.py"
@@ -183,6 +224,36 @@ def test_debugfile_uses_isolated_namespace(monkeypatch, tmp_path):
 
     assert user_ns["foo"] == "foo"
     assert user_ns["foo_exists_before"] is False
+
+
+def test_debugfile_auto_imports_applied(monkeypatch, tmp_path):
+    module, _ = _load_exec_magics(monkeypatch)
+    user_ns = {}
+    captured = _prepare_debugfile_runtime(monkeypatch, module, user_ns)
+    module.__dict__["_myipy_get_debugfile_imports"] = lambda: "import math"
+
+    script_path = tmp_path / "auto_import.py"
+    script_path.write_text("result = math.sqrt(49)\n", encoding="utf-8")
+
+    module.debugfile(str(script_path))
+
+    assert captured["globals"]["result"] == 7.0
+
+
+def test_debugfile_auto_import_error_prints(monkeypatch, tmp_path, capsys):
+    module, _ = _load_exec_magics(monkeypatch)
+    user_ns = {}
+    captured = _prepare_debugfile_runtime(monkeypatch, module, user_ns)
+    module.__dict__["_myipy_get_debugfile_imports"] = lambda: "import definitely_missing_module_123"
+
+    script_path = tmp_path / "auto_import_error.py"
+    script_path.write_text("value = 1\n", encoding="utf-8")
+
+    module.debugfile(str(script_path))
+    output = capsys.readouterr()
+
+    assert "debugfile auto import failed" in output.out
+    assert captured["globals"]["value"] == 1
 
 
 def test_debugcell_shares_namespace_and_breakpoints(monkeypatch, tmp_path):

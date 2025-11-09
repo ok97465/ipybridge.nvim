@@ -95,6 +95,7 @@ require("ipybridge").setup({
         runfile_save_before_run = true,  -- save buffer before runfile to use up-to-date file
         debugfile_save_before_run = true, -- save buffer before debugfile to use up-to-date file
         debugcell_save_before_run = true, -- save buffer before debugcell to use up-to-date file
+        debugfile_auto_imports = "import numpy as np;import matplotlib.pyplot as plt;", -- hidden imports before %debugfile
 
         -- Variable explorer / preview (ZMQ backend requires ipykernel + jupyter_client + pyzmq)
         viewer_max_rows = 30,
@@ -120,6 +121,7 @@ require("ipybridge").setup({
 - `runfile_save_before_run` (boolean): Save the buffer before runfile execution (default `true`).
 - `debugfile_save_before_run` (boolean): Save the buffer before `%debugfile` execution (default `true`).
 - `debugcell_save_before_run` (boolean): Save the buffer before `%debugcell` execution (default `true`).
+- `debugfile_auto_imports` (string): Statements (e.g. `"import numpy as np;import matplotlib.pyplot as plt;"`) that run silently inside the isolated `%debugfile` namespace before `ipdb` starts. 
 - `exec_cwd_mode` (string): Working directory behavior for `run_cell` / `run_file`.
   - `'file'`: change directory to the current file's directory before executing
   - `'pwd'`: change directory to Neovim's `getcwd()` (default)
