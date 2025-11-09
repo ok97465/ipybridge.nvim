@@ -22,6 +22,11 @@ from _thread import interrupt_main
 from IPython import get_ipython
 
 try:
+    from plot_viewer import create_runtime as _plot_create_runtime
+except Exception:
+    _plot_create_runtime = None
+
+try:
     from IPython.core.completer import (
         ProvisionalCompleterWarning,
         provisionalcompleter,
@@ -880,6 +885,49 @@ def _myipy_emit(tag, payload):
         sys.stdout.flush()
     except Exception:  # pragma: no cover - terminal write safeguard
         pass
+
+
+_PLOT_RUNTIME = None
+
+
+def _plot_runtime():
+    global _PLOT_RUNTIME
+    if _PLOT_RUNTIME is not None:
+        return _PLOT_RUNTIME
+    if _plot_create_runtime is None:
+        return None
+    _PLOT_RUNTIME = _plot_create_runtime(lambda payload: _myipy_emit("plot_server", payload))
+    return _PLOT_RUNTIME
+
+
+def __mi_plot_enable(options=None):
+    runtime = _plot_runtime()
+    if runtime is None:
+        result = {"status": "stopped", "error": "plot runtime unavailable"}
+    else:
+        result = runtime.enable(options or {})
+    print(json.dumps(result, ensure_ascii=False))
+    _myipy_purge_last_history()
+    return result
+
+
+def __mi_plot_disable():
+    runtime = _plot_runtime()
+    if runtime is None:
+        return {"ok": False, "error": "plot runtime unavailable"}
+    result = runtime.disable()
+    return {"ok": True, "data": result}
+
+
+def __mi_plot_command(action, payload=None):
+    runtime = _plot_runtime()
+    if runtime is None:
+        result = {"ok": False, "error": "plot runtime unavailable"}
+    else:
+        result = runtime.handle_command(action, payload or {})
+    print(json.dumps(result, ensure_ascii=False))
+    _myipy_purge_last_history()
+    return result
 
 
 def _myipy_write_json(path, obj):

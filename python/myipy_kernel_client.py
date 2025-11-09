@@ -356,6 +356,30 @@ class KernelChannel:
             return src
         return src[:limit] + "…"
 
+    OSC_PREFIX = "\x1b]5379;ipybridge:"
+    OSC_SUFFIX = "\x07"
+
+    @classmethod
+    def _strip_osc(cls, text: str) -> str:
+        if not text or cls.OSC_PREFIX not in text:
+            return text
+        parts = []
+        cursor = 0
+        prefix = cls.OSC_PREFIX
+        suffix = cls.OSC_SUFFIX
+        while True:
+            start = text.find(prefix, cursor)
+            if start == -1:
+                parts.append(text[cursor:])
+                break
+            parts.append(text[cursor:start])
+            stop = text.find(suffix, start + len(prefix))
+            if stop == -1:
+                # no closing suffix; drop the rest
+                break
+            cursor = stop + len(suffix)
+        return "".join(parts)
+
     def run_and_collect(
         self,
         code: str,
@@ -391,7 +415,9 @@ class KernelChannel:
                     msg_type == "stream"
                     and msg.get("content", {}).get("name") == "stdout"
                 ):
-                    stdout_chunks += msg.get("content", {}).get("text", "")
+                    stdout_chunks += self._strip_osc(
+                        msg.get("content", {}).get("text", "")
+                    )
                 elif msg_type == "error":
                     success = False
                     error_text = "\n".join(msg.get("content", {}).get("traceback", []))
@@ -725,6 +751,8 @@ class RequestProcessor:
             return self._handle_vars(req_id, args)
         if op == "preview":
             return self._handle_preview(req_id, args)
+        if op == "plot":
+            return self._handle_plot(req_id, args)
         if op == "exec":
             return self._handle_exec(req_id, args)
         if op == "interrupt":
@@ -823,6 +851,31 @@ class RequestProcessor:
             response["data"] = data
         else:
             response["error"] = err or "error"
+        return response
+
+    def _handle_plot(self, req_id, args: dict) -> dict:
+        action = args.get("action")
+        if not isinstance(action, str) or not action:
+            return {"id": req_id, "ok": False, "error": "missing action"}
+        payload = args.get("payload") or {}
+        try:
+            payload_expr = json.dumps(payload, ensure_ascii=False)
+        except Exception:
+            payload_expr = "{}"
+        if action == "enable":
+            code = f"__mi_plot_enable({payload_expr})"
+        else:
+            try:
+                action_expr = json.dumps(action)
+            except Exception:
+                action_expr = json.dumps(str(action))
+            code = f"__mi_plot_command({action_expr}, {payload_expr})"
+        ok, data, err = self._channel.run_and_collect(code)
+        response = {"id": req_id, "ok": ok, "tag": "plot"}
+        if ok:
+            response["data"] = data
+        else:
+            response["error"] = err or "plot command failed"
         return response
 
     @staticmethod

@@ -27,6 +27,7 @@ local Debug = require("ipybridge.core.debug")
 local Terminal = require("ipybridge.core.terminal")
 local Executor = require("ipybridge.executor")
 local SessionManager = require("ipybridge.session")
+local plot_viewer = require("ipybridge.viewer.plot")
 local inspect = vim.inspect
 local fs = vim.fs
 local uv = vim.uv
@@ -216,7 +217,18 @@ M.config = {
 	completion = {
 		engine_priority = vim.deepcopy(cmp_constants.default_engine_priority),
 	},
+	plot_viewer = plot_viewer.defaults(),
 }
+
+local function normalize_plot_viewer_config(value)
+	if value == nil then
+		return nil
+	end
+	if type(value) == "string" then
+		return { mode = value }
+	end
+	return value
+end
 
 local function get_start_line_cell(idx_seed)
 	local lines = api.nvim_buf_get_lines(0, 0, idx_seed, false)
@@ -259,6 +271,12 @@ end
 
 M.setup = function(config)
 	if config ~= nil then
+		if config.plot_viewer ~= nil then
+			local t = type(config.plot_viewer)
+			if t ~= "string" and t ~= "table" then
+				error("ipybridge: plot_viewer must be \"browser\", \"off\", or a table")
+			end
+		end
 		vim.validate({
 			profile_name = { config.profile_name, "s", true },
 			startup_script = { config.startup_script, "s", true },
@@ -279,7 +297,13 @@ M.setup = function(config)
 			})
 		end
 	end
-	M.config = vim.tbl_deep_extend("force", M.config, config or {})
+		local merged = config or {}
+		if merged.plot_viewer ~= nil then
+			merged = vim.deepcopy(merged)
+			merged.plot_viewer = normalize_plot_viewer_config(merged.plot_viewer)
+		end
+		M.config = vim.tbl_deep_extend("force", M.config, merged)
+	plot_viewer.configure(M.config.plot_viewer)
 	cmp_bridge.configure(M.config.completion or {})
 
 	breakpoints.ensure_support()
@@ -312,6 +336,31 @@ end
 ---@param bufnr integer
 M.apply_buffer_keymaps = function(bufnr)
 	keymaps.apply_buffer(bufnr)
+end
+
+---Open the browser-based plot viewer.
+function M.plot_open()
+	plot_viewer.open_browser()
+end
+
+function M.plot_next()
+	plot_viewer.next()
+end
+
+function M.plot_prev()
+	plot_viewer.prev()
+end
+
+function M.plot_delete()
+	plot_viewer.delete()
+end
+
+function M.plot_clear()
+	plot_viewer.clear()
+end
+
+function M.plot_status()
+	plot_viewer.status()
 end
 
 ---Return whether the IPython terminal is currently open.

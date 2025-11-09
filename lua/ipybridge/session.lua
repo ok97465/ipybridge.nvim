@@ -1,6 +1,8 @@
 -- Session manager that owns terminal bootstrap/orchestration.
 -- Handles console environment setup, helper uploads, breakpoint wiring, and
 -- terminal keymaps so init.lua stays lean.
+local plot_viewer = require("ipybridge.viewer.plot")
+
 local Session = {}
 Session.__index = Session
 
@@ -241,6 +243,17 @@ function Session:collect_startup_instructions(state, cwd)
 	}
 end
 
+function Session:_maybe_enable_plot_viewer(state)
+	if plot_viewer.mode() ~= "browser" then
+		return
+	end
+	-- Delegate readiness orchestration to the Lua plot_viewer module so ZMQ and Python helpers stay encapsulated there.
+	local ok, err = pcall(plot_viewer.ensure_ready)
+	if not ok then
+		self.warn_user("ipybridge: failed to start plot viewer (" .. tostring(err or "unknown") .. ")")
+	end
+end
+
 function Session:run_deferred_startup(state, opts)
 	local go_back = opts.go_back
 	local callback = opts.callback
@@ -291,6 +304,8 @@ function Session:run_deferred_startup(state, opts)
 				end,
 			})
 		end
+
+		self:_maybe_enable_plot_viewer(state)
 
 		state._ensure_runcell_helpers()
 		if state.term_instance then
