@@ -233,24 +233,75 @@ def _mi_exec_source(source, filename, cwd=None):
                 _mi_print_exception()
 
 
-def _mi_get_qapp():
-    candidates = [
-        ("qtpy.QtWidgets", "QApplication"),
-        ("PyQt6.QtWidgets", "QApplication"),
-        ("PySide6.QtWidgets", "QApplication"),
-        ("PyQt5.QtWidgets", "QApplication"),
-        ("PySide2.QtWidgets", "QApplication"),
-    ]
-    for mod_name, cls_name in candidates:
-        try:
-            module = __import__(mod_name, fromlist=[cls_name])
-            cls = getattr(module, cls_name)
-            app = cls.instance()
-            if app is None:
-                continue
-            return app
-        except Exception:
+def _mi_matplotlib_backend_hint():
+    """Return the active Matplotlib backend name if it points to Qt."""
+    source = _mi_plt or sys.modules.get("matplotlib")
+    getter = getattr(source, "get_backend", None)
+    if not callable(getter):
+        return None
+    try:
+        backend = getter()
+    except Exception:
+        return None
+    if not backend:
+        return None
+    backend = str(backend).lower()
+    return backend if "qt" in backend else None
+
+
+def _mi_iter_loaded_qt_modules():
+    """Yield Qt-related modules that are already loaded in sys.modules."""
+    backend_hint = _mi_matplotlib_backend_hint()
+    modules = []
+    seen = set()
+    for name, module in list(sys.modules.items()):
+        if module is None or name in seen:
             continue
+        lowered = name.lower()
+        if "qt" not in lowered and not lowered.startswith(("pyqt", "pyside")):
+            continue
+        modules.append((name, module))
+        seen.add(name)
+    if backend_hint:
+        modules.sort(
+            key=lambda item: (
+                0 if backend_hint in item[0].lower() else 1,
+                item[0],
+            )
+        )
+    else:
+        modules.sort(key=lambda item: item[0])
+    for _, module in modules:
+        yield module
+
+
+def _mi_qapp_from_module(module):
+    """Return the QApplication instance exposed by the given module."""
+    candidates = []
+    direct = getattr(module, "QApplication", None)
+    if direct is not None:
+        candidates.append(direct)
+    widgets = getattr(module, "QtWidgets", None)
+    if widgets is not None:
+        nested = getattr(widgets, "QApplication", None)
+        if nested is not None:
+            candidates.append(nested)
+    for cls in candidates:
+        instance = None
+        try:
+            instance = cls.instance() if hasattr(cls, "instance") else None
+        except Exception:
+            instance = None
+        if instance is not None:
+            return instance
+    return None
+
+
+def _mi_get_qapp():
+    for module in _mi_iter_loaded_qt_modules():
+        app = _mi_qapp_from_module(module)
+        if app is not None:
+            return app
     return None
 
 
