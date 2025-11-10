@@ -89,23 +89,22 @@ const params = new URLSearchParams(window.location.search);
 				thumbnails.appendChild(empty);
 				return;
 			}
-			const sorted = state.entries.slice().reverse();
-			for (const entry of sorted) {
-			const btn = document.createElement("div");
-			btn.className = "thumb" + (state.selected && entry.id === state.selected.id ? " active" : "");
-			const img = document.createElement("img");
-			img.src = auth(`/plots/${entry.id}.png`);
-			img.alt = entry.title || entry.label || entry.id;
-			const caption = document.createElement("div");
-			caption.className = "title";
-			caption.textContent = entry.title || entry.label || "Plot";
-			btn.appendChild(img);
-			btn.appendChild(caption);
-			btn.addEventListener("click", () => {
-				selectPlot(entry.id);
-			});
-			thumbnails.appendChild(btn);
-		}
+			for (const entry of state.entries) {
+				const btn = document.createElement("div");
+				btn.className = "thumb" + (state.selected && entry.id === state.selected.id ? " active" : "");
+				const img = document.createElement("img");
+				img.src = auth(`/plots/${entry.id}.png`);
+				img.alt = entry.title || entry.label || entry.id;
+				const caption = document.createElement("div");
+				caption.className = "title";
+				caption.textContent = entry.title || entry.label || "Plot";
+				btn.appendChild(img);
+				btn.appendChild(caption);
+				btn.addEventListener("click", () => {
+					selectPlot(entry.id);
+				});
+				thumbnails.appendChild(btn);
+			}
 		}
 
 		function render() {
