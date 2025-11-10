@@ -30,22 +30,23 @@ from urllib.parse import parse_qs, urlparse
 # ---------------------------------------------------------------------------
 # Utilities
 
+
 def _resolve_asset_root() -> Path:
-	"""Locate the plot pane assets regardless of plugin install layout."""
+    """Locate the plot pane assets regardless of plugin install layout."""
 
-	here = Path(__file__).resolve()
-	parents = list(here.parents)
-	candidates: List[Path] = []
+    here = Path(__file__).resolve()
+    parents = list(here.parents)
+    candidates: List[Path] = []
 
-	for depth in (2, 1, 0):
-		if depth < len(parents):
-			candidates.append(parents[depth] / "resources" / "plot_pane")
+    for depth in (2, 1, 0):
+        if depth < len(parents):
+            candidates.append(parents[depth] / "resources" / "plot_pane")
 
-	for candidate in candidates:
-		if candidate.is_dir():
-			return candidate
+    for candidate in candidates:
+        if candidate.is_dir():
+            return candidate
 
-	return candidates[0] if candidates else here.parent
+    return candidates[0] if candidates else here.parent
 
 
 _ASSET_ROOT = _resolve_asset_root()
@@ -73,7 +74,9 @@ def _viewer_html() -> str:
         _VIEWER_HTML_CACHE = _load_viewer_html()
     except OSError as exc:
         # Fall back to a tiny inline page that surfaces the root issue.
-        _VIEWER_HTML_CACHE = f"<html><body><h1>Plot viewer unavailable</h1><p>{exc}</p></body></html>"
+        _VIEWER_HTML_CACHE = (
+            f"<html><body><h1>Plot viewer unavailable</h1><p>{exc}</p></body></html>"
+        )
     return _VIEWER_HTML_CACHE
 
 
@@ -277,7 +280,9 @@ class PlotRequestHandler(BaseHTTPRequestHandler):
 
     server: PlotHTTPServer
 
-    def log_message(self, format: str, *args) -> None:  # noqa: A003 - match BaseHTTPRequestHandler signature
+    def log_message(
+        self, format: str, *args
+    ) -> None:  # noqa: A003 - match BaseHTTPRequestHandler signature
         # Silence default logging; Neovim already prints kernel logs.
         return
 
@@ -461,11 +466,15 @@ class PlotServer:
             handler = PlotRequestHandler
             try:
                 httpd = PlotHTTPServer((self._host, 0), handler, self)
-            except OSError as exc:  # pragma: no cover - startup errors are environment-specific
+            except (
+                OSError
+            ) as exc:  # pragma: no cover - startup errors are environment-specific
                 raise RuntimeError(f"plot server failed to bind: {exc}") from exc
             self._httpd = httpd
             self._port = httpd.server_address[1]
-            thread = threading.Thread(target=httpd.serve_forever, name="ipybridge-plot-httpd", daemon=True)
+            thread = threading.Thread(
+                target=httpd.serve_forever, name="ipybridge-plot-httpd", daemon=True
+            )
             thread.start()
             self._thread = thread
 
@@ -520,7 +529,9 @@ class PlotServer:
         entry = self._store.selected()
         return entry.summary() if entry else None
 
-    def set_backend_state(self, name: Optional[str], active: bool, required: Optional[str] = None) -> None:
+    def set_backend_state(
+        self, name: Optional[str], active: bool, required: Optional[str] = None
+    ) -> None:
         self._backend_name = name
         self._backend_active = active
         if required:
@@ -583,7 +594,11 @@ class PlotServer:
         selected = self._store.selected()
         if selected:
             self.events.publish("plot-selected", selected.summary())
-        return {"ok": True, "removed": summary, "selected": selected.summary() if selected else None}
+        return {
+            "ok": True,
+            "removed": summary,
+            "selected": selected.summary() if selected else None,
+        }
 
     def clear_plots(self) -> dict:
         removed = [entry.summary() for entry in self._store.clear()]
@@ -651,7 +666,11 @@ class PlotCommandRouter:
 class _PlotServerController:
     """Own PlotServer lifecycle, configuration, and command routing."""
 
-    def __init__(self, status_provider: Callable[[], dict], status_emitter: Callable[[Optional[dict]], dict]) -> None:
+    def __init__(
+        self,
+        status_provider: Callable[[], dict],
+        status_emitter: Callable[[Optional[dict]], dict],
+    ) -> None:
         self._status_provider = status_provider
         self._emit_status = status_emitter
         self._server: Optional[PlotServer] = None
@@ -700,7 +719,9 @@ class _PlotServerController:
         if self._server:
             self._server.add_entry(entry)
 
-    def set_backend_state(self, name: Optional[str], active: bool, required: str) -> None:
+    def set_backend_state(
+        self, name: Optional[str], active: bool, required: str
+    ) -> None:
         if self._server:
             self._server.set_backend_state(name, active, required)
 
@@ -716,270 +737,277 @@ class _PlotServerController:
 
 
 class _MatplotlibHookManager:
-	"""Install pyplot hooks, capture figures, and report backend state."""
+    """Install pyplot hooks, capture figures, and report backend state."""
 
-	def __init__(
-		self,
-		required_backend: str,
-		server_controller: _PlotServerController,
-		status_changed: Callable[[Optional[dict]], dict],
-		capture_callback: Optional[Callable[[str], None]] = None,
-	) -> None:
-		self._required_backend = required_backend
-		self._server_controller = server_controller
-		self._status_changed = status_changed
-		self._capture_callback = capture_callback
-		self._hook_originals: Dict[str, Callable] = {}
-		self._hooks_installed = False
-		self._backend_name: Optional[str] = None
-		self._backend_active = True
-		self._inline_display_original: Optional[Callable] = None
-		self._inline_display_disabled = False
-		self._inline_capture_active = False
+    def __init__(
+        self,
+        required_backend: str,
+        server_controller: _PlotServerController,
+        status_changed: Callable[[Optional[dict]], dict],
+        capture_callback: Optional[Callable[[str], None]] = None,
+    ) -> None:
+        self._required_backend = required_backend
+        self._server_controller = server_controller
+        self._status_changed = status_changed
+        self._capture_callback = capture_callback
+        self._hook_originals: Dict[str, Callable] = {}
+        self._hooks_installed = False
+        self._backend_name: Optional[str] = None
+        self._backend_active = True
+        self._inline_display_original: Optional[Callable] = None
+        self._inline_display_disabled = False
+        self._inline_capture_active = False
 
-	def install(self) -> None:
-		if self._hooks_installed:
-			return
-		import matplotlib.pyplot as plt  # type: ignore
+    def install(self) -> None:
+        if self._hooks_installed:
+            return
+        import matplotlib.pyplot as plt  # type: ignore
 
-		def register(fn_name: str, builder: Callable[[Callable], Callable]) -> None:
-			current = getattr(plt, fn_name)
-			self._hook_originals[fn_name] = current
-			setattr(plt, fn_name, builder(current))
+        def register(fn_name: str, builder: Callable[[Callable], Callable]) -> None:
+            current = getattr(plt, fn_name)
+            self._hook_originals[fn_name] = current
+            setattr(plt, fn_name, builder(current))
 
-		def make_capture_wrapper(reason: str, capture_after: bool):
-			def factory(original: Callable):
-				@functools.wraps(original)
-				def wrapped(*args, **kwargs):
-					return self._invoke_and_capture(original, reason, capture_after, *args, **kwargs)
+        def make_capture_wrapper(reason: str, capture_after: bool):
+            def factory(original: Callable):
+                @functools.wraps(original)
+                def wrapped(*args, **kwargs):
+                    return self._invoke_and_capture(
+                        original, reason, capture_after, *args, **kwargs
+                    )
 
-				return wrapped
+                return wrapped
 
-			return factory
+            return factory
 
-		register("show", make_capture_wrapper("pyplot.show", False))
-		register("savefig", make_capture_wrapper("pyplot.savefig", True))
+        register("show", make_capture_wrapper("pyplot.show", False))
+        register("savefig", make_capture_wrapper("pyplot.savefig", True))
 
-		def make_backend_wrapper(original: Callable):
-			@functools.wraps(original)
-			def wrapped(*args, **kwargs):
-				return self._switch_backend(original, *args, **kwargs)
+        def make_backend_wrapper(original: Callable):
+            @functools.wraps(original)
+            def wrapped(*args, **kwargs):
+                return self._switch_backend(original, *args, **kwargs)
 
-			return wrapped
+            return wrapped
 
-		register("switch_backend", make_backend_wrapper)
-		self._hooks_installed = True
+        register("switch_backend", make_backend_wrapper)
+        self._hooks_installed = True
 
-	def disable(self) -> None:
-		self.uninstall()
-		self._restore_inline_capture()
-		self._backend_name = None
-		self._backend_active = True
-		self._status_changed(None)
+    def disable(self) -> None:
+        self.uninstall()
+        self._restore_inline_capture()
+        self._backend_name = None
+        self._backend_active = True
+        self._status_changed(None)
 
-	def uninstall(self) -> None:
-		if not self._hooks_installed:
-			return
-		import matplotlib.pyplot as plt  # type: ignore
+    def uninstall(self) -> None:
+        if not self._hooks_installed:
+            return
+        import matplotlib.pyplot as plt  # type: ignore
 
-		for name, original in self._hook_originals.items():
-			setattr(plt, name, original)
-		self._hook_originals.clear()
-		self._hooks_installed = False
+        for name, original in self._hook_originals.items():
+            setattr(plt, name, original)
+        self._hook_originals.clear()
+        self._hooks_installed = False
 
-	def force_backend(self) -> None:
-		import matplotlib.pyplot as plt  # type: ignore
-		import matplotlib  # type: ignore
+    def force_backend(self) -> None:
+        import matplotlib.pyplot as plt  # type: ignore
+        import matplotlib  # type: ignore
 
-		current = str(matplotlib.get_backend()).lower()
-		target = str(self._required_backend).lower()
-		if current != target:
-			try:
-				plt.switch_backend(self._required_backend)
-			except Exception:
-				pass
-		self._ensure_inline_support()
-		self._enable_inline_capture()
+        current = str(matplotlib.get_backend()).lower()
+        target = str(self._required_backend).lower()
+        if current != target:
+            try:
+                plt.switch_backend(self._required_backend)
+            except Exception:
+                pass
+        self._ensure_inline_support()
+        self._enable_inline_capture()
 
-	def sync_backend_state(self) -> None:
-		import matplotlib  # type: ignore
+    def sync_backend_state(self) -> None:
+        import matplotlib  # type: ignore
 
-		backend = matplotlib.get_backend()
-		lowered = str(backend).lower()
-		required_lower = str(self._required_backend).lower()
-		active = lowered == required_lower
-		prev_name = self._backend_name
-		prev_active = self._backend_active
-		self._backend_name = lowered
-		self._backend_active = active
-		if lowered != prev_name or active != prev_active:
-			self._server_controller.set_backend_state(lowered, active, self._required_backend)
-			self._status_changed(None)
+        backend = matplotlib.get_backend()
+        lowered = str(backend).lower()
+        required_lower = str(self._required_backend).lower()
+        active = lowered == required_lower
+        prev_name = self._backend_name
+        prev_active = self._backend_active
+        self._backend_name = lowered
+        self._backend_active = active
+        if lowered != prev_name or active != prev_active:
+            self._server_controller.set_backend_state(
+                lowered, active, self._required_backend
+            )
+            self._status_changed(None)
 
-	def capture(self, reason: str) -> None:
-		self.sync_backend_state()
-		if not self._backend_active:
-			return
-		managers = self._get_managers()
-		for manager in managers:
-			entry = self._render_manager(manager, reason)
-			if entry:
-				self._server_controller.add_entry(entry)
+    def capture(self, reason: str) -> None:
+        self.sync_backend_state()
+        if not self._backend_active:
+            return
+        managers = self._get_managers()
+        for manager in managers:
+            entry = self._render_manager(manager, reason)
+            if entry:
+                self._server_controller.add_entry(entry)
 
-	def snapshot(self) -> dict:
-		return {
-			"backend": self._backend_name,
-			"backend_active": self._backend_active,
-			"backend_required": self._required_backend,
-		}
+    def snapshot(self) -> dict:
+        return {
+            "backend": self._backend_name,
+            "backend_active": self._backend_active,
+            "backend_required": self._required_backend,
+        }
 
-	def _forward_capture(self, reason: str) -> None:
-		if self._capture_callback:
-			try:
-				self._capture_callback(reason)
-				return
-			except Exception:
-				pass
-		self.capture(reason)
+    def _forward_capture(self, reason: str) -> None:
+        if self._capture_callback:
+            try:
+                self._capture_callback(reason)
+                return
+            except Exception:
+                pass
+        self.capture(reason)
 
-	def _invoke_and_capture(self, func, reason: str, capture_after: bool, *args, **kwargs):
-		skip_capture = reason == "pyplot.show" and self._inline_capture_active
-		if not skip_capture and not capture_after:
-			self._forward_capture(reason)
-		result = func(*args, **kwargs)
-		if not skip_capture and capture_after:
-			self._forward_capture(reason)
-		return result
+    def _invoke_and_capture(
+        self, func, reason: str, capture_after: bool, *args, **kwargs
+    ):
+        skip_capture = reason == "pyplot.show" and self._inline_capture_active
+        if not skip_capture and not capture_after:
+            self._forward_capture(reason)
+        result = func(*args, **kwargs)
+        if not skip_capture and capture_after:
+            self._forward_capture(reason)
+        return result
 
-	def _switch_backend(self, original, *args, **kwargs):
-		result = original(*args, **kwargs)
-		self.sync_backend_state()
-		return result
+    def _switch_backend(self, original, *args, **kwargs):
+        result = original(*args, **kwargs)
+        self.sync_backend_state()
+        return result
 
-	def _ensure_inline_support(self) -> None:
-		target = str(self._required_backend).lower()
-		if "matplotlib_inline" not in target:
-			return
-		try:
-			from IPython import get_ipython  # type: ignore
-			from IPython.core.pylabtools import activate_matplotlib  # type: ignore
-			from matplotlib_inline.backend_inline import configure_inline_support  # type: ignore
-		except Exception:
-			return
-		shell = get_ipython()
-		if shell is None:
-			return
-		try:
-			activate_matplotlib(self._required_backend)
-			configure_inline_support(shell, self._required_backend)
-		except Exception:
-			pass
+    def _ensure_inline_support(self) -> None:
+        target = str(self._required_backend).lower()
+        if "matplotlib_inline" not in target:
+            return
+        try:
+            from IPython import get_ipython  # type: ignore
+            from IPython.core.pylabtools import activate_matplotlib  # type: ignore
+            from matplotlib_inline.backend_inline import configure_inline_support  # type: ignore
+        except Exception:
+            return
+        shell = get_ipython()
+        if shell is None:
+            return
+        try:
+            activate_matplotlib(self._required_backend)
+            configure_inline_support(shell, self._required_backend)
+        except Exception:
+            pass
 
-	def _enable_inline_capture(self) -> None:
-		if self._inline_capture_active:
-			return
-		target = str(self._required_backend).lower()
-		if "matplotlib_inline" not in target:
-			return
-		try:
-			from matplotlib_inline import backend_inline  # type: ignore
-		except Exception:
-			return
-		display_fn = getattr(backend_inline, "display", None)
-		if not callable(display_fn):
-			return
+    def _enable_inline_capture(self) -> None:
+        if self._inline_capture_active:
+            return
+        target = str(self._required_backend).lower()
+        if "matplotlib_inline" not in target:
+            return
+        try:
+            from matplotlib_inline import backend_inline  # type: ignore
+        except Exception:
+            return
+        display_fn = getattr(backend_inline, "display", None)
+        if not callable(display_fn):
+            return
 
-		def capture_display(*args, **kwargs):
-			figure = None
-			if args:
-				figure = args[0]
-			elif "figure" in kwargs:
-				figure = kwargs.get("figure")
-			self._capture_inline_figure(figure)
-			return None
+        def capture_display(*args, **kwargs):
+            figure = None
+            if args:
+                figure = args[0]
+            elif "figure" in kwargs:
+                figure = kwargs.get("figure")
+            self._capture_inline_figure(figure)
+            return None
 
-		self._inline_display_original = display_fn
-		backend_inline.display = capture_display
-		self._inline_display_disabled = True
-		self._inline_capture_active = True
+        self._inline_display_original = display_fn
+        backend_inline.display = capture_display
+        self._inline_display_disabled = True
+        self._inline_capture_active = True
 
-	def _restore_inline_capture(self) -> None:
-		if not self._inline_display_disabled:
-			return
-		try:
-			from matplotlib_inline import backend_inline  # type: ignore
-		except Exception:
-			self._inline_display_disabled = False
-			self._inline_display_original = None
-			self._inline_capture_active = False
-			return
-		if callable(self._inline_display_original):
-			backend_inline.display = self._inline_display_original
-		self._inline_display_original = None
-		self._inline_display_disabled = False
-		self._inline_capture_active = False
+    def _restore_inline_capture(self) -> None:
+        if not self._inline_display_disabled:
+            return
+        try:
+            from matplotlib_inline import backend_inline  # type: ignore
+        except Exception:
+            self._inline_display_disabled = False
+            self._inline_display_original = None
+            self._inline_capture_active = False
+            return
+        if callable(self._inline_display_original):
+            backend_inline.display = self._inline_display_original
+        self._inline_display_original = None
+        self._inline_display_disabled = False
+        self._inline_capture_active = False
 
-	def _get_managers(self):
-		from matplotlib._pylab_helpers import Gcf  # type: ignore
+    def _get_managers(self):
+        from matplotlib._pylab_helpers import Gcf  # type: ignore
 
-		return list(Gcf.get_all_fig_managers())  # type: ignore[attr-defined]
+        return list(Gcf.get_all_fig_managers())  # type: ignore[attr-defined]
 
-	def _render_manager(self, manager, reason: str) -> Optional[PlotEntry]:
-		canvas = getattr(manager, "canvas", None)
-		figure = getattr(canvas, "figure", None) if canvas else None
-		return self._render_figure(figure, reason, manager)
+    def _render_manager(self, manager, reason: str) -> Optional[PlotEntry]:
+        canvas = getattr(manager, "canvas", None)
+        figure = getattr(canvas, "figure", None) if canvas else None
+        return self._render_figure(figure, reason, manager)
 
-	def _render_figure(self, figure, reason: str, manager=None) -> Optional[PlotEntry]:
-		if figure is None:
-			return None
-		from matplotlib.backends.backend_agg import FigureCanvasAgg  # type: ignore
+    def _render_figure(self, figure, reason: str, manager=None) -> Optional[PlotEntry]:
+        if figure is None:
+            return None
+        from matplotlib.backends.backend_agg import FigureCanvasAgg  # type: ignore
 
-		canvas = getattr(figure, "canvas", None)
-		if canvas is None:
-			return None
-		target_canvas = canvas
-		if not hasattr(target_canvas, "print_png"):
-			target_canvas = FigureCanvasAgg(figure)
-		target_canvas.draw()
-		buf = io.BytesIO()
-		target_canvas.print_png(buf)
-		width, height = target_canvas.get_width_height()
-		figure_number = None
-		if manager is not None:
-			figure_number = getattr(manager, "num", None)
-		if figure_number is None:
-			figure_number = getattr(figure, "number", None)
-		if figure_number is None:
-			figure_number = 0
-		label = figure.get_label() or f"Figure {figure_number}"
-		title = ""
-		suptitle = getattr(figure, "_suptitle", None)
-		if suptitle is not None:
-			title = suptitle.get_text()
-		if not title and getattr(figure, "axes", None):
-			if figure.axes:
-				title = figure.axes[0].get_title()
-		return PlotEntry(
-			plot_id=str(uuid.uuid4()),
-			figure_number=int(figure_number),
-			label=label,
-			title=title,
-			reason=reason,
-			backend=self._backend_name or "",
-			created_at=_now(),
-			width=int(width),
-			height=int(height),
-			dpi=float(getattr(figure, "dpi", 72.0)),
-			png=buf.getvalue(),
-		)
+        canvas = getattr(figure, "canvas", None)
+        if canvas is None:
+            return None
+        target_canvas = canvas
+        if not hasattr(target_canvas, "print_png"):
+            target_canvas = FigureCanvasAgg(figure)
+        target_canvas.draw()
+        buf = io.BytesIO()
+        target_canvas.print_png(buf)
+        width, height = target_canvas.get_width_height()
+        figure_number = None
+        if manager is not None:
+            figure_number = getattr(manager, "num", None)
+        if figure_number is None:
+            figure_number = getattr(figure, "number", None)
+        if figure_number is None:
+            figure_number = 0
+        label = figure.get_label() or f"Figure {figure_number}"
+        title = ""
+        suptitle = getattr(figure, "_suptitle", None)
+        if suptitle is not None:
+            title = suptitle.get_text()
+        if not title and getattr(figure, "axes", None):
+            if figure.axes:
+                title = figure.axes[0].get_title()
+        return PlotEntry(
+            plot_id=str(uuid.uuid4()),
+            figure_number=int(figure_number),
+            label=label,
+            title=title,
+            reason=reason,
+            backend=self._backend_name or "",
+            created_at=_now(),
+            width=int(width),
+            height=int(height),
+            dpi=float(getattr(figure, "dpi", 72.0)),
+            png=buf.getvalue(),
+        )
 
-	def _capture_inline_figure(self, figure) -> None:
-		self.sync_backend_state()
-		if not self._backend_active:
-			return
-		entry = self._render_figure(getattr(figure, "figure", figure), "inline.flush")
-		if entry:
-			self._server_controller.add_entry(entry)
+    def _capture_inline_figure(self, figure) -> None:
+        self.sync_backend_state()
+        if not self._backend_active:
+            return
+        entry = self._render_figure(getattr(figure, "figure", figure), "inline.flush")
+        if entry:
+            self._server_controller.add_entry(entry)
+
 
 # ---------------------------------------------------------------------------
 # Runtime that coordinates Matplotlib hooks and the HTTP server
@@ -988,10 +1016,14 @@ class _MatplotlibHookManager:
 class PlotRuntime:
     """Install Matplotlib hooks, capture figures, and expose browser controls."""
 
-    def __init__(self, status_callback: Optional[Callable[[dict], None]] = None) -> None:
+    def __init__(
+        self, status_callback: Optional[Callable[[dict], None]] = None
+    ) -> None:
         self._status_callback = status_callback
         self._required_backend = _PLOT_REQUIRED_BACKEND
-        self._server_controller = _PlotServerController(lambda: self.status(), self._emit_status)
+        self._server_controller = _PlotServerController(
+            lambda: self.status(), self._emit_status
+        )
         self._hooks: Optional[_MatplotlibHookManager] = None
         self._hooks = _MatplotlibHookManager(
             required_backend=self._required_backend,

@@ -25,6 +25,7 @@ function M.apply_terminal_defaults(set, opts)
 	map("<F11>", my.debug_step_into, "IPy: Debug step into (F11)")
 	map("<S-F11>", my.debug_step_out, "IPy: Debug step out (Shift+F11)")
 	map("<F12>", my.debug_continue, "IPy: Debug continue (F12)")
+	map("<leader>vx", my.var_explorer_open, "IPy: Variable explorer")
 end
 
 -- Apply a set of sensible default keymaps and user commands.
@@ -135,12 +136,8 @@ function M.apply_buffer(bufnr)
 	set("v", "]c", my.down_cell, "IPy: Next cell (visual)")
 	set("v", "[c", my.up_cell, "IPy: Prev cell (visual)")
 	-- Variable explorer and refresh
-	set("n", "<leader>vx", function()
-		my.var_explorer_open()
-	end, "IPy: Variable explorer")
-	set("n", "<leader>vr", function()
-		my.var_explorer_refresh()
-	end, "IPy: Refresh variables")
+	set("n", "<leader>vx", my.var_explorer_open, "IPy: Variable explorer")
+	set("n", "<leader>vr", my.var_explorer_refresh, "IPy: Refresh variables")
 end
 
 return M

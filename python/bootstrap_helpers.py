@@ -903,44 +903,46 @@ _PLOT_RUNTIME = None
 
 
 def _plot_runtime():
-	global _PLOT_RUNTIME
-	if _PLOT_RUNTIME is not None:
-		return _PLOT_RUNTIME
-	if _plot_create_runtime is None:
-		return None
-	_PLOT_RUNTIME = _plot_create_runtime(lambda payload: _myipy_emit("plot_server", payload))
-	return _PLOT_RUNTIME
+    global _PLOT_RUNTIME
+    if _PLOT_RUNTIME is not None:
+        return _PLOT_RUNTIME
+    if _plot_create_runtime is None:
+        return None
+    _PLOT_RUNTIME = _plot_create_runtime(
+        lambda payload: _myipy_emit("plot_server", payload)
+    )
+    return _PLOT_RUNTIME
 
 
 def _myipy_plot_autocapture(reason=None):
-	runtime = _plot_runtime()
-	if runtime is None:
-		return
-	try:
-		label = reason or "debug.flush"
-		runtime.capture(label)
-	except Exception as exc:
-		_ipy_log_debug(f"plot autocapture failed: {exc}")
+    runtime = _plot_runtime()
+    if runtime is None:
+        return
+    try:
+        label = reason or "debug.flush"
+        runtime.capture(label)
+    except Exception as exc:
+        _ipy_log_debug(f"plot autocapture failed: {exc}")
 
 
 def __mi_plot_enable(options=None):
-	runtime = _plot_runtime()
-	if runtime is None:
-		result = {"status": "stopped", "error": "plot runtime unavailable"}
-	else:
-		result = runtime.enable(options or {})
-	print(json.dumps(result, ensure_ascii=False))
-	_myipy_purge_last_history()
-	return result
+    runtime = _plot_runtime()
+    if runtime is None:
+        result = {"status": "stopped", "error": "plot runtime unavailable"}
+    else:
+        result = runtime.enable(options or {})
+    print(json.dumps(result, ensure_ascii=False))
+    _myipy_purge_last_history()
+    return result
 
 
 def __mi_plot_disable():
-	runtime = _plot_runtime()
-	if runtime is None:
-		return {"ok": False, "error": "plot runtime unavailable"}
+    runtime = _plot_runtime()
+    if runtime is None:
+        return {"ok": False, "error": "plot runtime unavailable"}
 
-	result = runtime.disable()
-	return {"ok": True, "data": result}
+    result = runtime.disable()
+    return {"ok": True, "data": result}
 
 
 def __mi_plot_command(action, payload=None):

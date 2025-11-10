@@ -574,7 +574,9 @@ class _MiQtAwarePdb:
                     if lineno not in self.breaks[filename]:
                         return False
 
-                bp, flag = self._mi_effective_ignore_eval_errors(filename, lineno, frame)
+                bp, flag = self._mi_effective_ignore_eval_errors(
+                    filename, lineno, frame
+                )
                 if bp:
                     self.currentbp = bp.number
                     if flag and bp.temporary:
@@ -1088,7 +1090,11 @@ def _debug_execute_source(label, source, filename, cwd=None, seed_user_ns=False)
                     try:
                         if auto_import_block:
                             try:
-                                exec(auto_import_block, debug_ns.globals, debug_ns.globals)
+                                exec(
+                                    auto_import_block,
+                                    debug_ns.globals,
+                                    debug_ns.globals,
+                                )
                             except Exception as exc:
                                 print(f"debugfile auto import failed: {exc}")
                         code = compile(source, filename, "exec")
