@@ -903,32 +903,44 @@ _PLOT_RUNTIME = None
 
 
 def _plot_runtime():
-    global _PLOT_RUNTIME
-    if _PLOT_RUNTIME is not None:
-        return _PLOT_RUNTIME
-    if _plot_create_runtime is None:
-        return None
-    _PLOT_RUNTIME = _plot_create_runtime(lambda payload: _myipy_emit("plot_server", payload))
-    return _PLOT_RUNTIME
+	global _PLOT_RUNTIME
+	if _PLOT_RUNTIME is not None:
+		return _PLOT_RUNTIME
+	if _plot_create_runtime is None:
+		return None
+	_PLOT_RUNTIME = _plot_create_runtime(lambda payload: _myipy_emit("plot_server", payload))
+	return _PLOT_RUNTIME
+
+
+def _myipy_plot_autocapture(reason=None):
+	runtime = _plot_runtime()
+	if runtime is None:
+		return
+	try:
+		label = reason or "debug.flush"
+		runtime.capture(label)
+	except Exception as exc:
+		_ipy_log_debug(f"plot autocapture failed: {exc}")
 
 
 def __mi_plot_enable(options=None):
-    runtime = _plot_runtime()
-    if runtime is None:
-        result = {"status": "stopped", "error": "plot runtime unavailable"}
-    else:
-        result = runtime.enable(options or {})
-    print(json.dumps(result, ensure_ascii=False))
-    _myipy_purge_last_history()
-    return result
+	runtime = _plot_runtime()
+	if runtime is None:
+		result = {"status": "stopped", "error": "plot runtime unavailable"}
+	else:
+		result = runtime.enable(options or {})
+	print(json.dumps(result, ensure_ascii=False))
+	_myipy_purge_last_history()
+	return result
 
 
 def __mi_plot_disable():
-    runtime = _plot_runtime()
-    if runtime is None:
-        return {"ok": False, "error": "plot runtime unavailable"}
-    result = runtime.disable()
-    return {"ok": True, "data": result}
+	runtime = _plot_runtime()
+	if runtime is None:
+		return {"ok": False, "error": "plot runtime unavailable"}
+
+	result = runtime.disable()
+	return {"ok": True, "data": result}
 
 
 def __mi_plot_command(action, payload=None):
@@ -973,16 +985,6 @@ def _myipy_bootstrap_module():
 
 
 _ipy_mod = _myipy_bootstrap_module()
-from ipybridge_ns import (
-    collect_namespace as _ipy_collect_namespace,
-    get_var_filters as _ipy_get_var_filters,
-    list_variables as _ipy_list_variables,
-    log_debug as _ipy_log_debug,
-    preview_data as _ipy_preview_data,
-    set_debug_logging as _ipy_set_debug_logging,
-    set_var_filters as _ipy_set_var_filters,
-    resolve_path as _ipy_resolve_path,
-)
 
 _OSC_PREFIX = "\x1b]5379;ipybridge:"
 _OSC_SUFFIX = "\x07"

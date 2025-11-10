@@ -127,6 +127,16 @@ def _mi_emit_debug_location(frame, lineno=None):
     _mi_emit_hidden_json("debug_location", data)
 
 
+def _mi_plot_autocapture(reason):
+    helper = globals().get("_myipy_plot_autocapture")
+    if not callable(helper):
+        return
+    try:
+        helper(reason)
+    except Exception:
+        pass
+
+
 def _mi_emit_debug_status(active):
     _mi_emit_hidden_json("debug_status", {"active": bool(active)})
 
@@ -578,6 +588,10 @@ class _MiQtAwarePdb:
                     _mi_emit_vars_snapshot(getattr(self, "curframe", frame))
                 except Exception:
                     pass
+                try:
+                    _mi_plot_autocapture("debug.break")
+                except Exception:
+                    pass
                 return result
 
             def interaction(self, *args, **kwargs):
@@ -597,6 +611,10 @@ class _MiQtAwarePdb:
                         except Exception:
                             pass
                         self._mi_autoprint = False
+                        try:
+                            _mi_plot_autocapture("debug.prompt")
+                        except Exception:
+                            pass
 
             def print_stack_entry(
                 self, frame_lineno, prompt_prefix="\n-> ", context=None
@@ -678,6 +696,10 @@ class _MiQtAwarePdb:
                 result = super().postcmd(stop, line)
                 try:
                     _mi_emit_vars_snapshot(getattr(self, "curframe", None))
+                except Exception:
+                    pass
+                try:
+                    _mi_plot_autocapture("debug.postcmd")
                 except Exception:
                     pass
                 return result
@@ -1117,6 +1139,10 @@ def _debug_execute_source(label, source, filename, cwd=None, seed_user_ns=False)
             pass
         try:
             _mi_emit_debug_status(False)
+        except Exception:
+            pass
+        try:
+            _mi_plot_autocapture("debug.exit")
         except Exception:
             pass
 

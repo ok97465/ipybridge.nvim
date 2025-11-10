@@ -29,6 +29,12 @@ def _load_exec_magics(monkeypatch):
         def do_clear(self, _arg):
             pass
 
+        def setup(self, frame, tb):
+            return (frame, tb)
+
+        def postcmd(self, stop, line):
+            return stop
+
     debugger_mod.Pdb = _SimplePdb
 
     ipy_mod = types.ModuleType("IPython")
@@ -254,6 +260,42 @@ def test_debugfile_auto_import_error_prints(monkeypatch, tmp_path, capsys):
 
     assert "debugfile auto import failed" in output.out
     assert captured["globals"]["value"] == 1
+
+
+def test_pdb_autocapture_hooks(monkeypatch):
+    module, _ = _load_exec_magics(monkeypatch)
+    calls = []
+    module.__dict__["_myipy_plot_autocapture"] = lambda reason=None: calls.append(reason)
+    pdb_cls = module._MiQtAwarePdb.get()
+    assert pdb_cls is not None
+    debugger = pdb_cls()
+    debugger.shell = types.SimpleNamespace(
+        colors="linux", hooks=types.SimpleNamespace(synchronize_with_editor=None)
+    )
+    frame = types.SimpleNamespace(
+        f_code=types.SimpleNamespace(co_filename="sample.py", co_firstlineno=1, co_name="main"),
+        f_lineno=1,
+    )
+
+    debugger.setup(frame, None)
+    debugger.postcmd(False, "next")
+
+    assert "debug.break" in calls
+    assert "debug.postcmd" in calls
+
+
+def test_debug_execute_source_autocapture_on_exit(monkeypatch, tmp_path):
+    module, _ = _load_exec_magics(monkeypatch)
+    user_ns = {}
+    _prepare_debugfile_runtime(monkeypatch, module, user_ns)
+    calls = []
+    module.__dict__["_myipy_plot_autocapture"] = lambda reason=None: calls.append(reason)
+
+    script_path = tmp_path / "autocapture_exit.py"
+    script_path.write_text("value = 1\n", encoding="utf-8")
+
+    module.debugfile(str(script_path))
+    assert "debug.exit" in calls
 
 
 def test_debugcell_shares_namespace_and_breakpoints(monkeypatch, tmp_path):

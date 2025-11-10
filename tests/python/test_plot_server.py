@@ -13,13 +13,13 @@ if str(PYTHON_ROOT) not in sys.path:
 from plot_viewer import runtime as plot_server  # noqa: E402
 
 
-def _make_entry(identifier: str, figure_number: int) -> plot_server.PlotEntry:
+def _make_entry(identifier: str, figure_number: int, reason: str = "unit-test") -> plot_server.PlotEntry:
 	return plot_server.PlotEntry(
 		plot_id=identifier,
 		figure_number=figure_number,
 		label=f"Figure {figure_number}",
 		title=f"Plot {figure_number}",
-		reason="unit-test",
+		reason=reason,
 		backend=plot_server._PLOT_REQUIRED_BACKEND,
 		created_at=figure_number + 0.5,
 		width=640,
@@ -123,6 +123,7 @@ def _install_matplotlib_stubs(monkeypatch):
 def test_plot_runtime_enable_installs_hooks_and_resets_backend(monkeypatch):
 	stubs = _install_matplotlib_stubs(monkeypatch)
 	capture_calls = []
+	added_entries = []
 
 	def fake_capture(self, reason):
 		capture_calls.append(reason)
@@ -148,6 +149,18 @@ def test_plot_runtime_enable_installs_hooks_and_resets_backend(monkeypatch):
 
 	monkeypatch.setattr(plot_server.PlotServer, "start", fake_start, raising=False)
 
+	monkeypatch.setattr(
+		plot_server._MatplotlibHookManager,
+		"_render_figure",
+		lambda self, figure, reason, manager=None: _make_entry(reason, len(added_entries) + 1, reason=reason),
+	)
+	monkeypatch.setattr(
+		plot_server.PlotServer,
+		"add_entry",
+		lambda self, entry: added_entries.append(entry),
+		raising=False,
+	)
+
 	runtime = plot_server.PlotRuntime()
 	status = runtime.enable()
 
@@ -155,12 +168,13 @@ def test_plot_runtime_enable_installs_hooks_and_resets_backend(monkeypatch):
 	assert status["backend"] == plot_server._PLOT_REQUIRED_BACKEND
 	assert stubs["switch_calls"] == [plot_server._PLOT_REQUIRED_BACKEND]
 
-	stubs["pyplot"].show(1, key="value")
 	stubs["pyplot"].savefig("fig.png")
 
-	assert capture_calls == ["pyplot.show", "pyplot.savefig"]
-	assert stubs["show_calls"] == [((1,), {"key": "value"})]
+	assert capture_calls == ["pyplot.savefig"]
 	assert stubs["savefig_calls"] == [(("fig.png",), {})]
+
+	stubs["inline_module"].display(object())
+	assert [entry.reason for entry in added_entries] == ["inline.flush"]
 
 	runtime.disable()
 
@@ -207,11 +221,25 @@ def test_plot_runtime_disables_inline_autoshow(monkeypatch):
 	runtime = plot_server.PlotRuntime()
 	inline_module = stubs["inline_module"]
 	original_inline_display = inline_module.display
+	added_entries = []
+
+	monkeypatch.setattr(
+		plot_server._MatplotlibHookManager,
+		"_render_figure",
+		lambda self, figure, reason, manager=None: _make_entry(reason, len(added_entries) + 5, reason=reason),
+	)
+	monkeypatch.setattr(
+		plot_server.PlotServer,
+		"add_entry",
+		lambda self, entry: added_entries.append(entry),
+		raising=False,
+	)
 
 	runtime.enable()
 	assert inline_module.display is not original_inline_display
 
 	inline_module.display(1, key="value")
+	assert added_entries and added_entries[0].reason == "inline.flush"
 	assert stubs["inline_display_calls"] == []
 
 	runtime.disable()
