@@ -12,7 +12,7 @@ local M = {}
 local OscParser = require("ipybridge.osc_parser")
 
 local function default_on_message(msg)
-	local ok, dispatch = pcall(require, "ipybridge.dispatch")
+	local ok, dispatch = pcall(require, "ipybridge.core.dispatch")
 	if not ok or not dispatch then
 		return
 	end

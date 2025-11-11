@@ -281,7 +281,7 @@ local function fresh_init()
 	local modules = {
 		"ipybridge",
 		"ipybridge.init",
-		"ipybridge.dispatch",
+		"ipybridge.core.dispatch",
 		"ipybridge.kernel",
 		"ipybridge.term_ipy",
 		"ipybridge.utils",
@@ -300,7 +300,7 @@ local function fresh_init()
 		package.preload[name] = nil
 	end
 
-	package.preload["ipybridge.dispatch"] = function()
+	package.preload["ipybridge.core.dispatch"] = function()
 		return {
 			handle = function(msg)
 				ctx.last_dispatch = msg

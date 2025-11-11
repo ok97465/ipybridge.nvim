@@ -21,10 +21,10 @@ local function record(name, ok, err)
 end
 
 local function fresh_dispatch()
-	package.loaded["ipybridge.dispatch"] = nil
+	package.loaded["ipybridge.core.dispatch"] = nil
 	local env = mock_vim.new()
 	_G.vim = env.vim
-	local dispatch = require("ipybridge.dispatch")
+	local dispatch = require("ipybridge.core.dispatch")
 	return env, dispatch
 end
 

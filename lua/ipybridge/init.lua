@@ -1,6 +1,6 @@
 -- Main entry point for ipybridge.nvim.
 -- Wires together the terminal manager, ZMQ executor, debugger helpers,
--- completion bridge, and command surface exposed to users.
+-- completion bridge, execution controller, and the user command surface.
 -- This plugin requires Neovim 0.11 or newer.
 -- Fail fast on older versions to prevent undefined behavior.
 if vim.fn.has("nvim-0.11") ~= 1 then
@@ -11,7 +11,7 @@ local vim = vim
 local api = vim.api
 local fn = vim.fn
 local term_helper = require("ipybridge.term_ipy")
-local dispatch = require("ipybridge.dispatch")
+local dispatch = require("ipybridge.core.dispatch")
 -- Refactored internal modules (utilities, keymaps, kernel manager)
 local utils = require("ipybridge.utils")
 local keymaps = require("ipybridge.keymaps")
@@ -28,6 +28,11 @@ local Terminal = require("ipybridge.core.terminal")
 local Executor = require("ipybridge.executor")
 local SessionManager = require("ipybridge.session")
 local plot_viewer = require("ipybridge.viewer.plot")
+local ExecutionController = require("ipybridge.controllers.execution")
+local TerminalController = require("ipybridge.controllers.terminal")
+local VariablesController = require("ipybridge.controllers.variables")
+local SyncController = require("ipybridge.controllers.sync")
+local DebuggerController = require("ipybridge.controllers.debugger")
 local inspect = vim.inspect
 local fs = vim.fs
 local uv = vim.uv
@@ -39,6 +44,10 @@ local queue_exec_request
 local after_helpers
 local exec_with_pipeline
 local session_manager
+local sync_controller
+local variables_controller
+local terminal_controller
+local debugger_controller
 
 -- Emit user-facing warnings on the main loop to avoid tearing.
 local function warn_user(message)
@@ -84,13 +93,6 @@ local term_send_debug
 local clear_debug_state
 local handle_terminal_tab
 local observe_terminal_chunk
-local send_debug_command
-
--- Cell markers must be exactly: start of line '#', one space, then at least '%%'.
--- Examples matched: '# %%', '# %% Import'. Examples NOT matched: '  # %%', '#%%'.
-local CELL_PATTERN = [[^# %%\+]]
-local CELL_RE = vim.regex(CELL_PATTERN)
-
 local function normalize_path(path)
 	if not path or path == "" then
 		return nil
@@ -156,7 +158,6 @@ term_send_debug = terminal.term_send_debug
 clear_debug_state = debug.clear_state
 handle_terminal_tab = debug.handle_terminal_tab
 observe_terminal_chunk = debug.observe_terminal_chunk
-send_debug_command = debug.send_command
 debug.set_terminal_senders(term_send, term_send_debug)
 
 ---Toggle a breakpoint at the current cursor line for the active Python buffer.
@@ -232,45 +233,6 @@ local function normalize_plot_viewer_config(value)
 		return { mode = value }
 	end
 	return value
-end
-
-local function get_start_line_cell(idx_seed)
-	local lines = api.nvim_buf_get_lines(0, 0, idx_seed, false)
-	for idx, line in vim.iter(lines):enumerate():rev() do
-		local s, e = CELL_RE:match_str(line)
-		if s ~= nil then
-			return idx
-		end
-	end
-	return 1
-end
-
--- Return the last line index of the current cell
--- and whether there is a next cell following it.
----@param idx_offset number
----@return number, boolean
-local function get_stop_line_cell(idx_offset)
-	local n_lines = api.nvim_buf_line_count(0)
-	local lines = api.nvim_buf_get_lines(0, idx_offset - 1, n_lines, false)
-	for idx, line in vim.iter(lines):enumerate() do
-		local s, e = CELL_RE:match_str(line)
-		if s ~= nil then
-			return idx + idx_offset - 1, true
-		end
-	end
-	return n_lines, false
-end
-
-local function count_cells_before(line_start)
-	local upper = math.max((line_start or 1) - 1, 0)
-	local pre_lines = api.nvim_buf_get_lines(0, 0, upper, false)
-	local idx = 0
-	for _, ln in ipairs(pre_lines) do
-		if CELL_RE:match_str(ln) ~= nil then
-			idx = idx + 1
-		end
-	end
-	return idx
 end
 
 M.setup = function(config)
@@ -389,22 +351,13 @@ local executor = Executor.new(M, {
 -- IPython terminal exit handler invoked by term_ipy.lua callback.
 -- Distinguish between plugin-initiated shutdown (jobstop) and in-REPL `exit`.
 function M._handle_term_exit()
-	if M._term_exit_expected then
-		M._term_exit_expected = false
-		M.term_instance = nil
-		return
-	end
-	M.term_instance = nil
-	M.close()
+	terminal_controller:handle_term_exit()
 end
 
 ---Open the IPython terminal split.
 ---@param go_back boolean|nil # if true, jump back to previous window after init
 M.open = function(go_back, cb)
-	if not session_manager then
-		error("ipybridge: session manager not initialised")
-	end
-	session_manager:open(M, go_back, cb)
+	terminal_controller:open(go_back, cb)
 end
 
 queue_exec_request = function(code, opts)
@@ -454,119 +407,105 @@ function M._send_helpers_if_needed()
 	executor:ensure_helpers()
 end
 
-local function encode_json(value)
-	local ok, encoded = pcall(vim.json.encode, value)
-	if not ok or not encoded then
-		return "[]"
-	end
-	return encoded
-end
+sync_controller = SyncController.new({
+	state = M,
+	py_module = py_module,
+	exec_with_pipeline = function(code, opts)
+		exec_with_pipeline(code, opts)
+	end,
+	ensure_helpers = function()
+		M._send_helpers_if_needed()
+	end,
+	is_open = function()
+		return M.is_open()
+	end,
+	warn_user = warn_user,
+})
+
+variables_controller = VariablesController.new({
+	state = M,
+	debug_vars = debug_vars,
+	sync_var_filters = function()
+		sync_controller:sync_var_filters()
+	end,
+	ensure_zmq = function(cb)
+		executor:ensure_zmq(cb)
+	end,
+	warn_user = warn_user,
+})
+
+terminal_controller = TerminalController.new({
+	state = M,
+	fn = fn,
+	kernel = kernel,
+	breakpoints = breakpoints,
+	clear_debug_state = clear_debug_state,
+	session_manager = session_manager,
+	api = api,
+	with_terminal = with_terminal,
+	is_open = function()
+		return M.is_open()
+	end,
+})
+
+debugger_controller = DebuggerController.new({
+	state = M,
+	term_send_debug = term_send_debug,
+	clear_debug_state = clear_debug_state,
+	is_open = function()
+		return M.is_open()
+	end,
+})
 
 function M._sync_var_filters()
-	if not M.is_open() then
-		return
-	end
-	M._send_helpers_if_needed()
-	local names = M.config.hidden_var_names
-	if type(names) ~= "table" then
-		names = {}
-	end
-	local types = M.config.hidden_type_names
-	if type(types) ~= "table" then
-		types = {}
-	end
-	local max_repr = tonumber(M.config.var_repr_limit) or 120
-	if max_repr <= 0 then
-		max_repr = 120
-	end
-	local enable_logs = M.config.zmq_debug and true or false
-	local names_json = encode_json(names)
-	local types_json = encode_json(types)
-	local signature =
-		table.concat({ names_json, "\0", types_json, "\0", tostring(max_repr), "\0", enable_logs and "1" or "0" })
-	if M._last_filters_signature == signature then
-		return
-	end
-	local template = py_module.source("sync_filters.py")
-	local script = template
-		:gsub("__NAMES_JSON__", names_json)
-		:gsub("__TYPES_JSON__", types_json)
-		:gsub("__MAX_REPR__", tostring(max_repr))
-		:gsub("__ENABLE_LOGS__", enable_logs and "True" or "False")
-	exec_with_pipeline(script, {
-		require_helpers = true,
-		on_error = function(reason)
-			local r = tostring(reason or "")
-			if M._last_filters_signature == signature then
-				M._last_filters_signature = nil
-			end
-			if r == "helpers_failed" or r == "zmq_unavailable" or r == "conn_file_unavailable" then
-				vim.defer_fn(function()
-					if M.is_open() then
-						M._sync_var_filters()
-					end
-				end, 150)
-				return
-			end
-			warn_user("ipybridge: failed to sync variable filters via ZMQ (" .. (r ~= "" and r or "unknown") .. ")")
-		end,
-	})
-	M._last_filters_signature = signature
+	sync_controller:sync_var_filters()
 end
 
 function M._sync_debugfile_imports(cb)
-	if not M.is_open() then
-		if type(cb) == "function" then
-			cb(false)
-		end
-		return
-	end
-	M._send_helpers_if_needed()
-	local block = vim.trim(M.config.debugfile_auto_imports or "")
-	local payload = encode_json(block)
-	local signature = payload
-	if M._debugfile_imports_signature == signature then
-		if type(cb) == "function" then
-			cb(true)
-		end
-		return
-	end
-	local template = py_module.source("set_debugfile_imports.py")
-	local script = template:gsub("__IMPORTS_JSON__", payload)
-	exec_with_pipeline(script, {
-		require_helpers = true,
-		on_error = function(reason)
-			if M._debugfile_imports_signature == signature then
-				M._debugfile_imports_signature = nil
-			end
-			local r = tostring(reason or "")
-			if r == "helpers_failed" or r == "zmq_unavailable" or r == "conn_file_unavailable" then
-				vim.defer_fn(function()
-					if M.is_open() then
-						M._sync_debugfile_imports()
-					end
-				end, 150)
-				return
-				end
-				warn_user("ipybridge: failed to sync debugfile imports via ZMQ (" .. (r ~= "" and r or "unknown") .. ")")
-				if type(cb) == "function" then
-					cb(false)
-				end
-			end,
-			on_success = function()
-				M._debugfile_imports_signature = signature
-				if type(cb) == "function" then
-					cb(true)
-				end
-			end,
-	})
+	sync_controller:sync_debugfile_imports(cb)
 end
+
 
 debug.set_sync_handler(function()
 	if type(M._sync_var_filters) == "function" then
 		M._sync_var_filters()
 	end
 end)
+
+local execution = ExecutionController.new({
+	state = M,
+	api = api,
+	fn = fn,
+	utils = utils,
+	breakpoints = breakpoints,
+	warn_user = warn_user,
+	resolve_exec_cwd = resolve_exec_cwd,
+	with_terminal = function(go_back, cb)
+		with_terminal(go_back, cb)
+	end,
+	term_send = term_send,
+	term_send_line = term_send_line,
+	term_send_debug = term_send_debug,
+	clear_debug_state = clear_debug_state,
+	ensure_runcell_helpers = function(cb)
+		M._ensure_runcell_helpers(cb)
+	end,
+	exec_with_pipeline = function(code, opts)
+		exec_with_pipeline(code, opts)
+	end,
+	sync_debugfile_imports = function(cb)
+		M._sync_debugfile_imports(cb)
+	end,
+	sync_var_filters = function()
+		M._sync_var_filters()
+	end,
+	is_open = function()
+		return M.is_open()
+	end,
+	send_helpers = function()
+		M._send_helpers_if_needed()
+	end,
+})
 
 function M._digest_vars_snapshot(snapshot)
 	return debug_vars.digest_snapshot(M, snapshot)
@@ -584,336 +523,80 @@ end
 
 ---Close the IPython terminal if running.
 M.close = function()
-	if M.is_open() then
-		M._term_exit_expected = true
-		fn.jobstop(M.term_instance.job_id)
-	else
-		M._term_exit_expected = false
-	end
-	clear_debug_state()
-	M._zmq_ready = false
-	pcall(function()
-		require("ipybridge.zmq_client").stop()
-	end)
-	-- Stop the background kernel process
-	pcall(kernel.stop)
-	if M._helpers_path then
-		pcall(os.remove, M._helpers_path)
-		M._helpers_path = nil
-	end
-	M._helpers_pending = false
-	M._helpers_sent = false
-	if M._runcell_path then
-		pcall(os.remove, M._runcell_path)
-		M._runcell_path = nil
-	end
-	breakpoints.on_session_close()
-	M._latest_vars = nil
-	M._pending_exec = {}
-	M._helpers_waiters = {}
-	M._prev_editor_win = nil
+	terminal_controller:close()
 end
 
 ---Toggle the IPython terminal split.
 M.toggle = function()
-	if M.is_open() then
-		M.close()
-	else
-		with_terminal(false, function()
-			if M.term_instance then
-				M.term_instance:startinsert()
-			end
-		end)
-	end
+	terminal_controller:toggle()
 end
 
 ---Jump to the IPython terminal split and enter insert mode.
 M.goto_ipy = function()
-	with_terminal(false, function()
-		if not M.term_instance then
-			return
-		end
-		local term_buf = M.term_instance.buf_id
-		local current_win = api.nvim_get_current_win()
-		local current_buf = api.nvim_win_get_buf(current_win)
-		local already_in_term = term_buf and current_buf == term_buf
-		if not already_in_term then
-			if current_win and api.nvim_win_is_valid(current_win) then
-				local bt = vim.bo[current_buf] and vim.bo[current_buf].buftype or ""
-				if bt ~= "terminal" or current_buf ~= term_buf then
-					M._prev_editor_win = current_win
-				end
-			end
-			M.term_instance:show()
-			if M.term_instance.win_id and api.nvim_win_is_valid(M.term_instance.win_id) then
-				api.nvim_set_current_win(M.term_instance.win_id)
-			end
-		end
-		M.term_instance:scroll_to_bottom()
-		M.term_instance:startinsert()
-	end)
+	terminal_controller:goto_ipy()
 end
 
 ---Return focus from IPython split to previous window.
 M.goto_vi = function()
-	local curbuf = api.nvim_win_get_buf(0)
-	local bt = vim.bo[curbuf] and vim.bo[curbuf].buftype or ""
-	local stored_win = M._prev_editor_win
-	if stored_win and not api.nvim_win_is_valid(stored_win) then
-		stored_win = nil
-		M._prev_editor_win = nil
-	end
-	local function jump_to_stored()
-		if not stored_win then
-			return false
-		end
-		api.nvim_set_current_win(stored_win)
-		M._prev_editor_win = nil
-		return true
-	end
-	-- If we're in any terminal buffer, leave terminal-mode and jump back.
-	if bt == "terminal" then
-		vim.cmd("stopinsert!")
-		if jump_to_stored() then
-			return
-		end
-		vim.cmd("wincmd p")
-		return
-	end
-	-- Fallback: handle explicitly for our IPython terminal buffer if matched.
-	if M.term_instance and curbuf == M.term_instance.buf_id then
-		M.term_instance:stopinsert()
-		if jump_to_stored() then
-			return
-		end
-		vim.cmd("wincmd p")
-	end
+	terminal_controller:goto_vi()
 end
 
 ---Run the current file in IPython via %run.
 M.run_file = function()
-	local abs_path = fn.expand("%:p")
-	-- Save buffer before run if requested
-	if vim.bo.modified and M.config.runfile_save_before_run ~= false then
-		pcall(vim.cmd, "write")
-	end
-	with_terminal(true, function()
-		if not M.is_open() then
-			return
-		end
-		local cwd_arg = resolve_exec_cwd(abs_path)
-		local function send_runfile()
-			local safe = utils.py_quote_single(abs_path)
-			if cwd_arg and #cwd_arg > 0 then
-				local safecwd = utils.py_quote_single(cwd_arg)
-				term_send(string.format("runfile('%s','%s')\n", safe, safecwd))
-			else
-				term_send(string.format("runfile('%s')\n", safe))
-			end
-			clear_debug_state()
-		end
-		M._ensure_runcell_helpers(function(ok)
-			if not ok then
-				warn_user("ipybridge: failed to prepare runfile helpers; run aborted")
-				return
-			end
-			send_runfile()
-		end)
-	end)
+	execution:run_file()
 end
 
 ---Run the current file under IPython debugger via %debugfile.
 M.debug_file = function()
-	local abs_path = fn.expand("%:p")
-	local win = api.nvim_get_current_win()
-	if win and api.nvim_win_is_valid(win) then
-		M._debug_window = win
-	else
-		M._debug_window = nil
-	end
-	if vim.bo.modified and M.config.debugfile_save_before_run ~= false then
-		pcall(vim.cmd, "write")
-	end
-	with_terminal(true, function()
-		if not M.is_open() then
-			return
-		end
-		local function start_debugfile()
-			M._send_helpers_if_needed()
-			M._ensure_runcell_helpers(function(ok)
-				if not ok then
-					warn_user("ipybridge: debug helpers unavailable; debugfile aborted")
-					return
-				end
-				breakpoints.push()
-				local cwd_arg = resolve_exec_cwd(abs_path)
-				local safe = utils.py_quote_single(abs_path)
-				local safecwd = nil
-				if cwd_arg and #cwd_arg > 0 then
-					safecwd = utils.py_quote_single(cwd_arg)
-				end
-				local debugfile_sent = false
-				local function dispatch_debugfile()
-					if debugfile_sent then
-						return
-					end
-					debugfile_sent = true
-					if safecwd then
-						term_send(string.format("debugfile('%s','%s')\n", safe, safecwd))
-					else
-						term_send(string.format("debugfile('%s')\n", safe))
-					end
-					local was_debug = M._debug_active
-					M._debug_generation = (M._debug_generation or 0) + 1
-					if M._debug_generation > 0 then
-						M._debug_generation_complete = M._debug_generation - 1
-					end
-					M._debug_active = true
-					M._debug_status_active = true
-					if not was_debug then
-						M._sync_var_filters()
-					end
-				end
-				exec_with_pipeline("_myipy_reset_debug_baseline()", {
-					require_helpers = true,
-					on_success = dispatch_debugfile,
-					on_error = function(reason)
-						local r = tostring(reason or "")
-						warn_user(
-							"ipybridge: failed to reset debug baseline via ZMQ; falling back to terminal call ("
-								.. (r ~= "" and r or "unknown")
-								.. ")"
-						)
-						term_send("_myipy_reset_debug_baseline()\n")
-						dispatch_debugfile()
-					end,
-				})
-			end)
-		end
-		M._sync_debugfile_imports(function(ok)
-			if not ok and vim.trim(M.config.debugfile_auto_imports or "") ~= "" then
-				warn_user("ipybridge: debugfile auto imports unavailable; continuing without them")
-			end
-			start_debugfile()
-		end)
-	end)
+	execution:debug_file()
 end
 
 ---Send lines [line_start, line_stop) to IPython.
 ---@param line_start integer
 ---@param line_stop integer
 M.send_lines = function(line_start, line_stop)
-	local tb_lines = api.nvim_buf_get_lines(0, line_start, line_stop, false)
-	if not tb_lines or #tb_lines == 0 then
-		return
-	end
-
-	if not M._debug_active then
-		clear_debug_state()
-	end
-
-	with_terminal(true, function()
-		if not M.is_open() then
-			return
-		end
-		-- Choose how to deliver multi-line code to IPython.
-		-- 'exec' ensures reliability across terminals; 'paste' mirrors typed input.
-		local mode = tostring(M.config.multiline_send_mode or "exec")
-		if mode == "paste" then
-			-- Use bracketed paste so IPython displays the pasted block with prompts.
-			local payload = utils.paste_block(tb_lines)
-			term_send(payload, { raw = true })
-		else
-			-- Default: ship as hex-encoded Python and execute via exec().
-			local block = table.concat(tb_lines, "\n") .. "\n"
-			local payload = utils.send_exec_block(block)
-			term_send(payload)
-		end
-	end)
+	execution:send_lines(line_start, line_stop)
 end
 
 ---Send the current visual selection (linewise) to IPython.
 M.run_lines = function()
-	local line_start0, line_end_excl0 = utils.selection_line_range()
-	if not line_start0 then
-		return
-	end
-	M.send_lines(line_start0, line_end_excl0)
+	execution:run_lines()
 end
 
 ---Send the current line and move cursor down one line.
 M.run_line = function()
-	local n_lines = api.nvim_buf_line_count(0)
-	local line = api.nvim_get_current_line()
-	local idx_line_cursor = api.nvim_win_get_cursor(0)[1]
-
-	with_terminal(true, function()
-		if not M.is_open() then
-			return
-		end
-		term_send_line(line)
-		if idx_line_cursor < n_lines then
-			api.nvim_win_set_cursor(0, { idx_line_cursor + 1, 0 })
-		end
-		if not M._debug_active then
-			clear_debug_state()
-		end
-	end)
+	execution:run_line()
 end
 
 ---Send an arbitrary command string to IPython.
 ---@param cmd string
 M.run_cmd = function(cmd)
-	with_terminal(true, function()
-		if not M.is_open() then
-			return
-		end
-		if M._debug_active then
-			term_send_debug(cmd)
-		else
-			term_send_line(cmd)
-		end
-	end)
-end
-
-local function send_debug_command(cmd, opts)
-	if not M._debug_active then
-		vim.notify("ipybridge: Debugger is not active", vim.log.levels.WARN)
-		return
-	end
-	if not M.is_open() then
-		vim.notify("ipybridge: IPython terminal is not open", vim.log.levels.WARN)
-		return
-	end
-	term_send_debug(cmd)
-	if opts and opts.deactivate then
-		clear_debug_state({ restore_signcolumn = opts.restore_signcolumn })
-	end
+	execution:run_cmd(cmd)
 end
 
 ---Debugger step over (F10 equivalent).
 M.debug_step_over = function()
-	send_debug_command("!next")
+	debugger_controller:step_over()
 end
 
 ---Debugger step into (F11 equivalent).
 M.debug_step_into = function()
-	send_debug_command("!step")
+	debugger_controller:step_into()
 end
 
 ---Debugger step out (Shift-F11 equivalent).
 M.debug_step_out = function()
-	send_debug_command("!return")
+	debugger_controller:step_out()
 end
 
 ---Debugger continue (F12 equivalent).
 M.debug_continue = function()
-	send_debug_command("!continue", { deactivate = true, restore_signcolumn = false })
+	debugger_controller:continue_exec()
 end
 
 ---Exit the debugger and restore normal terminal input.
 M.quit_debug = function()
-	send_debug_command("!exit", { deactivate = true, restore_signcolumn = true })
+	debugger_controller:quit()
 end
 
 ---Handle explicit debugger status updates from the Python helpers.
@@ -928,214 +611,21 @@ function M.on_debug_location(info)
 	debug.on_location(info)
 end
 
-local function deliver_vars_to_explorer(payload)
-	local ok, vx = pcall(require, "ipybridge.var_explorer")
-	if not ok or not vx or type(vx.on_vars) ~= "function" then
-		return false
-	end
-	vim.schedule(function()
-		vx.on_vars(payload or {})
-	end)
-	return true
-end
-
--- Schedule a preview payload for the data viewer; return false when unsupported.
-local function deliver_preview_payload(payload)
-	local ok, dv = pcall(require, "ipybridge.data_viewer")
-	if not ok or not dv or type(dv.on_preview) ~= "function" then
-		return false
-	end
-	vim.schedule(function()
-		dv.on_preview(payload)
-	end)
-	return true
-end
-
--- Helper: push an error payload to the data viewer, warning when delivery fails.
-local function deliver_preview_error(name, message)
-	local delivered = deliver_preview_payload({ name = name, error = message })
-	if not delivered then
-		warn_user("ipybridge: data viewer module unavailable")
-	end
-end
-
 ---@param focus_terminal_on_close boolean|nil
 M.var_explorer_open = function(focus_terminal_on_close)
-	local vx = require("ipybridge.var_explorer")
-	vx.open(focus_terminal_on_close)
-	if M._debug_active then
-		debug_vars.push_to_explorer(M)
-		return
-	end
-	M.request_vars()
+	variables_controller:open(focus_terminal_on_close)
 end
 
--- Public: refresh variable list.
 M.var_explorer_refresh = function()
-	if M._debug_active then
-		debug_vars.push_to_explorer(M)
-		return
-	end
-	M.request_vars()
+	variables_controller:refresh()
 end
 
--- Internal: request variable list from kernel.
 function M.request_vars()
-	M._sync_var_filters()
-	if M._debug_active then
-		return
-	end
-	local max_repr = tonumber(M.config.var_repr_limit) or 120
-	if max_repr <= 0 then
-		max_repr = 120
-	end
-	local payload = {
-		max_repr = max_repr,
-		hide_names = M.config.hidden_var_names,
-		hide_types = M.config.hidden_type_names,
-	}
-	local function dispatch_vars_request()
-		local z = require("ipybridge.zmq_client")
-		local ok_req = z.request("vars", payload, function(msg)
-			if msg and msg.ok and msg.tag == "vars" then
-				if not deliver_vars_to_explorer(msg.data or {}) then
-					warn_user("ipybridge: variable explorer module unavailable")
-				end
-				return
-			end
-			warn_user("ipybridge: ZMQ vars request failed")
-		end)
-		if not ok_req then
-			warn_user("ipybridge: ZMQ request send failed")
-		end
-	end
-	if M._zmq_ready then
-		dispatch_vars_request()
-		return
-	end
-	-- If ZMQ not ready, attempt to prepare once; do not fall back to typing helper calls.
-	M.ensure_zmq(function(ok)
-		if ok then
-			dispatch_vars_request()
-			return
-		end
-		warn_user("ipybridge: ZMQ backend not available; vars unavailable")
-	end)
+	variables_controller:request_vars()
 end
 
--- Internal: request preview for a variable name from kernel.
 function M.request_preview(name, opts)
-	if not name or #name == 0 then
-		return
-	end
-	opts = opts or {}
-	local row_offset = tonumber(opts.row_offset) or 0
-	local col_offset = tonumber(opts.col_offset) or 0
-	if row_offset < 0 then
-		row_offset = 0
-	end
-	if col_offset < 0 then
-		col_offset = 0
-	end
-	local max_rows = tonumber(M.config.viewer_max_rows) or 30
-	local max_cols = tonumber(M.config.viewer_max_cols) or 20
-	local debug_mode = M._debug_active == true
-	if debug_mode then
-		local use_cache = (row_offset == 0 and col_offset == 0)
-		local payload = nil
-		if use_cache then
-			payload = debug_vars.preview_payload(M, name)
-			if type(payload) == "table" then
-				payload.row_offset = payload.row_offset or 0
-				payload.col_offset = payload.col_offset or 0
-			end
-		end
-		if payload then
-			if not deliver_preview_payload(payload) then
-				warn_user("ipybridge: data viewer module unavailable")
-			end
-			return
-		end
-		local function dispatch_response(msg)
-			if msg and msg.ok and msg.tag == "preview" then
-				if not deliver_preview_payload(msg.data or {}) then
-					warn_user("ipybridge: data viewer module unavailable")
-				end
-				return
-			end
-			deliver_preview_error(name, "Debug preview request failed")
-			if msg and msg.error then
-				warn_user("ipybridge: ZMQ debug preview failed - " .. tostring(msg.error))
-			else
-				warn_user("ipybridge: ZMQ debug preview failed")
-			end
-		end
-		local function send_debug_request()
-			local z = require("ipybridge.zmq_client")
-			local payload_dbg = {
-				name = name,
-				max_rows = max_rows,
-				max_cols = max_cols,
-				debug = true,
-				row_offset = row_offset,
-				col_offset = col_offset,
-			}
-			local ok_req = z.request("preview", payload_dbg, dispatch_response)
-			if not ok_req then
-				deliver_preview_error(name, "Failed to send debug preview request")
-				warn_user("ipybridge: failed to send ZMQ debug preview request")
-			end
-		end
-		if M._zmq_ready then
-			send_debug_request()
-		else
-			M.ensure_zmq(function(ok)
-				if ok then
-					send_debug_request()
-				else
-					deliver_preview_error(name, "ZMQ backend unavailable in debug")
-					warn_user("ipybridge: ZMQ backend not available; debug preview unavailable")
-				end
-			end)
-		end
-		return
-	end
-
-	M._sync_var_filters()
-	local function dispatch_preview_request()
-		local z = require("ipybridge.zmq_client")
-		local payload_req = {
-			name = name,
-			max_rows = max_rows,
-			max_cols = max_cols,
-			row_offset = row_offset,
-			col_offset = col_offset,
-		}
-		local ok_req = z.request("preview", payload_req, function(msg)
-			if msg and msg.ok and msg.tag == "preview" then
-				if not deliver_preview_payload(msg.data or {}) then
-					warn_user("ipybridge: data viewer module unavailable")
-				end
-				return
-			end
-			warn_user("ipybridge: ZMQ preview request failed")
-		end)
-		if not ok_req then
-			warn_user("ipybridge: ZMQ request send failed")
-		end
-	end
-	if M._zmq_ready then
-		dispatch_preview_request()
-		return
-	end
-	-- Ensure ZMQ then retry once; do not fall back to typing helper calls.
-	M.ensure_zmq(function(ok)
-		if ok then
-			dispatch_preview_request()
-			return
-		end
-		warn_user("ipybridge: ZMQ backend not available; preview unavailable")
-	end)
+	variables_controller:request_preview(name, opts)
 end
 
 ---Request an interrupt signal for the connected kernel.
@@ -1176,160 +666,22 @@ end
 
 ---Run the current cell delimited by lines starting with "# %%".
 M.debug_cell = function()
-	local abs_path = fn.expand("%:p")
-	if not (abs_path and #abs_path > 0) then
-		warn_user("ipybridge: unable to resolve file path for debugcell; run aborted")
-		return
-	end
-	local idx_line_cursor = api.nvim_win_get_cursor(0)[1]
-	local line_start = get_start_line_cell(idx_line_cursor)
-	local line_stop, has_next_cell = get_stop_line_cell(idx_line_cursor + 1)
-
-	if vim.bo.modified and M.config.debugcell_save_before_run ~= false then
-		pcall(vim.cmd, "write")
-	end
-	if vim.bo.modified or not utils.file_exists(abs_path) then
-		warn_user("ipybridge: file must be saved before debugcell can run")
-		return
-	end
-
-	local win = api.nvim_get_current_win()
-	if win and api.nvim_win_is_valid(win) then
-		M._debug_window = win
-	else
-		M._debug_window = nil
-	end
-
-	local idx = count_cells_before(line_start)
-
-	with_terminal(true, function()
-		if not M.is_open() then
-			return
-		end
-		M._send_helpers_if_needed()
-		M._ensure_runcell_helpers(function(ok)
-			if not ok then
-				warn_user("ipybridge: debug helpers unavailable; debugcell aborted")
-				return
-			end
-			breakpoints.push()
-			local cwd_arg = resolve_exec_cwd(abs_path)
-			local safe = utils.py_quote_single(abs_path)
-			local safecwd = nil
-			if cwd_arg and #cwd_arg > 0 then
-				safecwd = utils.py_quote_single(cwd_arg)
-			end
-			local dispatched = false
-			local function dispatch_debugcell()
-				if dispatched then
-					return
-				end
-				dispatched = true
-				if safecwd then
-					term_send(string.format("debugcell(%d, '%s','%s')\n", idx, safe, safecwd))
-				else
-					term_send(string.format("debugcell(%d, '%s')\n", idx, safe))
-				end
-				local was_debug = M._debug_active
-				M._debug_generation = (M._debug_generation or 0) + 1
-				if M._debug_generation > 0 then
-					M._debug_generation_complete = M._debug_generation - 1
-				end
-				M._debug_active = true
-				M._debug_status_active = true
-				if not was_debug then
-					M._sync_var_filters()
-				end
-				if has_next_cell then
-					local idx_line = math.min(line_stop + 1, api.nvim_buf_line_count(0))
-					api.nvim_win_set_cursor(0, { idx_line, 0 })
-				end
-			end
-			exec_with_pipeline("_myipy_reset_debug_baseline()", {
-				require_helpers = true,
-				on_success = dispatch_debugcell,
-				on_error = function(reason)
-					local r = tostring(reason or "")
-					warn_user(
-						"ipybridge: failed to reset debug baseline via ZMQ; falling back to terminal call ("
-							.. (r ~= "" and r or "unknown")
-							.. ")"
-					)
-					term_send("_myipy_reset_debug_baseline()\n")
-					dispatch_debugcell()
-				end,
-			})
-		end)
-	end)
+	execution:debug_cell()
 end
 
 ---Run the current cell delimited by lines starting with "# %%".
 M.run_cell = function()
-	local idx_line_cursor = api.nvim_win_get_cursor(0)[1]
-	local line_start = get_start_line_cell(idx_line_cursor)
-	local line_stop, has_next_cell = get_stop_line_cell(idx_line_cursor + 1)
-
-	-- Prefer IPython runcell helper when viable.
-	local path = fn.expand("%:p")
-	if not (path and #path > 0) then
-		warn_user("ipybridge: unable to resolve file path for runcell; run aborted")
-		return
-	end
-	-- Save buffer before run if requested
-	if vim.bo.modified and M.config.runcell_save_before_run ~= false then
-		pcall(vim.cmd, "write")
-	end
-	if vim.bo.modified or not utils.file_exists(path) then
-		warn_user("ipybridge: file must be saved before runcell can run")
-		return
-	end
-	-- Determine working directory to pass into runcell (no global %cd)
-	-- Count cell index by markers strictly matching '^# %%+'
-	local idx = count_cells_before(line_start)
-	with_terminal(true, function()
-		if not M.is_open() then
-			return
-		end
-		local cwd_arg = resolve_exec_cwd(path)
-		M._ensure_runcell_helpers(function(ok)
-			if not ok then
-				warn_user("ipybridge: failed to prepare runcell helpers; run aborted")
-				return
-			end
-			local safe = utils.py_quote_single(path)
-			if cwd_arg and #cwd_arg > 0 then
-				local safecwd = utils.py_quote_single(cwd_arg)
-				term_send(string.format("runcell(%d, '%s', '%s')\n", idx, safe, safecwd))
-			else
-				term_send(string.format("runcell(%d, '%s')\n", idx, safe))
-			end
-			clear_debug_state()
-			if has_next_cell then
-				local idx_line = math.min(line_stop + 1, api.nvim_buf_line_count(0))
-				api.nvim_win_set_cursor(0, { idx_line, 0 })
-			end
-		end)
-	end)
+	execution:run_cell()
 end
 
 ---Move cursor to the start of the previous cell.
 M.up_cell = function()
-	local idx_line_cursor = api.nvim_win_get_cursor(0)[1]
-	local line_start = get_start_line_cell(idx_line_cursor - 2)
-
-	local idx_line = math.min(line_start + 1, api.nvim_buf_line_count(0))
-	api.nvim_win_set_cursor(0, { idx_line, 0 })
+	execution:up_cell()
 end
 
 ---Move cursor to the start of the next cell.
 M.down_cell = function()
-	local idx_line_cursor = api.nvim_win_get_cursor(0)[1]
-	local line_stop, has_next_cell = get_stop_line_cell(idx_line_cursor + 1)
-
-	if has_next_cell then
-		local idx_line = math.min(line_stop + 1, api.nvim_buf_line_count(0))
-		api.nvim_win_set_cursor(0, { idx_line, 0 })
-	end
+	execution:down_cell()
 end
 
 return M

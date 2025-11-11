@@ -245,7 +245,7 @@ local function setup_env()
 
 	package.loaded["ipybridge.debug.completion"] = {}
 
-	package.loaded["ipybridge.dispatch"] = {
+package.loaded["ipybridge.core.dispatch"] = {
 		handle = function() end,
 	}
 
