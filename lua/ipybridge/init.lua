@@ -67,6 +67,7 @@ local M = {
 	_debug_globals_snapshot = nil,
 	_debug_scope = "globals",
 	_debug_window = nil,
+	_prev_editor_win = nil,
 	_last_filters_signature = nil,
 	_debugfile_imports_signature = nil,
 	_pending_exec = {},
@@ -610,6 +611,7 @@ M.close = function()
 	M._latest_vars = nil
 	M._pending_exec = {}
 	M._helpers_waiters = {}
+	M._prev_editor_win = nil
 end
 
 ---Toggle the IPython terminal split.
@@ -627,15 +629,26 @@ end
 
 ---Jump to the IPython terminal split and enter insert mode.
 M.goto_ipy = function()
-	if M.term_instance and api.nvim_win_get_buf(0) == M.term_instance.buf_id then
-		return
-	end
 	with_terminal(false, function()
 		if not M.term_instance then
 			return
 		end
-		M.term_instance:show()
-		api.nvim_set_current_win(M.term_instance.win_id)
+		local term_buf = M.term_instance.buf_id
+		local current_win = api.nvim_get_current_win()
+		local current_buf = api.nvim_win_get_buf(current_win)
+		local already_in_term = term_buf and current_buf == term_buf
+		if not already_in_term then
+			if current_win and api.nvim_win_is_valid(current_win) then
+				local bt = vim.bo[current_buf] and vim.bo[current_buf].buftype or ""
+				if bt ~= "terminal" or current_buf ~= term_buf then
+					M._prev_editor_win = current_win
+				end
+			end
+			M.term_instance:show()
+			if M.term_instance.win_id and api.nvim_win_is_valid(M.term_instance.win_id) then
+				api.nvim_set_current_win(M.term_instance.win_id)
+			end
+		end
 		M.term_instance:scroll_to_bottom()
 		M.term_instance:startinsert()
 	end)
@@ -645,15 +658,34 @@ end
 M.goto_vi = function()
 	local curbuf = api.nvim_win_get_buf(0)
 	local bt = vim.bo[curbuf] and vim.bo[curbuf].buftype or ""
+	local stored_win = M._prev_editor_win
+	if stored_win and not api.nvim_win_is_valid(stored_win) then
+		stored_win = nil
+		M._prev_editor_win = nil
+	end
+	local function jump_to_stored()
+		if not stored_win then
+			return false
+		end
+		api.nvim_set_current_win(stored_win)
+		M._prev_editor_win = nil
+		return true
+	end
 	-- If we're in any terminal buffer, leave terminal-mode and jump back.
 	if bt == "terminal" then
 		vim.cmd("stopinsert!")
+		if jump_to_stored() then
+			return
+		end
 		vim.cmd("wincmd p")
 		return
 	end
 	-- Fallback: handle explicitly for our IPython terminal buffer if matched.
 	if M.term_instance and curbuf == M.term_instance.buf_id then
 		M.term_instance:stopinsert()
+		if jump_to_stored() then
+			return
+		end
 		vim.cmd("wincmd p")
 	end
 end
@@ -927,10 +959,10 @@ local function deliver_preview_error(name, message)
 	end
 end
 
--- Public: open the variable explorer window and refresh data.
-M.var_explorer_open = function()
+---@param focus_terminal_on_close boolean|nil
+M.var_explorer_open = function(focus_terminal_on_close)
 	local vx = require("ipybridge.var_explorer")
-	vx.open()
+	vx.open(focus_terminal_on_close)
 	if M._debug_active then
 		debug_vars.push_to_explorer(M)
 		return

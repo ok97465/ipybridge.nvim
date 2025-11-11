@@ -14,6 +14,7 @@ function ExplorerState:new()
 		win = nil,
 		vars = {},
 		_line2name = {},
+		focus_terminal_on_close = false,
 	}, self)
 end
 
@@ -30,6 +31,7 @@ function ExplorerState:close_window()
 	end
 	self.buf, self.win = nil, nil
 	self._line2name = {}
+	self.focus_terminal_on_close = false
 end
 
 local function layout_size()
@@ -217,7 +219,8 @@ function ExplorerState:drilldown_current()
 	require("ipybridge.data_viewer").open(path)
 end
 
-function ExplorerState:open()
+function ExplorerState:open(focus_terminal_on_close)
+	self.focus_terminal_on_close = focus_terminal_on_close == true
 	self:ensure_window()
 	self:render()
 end
@@ -232,7 +235,11 @@ function ExplorerState:on_vars(tbl)
 end
 
 function ExplorerState:close()
+	local should_focus_terminal = self.focus_terminal_on_close
 	self:close_window()
+	if should_focus_terminal then
+		require("ipybridge").goto_ipy()
+	end
 end
 
 local state = ExplorerState:new()

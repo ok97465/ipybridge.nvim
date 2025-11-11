@@ -25,7 +25,9 @@ function M.apply_terminal_defaults(set, opts)
 	map("<F11>", my.debug_step_into, "IPy: Debug step into (F11)")
 	map("<S-F11>", my.debug_step_out, "IPy: Debug step out (Shift+F11)")
 	map("<F12>", my.debug_continue, "IPy: Debug continue (F12)")
-	map("<leader>vx", my.var_explorer_open, "IPy: Variable explorer")
+	map("<leader>vx", function()
+		my.var_explorer_open(true)
+	end, "IPy: Variable explorer")
 end
 
 -- Apply a set of sensible default keymaps and user commands.
