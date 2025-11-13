@@ -11,6 +11,8 @@
 			display: flex;
 			flex-direction: column;
 			min-height: 100vh;
+			height: 100vh;
+			overflow: hidden; /* Keep the overall layout fixed while thumbnails scroll */
 		}
 
 		header {
@@ -67,6 +69,7 @@
 		display: flex;
 		min-height: 0;
 		flex-direction: row;
+		overflow: hidden;
 	}
 
 		#thumbnails {
@@ -76,6 +79,9 @@
 			overflow-y: auto;
 			padding: 10px;
 			background: #141414;
+			height: 100%;
+			box-sizing: border-box;
+			flex-shrink: 0;
 		}
 
 		.thumb {
@@ -117,6 +123,8 @@
 			flex-direction: column;
 			padding: 18px;
 			gap: 12px;
+			min-height: 0;
+			overflow: hidden;
 		}
 
 		#preview {
@@ -128,6 +136,7 @@
 			border-radius: 10px;
 			border: 1px solid rgba(255, 255, 255, 0.08);
 			overflow: hidden;
+			min-height: 0;
 		}
 
 		#preview img {

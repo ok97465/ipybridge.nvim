@@ -81,12 +81,14 @@ const params = new URLSearchParams(window.location.search);
 		}
 
 		function renderThumbnails() {
+			const previousScroll = thumbnails.scrollTop; // Preserve sidebar scroll so the preview stays centered
 			thumbnails.innerHTML = "";
 			if (!state.entries.length) {
 				const empty = document.createElement("div");
 				empty.textContent = "No plots captured yet.";
 				empty.style.opacity = "0.6";
 				thumbnails.appendChild(empty);
+				thumbnails.scrollTop = 0;
 				return;
 			}
 			for (const entry of state.entries) {
@@ -105,6 +107,7 @@ const params = new URLSearchParams(window.location.search);
 				});
 				thumbnails.appendChild(btn);
 			}
+			thumbnails.scrollTop = previousScroll;
 		}
 
 		function render() {
