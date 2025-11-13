@@ -165,14 +165,23 @@ class PlotStore:
         with self._lock:
             new_entries: List[PlotEntry] = []
             removed: Optional[PlotEntry] = None
+            removed_index: Optional[int] = None
             for entry in self._entries:
                 if entry.plot_id == plot_id and removed is None:
                     removed = entry
+                    removed_index = len(new_entries)
                     continue
                 new_entries.append(entry)
             self._entries = new_entries
             if removed and self._selected == removed.plot_id:
-                self._selected = self._entries[-1].plot_id if self._entries else None
+                if not self._entries:
+                    self._selected = None
+                elif removed_index is not None and removed_index < len(self._entries):
+                    # Pick the plot that shifted into the removed slot.
+                    self._selected = self._entries[removed_index].plot_id
+                else:
+                    # Removed last entry; fall back to the new tail.
+                    self._selected = self._entries[-1].plot_id
         return removed
 
     def clear(self) -> List[PlotEntry]:
