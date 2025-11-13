@@ -757,6 +757,9 @@ class _MatplotlibHookManager:
         self._inline_display_original: Optional[Callable] = None
         self._inline_display_disabled = False
         self._inline_capture_active = False
+        self._close_after_capture = "matplotlib_inline" in str(
+            required_backend or ""
+        ).lower()
 
     def install(self) -> None:
         if self._hooks_installed:
@@ -850,6 +853,7 @@ class _MatplotlibHookManager:
             entry = self._render_manager(manager, reason)
             if entry:
                 self._server_controller.add_entry(entry)
+                self._close_manager(manager)
 
     def snapshot(self) -> dict:
         return {
@@ -1007,6 +1011,26 @@ class _MatplotlibHookManager:
         entry = self._render_figure(getattr(figure, "figure", figure), "inline.flush")
         if entry:
             self._server_controller.add_entry(entry)
+            self._close_figure(getattr(figure, "figure", figure))
+
+    def _close_manager(self, manager) -> None:
+        if not self._close_after_capture or manager is None:
+            return
+        canvas = getattr(manager, "canvas", None)
+        figure = getattr(canvas, "figure", None) if canvas else None
+        self._close_figure(figure)
+
+    def _close_figure(self, figure) -> None:
+        if not self._close_after_capture or figure is None:
+            return
+        try:
+            import matplotlib.pyplot as plt  # type: ignore
+        except Exception:
+            return
+        try:
+            plt.close(figure)
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------

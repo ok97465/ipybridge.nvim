@@ -262,7 +262,7 @@ def test_debugfile_auto_import_error_prints(monkeypatch, tmp_path, capsys):
     assert captured["globals"]["value"] == 1
 
 
-def test_pdb_autocapture_hooks(monkeypatch):
+def test_pdb_autocapture_on_break(monkeypatch):
     module, _ = _load_exec_magics(monkeypatch)
     calls = []
     module.__dict__["_myipy_plot_autocapture"] = lambda reason=None: calls.append(reason)
@@ -280,8 +280,7 @@ def test_pdb_autocapture_hooks(monkeypatch):
     debugger.setup(frame, None)
     debugger.postcmd(False, "next")
 
-    assert "debug.break" in calls
-    assert "debug.postcmd" in calls
+    assert calls == ["debug.break"]
 
 
 def test_debug_execute_source_autocapture_on_exit(monkeypatch, tmp_path):
@@ -295,7 +294,7 @@ def test_debug_execute_source_autocapture_on_exit(monkeypatch, tmp_path):
     script_path.write_text("value = 1\n", encoding="utf-8")
 
     module.debugfile(str(script_path))
-    assert "debug.exit" in calls
+    assert calls == ["debug.exit"]
 
 
 def test_debugcell_shares_namespace_and_breakpoints(monkeypatch, tmp_path):
