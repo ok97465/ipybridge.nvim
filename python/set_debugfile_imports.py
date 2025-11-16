@@ -8,7 +8,12 @@ try:
 except NameError as exc:  # pragma: no cover
     raise RuntimeError("ipybridge bootstrap helpers are not loaded") from exc
 
-_IMPORTS = json.loads(r"""__IMPORTS_JSON__""")
+# JSON payload wrapped in a multiline raw string to avoid syntax errors when
+# the encoded string itself is empty (e.g. JSON is just "").
+_IMPORTS_JSON = r"""
+__IMPORTS_JSON__
+""".strip()
+_IMPORTS = json.loads(_IMPORTS_JSON)
 if not isinstance(_IMPORTS, str):
     _IMPORTS = ""
 
