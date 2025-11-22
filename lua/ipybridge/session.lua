@@ -325,11 +325,41 @@ end
 ---@param state table
 ---@param go_back boolean|nil
 ---@param cb function|nil
+---Open the terminal session.
+---@param state table
+---@param go_back boolean|nil
+---@param cb function|nil
+
+function Session:_notify_missing_deps(python_cmd, context, modules)
+	-- Check for missing python dependencies and notify the user if any are found.
+	-- This is only called when a startup process fails, so we don't slow down the happy path.
+	local missing = self.utils.check_python_deps(python_cmd, modules)
+	if missing and #missing > 0 then
+		local msg = string.format(
+			"ipybridge: %s. Missing packages: %s. You may need to run: %s -m pip install %s",
+			context,
+			table.concat(missing, ", "),
+			python_cmd,
+			table.concat(missing, " ")
+		)
+		vim.notify(msg, vim.log.levels.ERROR)
+		return true -- notification was sent
+	end
+	return false -- no missing dependencies found
+end
+
 function Session:open(state, go_back, cb)
 	local cwd = self.fn.getcwd()
-	self.kernel.ensure(state.config.python_cmd, function(ok, conn_file)
+	local python_cmd = state.config.python_cmd
+	local core_deps = { "ipykernel", "jupyter_client", "ipython" }
+	local zmq_deps = { "zmq" }
+
+	self.kernel.ensure(python_cmd, function(ok, conn_file)
 		if not ok then
-			vim.notify("ipybridge: failed to start Jupyter kernel", vim.log.levels.ERROR)
+			local notified = self:_notify_missing_deps(python_cmd, "failed to start Jupyter kernel", core_deps)
+			if not notified then
+				vim.notify("ipybridge: failed to start Jupyter kernel", vim.log.levels.ERROR)
+			end
 			if cb then
 				cb(false)
 			end
@@ -353,7 +383,10 @@ function Session:open(state, go_back, cb)
 				return
 			end
 			vim.schedule(function()
-				vim.notify("ipybridge: failed to start ZMQ backend", vim.log.levels.WARN)
+				local notified = self:_notify_missing_deps(python_cmd, "failed to start ZMQ backend", zmq_deps)
+				if not notified then
+					vim.notify("ipybridge: failed to start ZMQ backend", vim.log.levels.WARN)
+				end
 			end)
 		end)
 
