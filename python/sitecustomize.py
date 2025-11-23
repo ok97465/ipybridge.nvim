@@ -14,9 +14,9 @@ import sys
 import traceback
 
 
-_PATCH_FLAG = os.environ.get("IPYBRIDGE_CONSOLE_PATCH")
-_PATCH_SILENT_VALUE = os.environ.get("IPYBRIDGE_CONSOLE_PATCH_SILENT") or ""
-_PATCH_SILENT = _PATCH_SILENT_VALUE.lower() in {"1", "true", "yes", "on"}
+_PATCH_FLAG = os.environ.get("IPYBRIDGE_CONSOLE_PATCH", "1") != "0"
+_PATCH_SILENT = os.environ.get("IPYBRIDGE_CONSOLE_PATCH_SILENT", "1") == "1"
+_SUPPRESS_READLINE_TAB = os.environ.get("IPYBRIDGE_SUPPRESS_READLINE_TAB", "1") == "1"
 
 
 def _log(message: str) -> None:
@@ -124,6 +124,18 @@ class _ReadlineTabGuard:
 
 
 def _install_readline_guard() -> None:
+    if not _SUPPRESS_READLINE_TAB:
+        # Restore the default readline binding so TAB triggers completion.
+        try:
+            import readline  # type: ignore
+        except Exception as exc:
+            _log(f"readline unavailable; cannot enable TAB completion: {exc}")
+            return
+        try:
+            readline.parse_and_bind("tab: complete")
+        except Exception as exc:
+            _log(f"failed to enable readline TAB completion: {exc}")
+        return
     try:
         import readline  # type: ignore
     except Exception as exc:
@@ -186,4 +198,7 @@ if _PATCH_FLAG:
     _log("activating console patches")
     original_input = getattr(builtins, "input", None)
     _install_readline_guard()
-    _install_input_patch(original_input)
+    if _SUPPRESS_READLINE_TAB:
+        _install_input_patch(original_input)
+    else:
+        _log("input() patch skipped to preserve native completion behavior")

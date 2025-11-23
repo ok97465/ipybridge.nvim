@@ -47,16 +47,28 @@ local function resolve_sep()
 end
 
 function Session:build_console_env(state, conn_file)
+	local completion = (state.config or {}).completion
+	local suppress_readline_tab = true
+	if completion then
+		local priority = completion.engine_priority
+		if type(priority) == "table" and vim.tbl_isempty(priority) then
+			suppress_readline_tab = false
+		end
+	end
 	local extra = ""
 	if state.config.simple_prompt then
 		extra = extra .. " --simple-prompt"
 	end
 	local cmd_console = string.format("jupyter console --existing %s%s", conn_file, extra)
-	local env = {
-		-- Mark the console so the Python bootstrap knows to patch IPython prompts.
-		IPYBRIDGE_CONSOLE_PATCH = "1",
-		IPYBRIDGE_CONSOLE_PATCH_SILENT = "1",
-	}
+	local env = {}
+	-- Mark the console so the Python bootstrap knows to patch IPython prompts.
+	-- Always set the patch flag so sitecustomize can either suppress or re-enable TAB.
+	env.IPYBRIDGE_CONSOLE_PATCH = "1"
+	env.IPYBRIDGE_CONSOLE_PATCH_SILENT = "1"
+	if not suppress_readline_tab then
+		-- Allow ipdb to keep its native TAB completion when completion engines are disabled.
+		env.IPYBRIDGE_SUPPRESS_READLINE_TAB = "0"
+	end
 	local bp_file = self.breakpoints.get_file_path()
 	if bp_file and #bp_file > 0 then
 		env.IPYBRIDGE_BREAKPOINT_FILE = bp_file
@@ -137,11 +149,19 @@ function Session:setup_terminal_keymaps(state)
 		self.cmp_bridge.ensure()
 
 		local config = state.config or {}
+		local completion = config.completion
+		local tab_enabled = true
+		if completion then
+			local priority = completion.engine_priority
+			if type(priority) == "table" and vim.tbl_isempty(priority) then
+				tab_enabled = false
+			end
+		end
 		if config.set_default_keymaps ~= false then
 			self.keymaps.apply_terminal_defaults(define_terminal_map, {
 				goto_vi = state.goto_vi,
 				goto_desc = "IPy: Back to editor",
-				handle_tab = self.handle_terminal_tab,
+				handle_tab = tab_enabled and self.handle_terminal_tab or nil,
 				tab_desc = "IPy: Debug completion trigger",
 				interrupt = state.interrupt,
 				interrupt_desc = "IPy: Keyboard interrupt",
