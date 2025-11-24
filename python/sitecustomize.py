@@ -1,13 +1,15 @@
 """Runtime patches that make jupyter-console/ipdb cooperate with Neovim.
 
 When the bridge launches a console this module suppresses readline TAB
-completion, proxies prompt_toolkit input, and surfaces diagnostic logging so
-editor completion engines remain responsive even inside ipdb.
+completion, proxies prompt_toolkit input, wires ipdb history to a shared file
+so up/down arrows survive sessions, and surfaces diagnostic logging so editor
+completion engines stay responsive even inside ipdb.
 """
 
 from __future__ import annotations
 
 import asyncio
+import atexit
 import builtins
 import os
 import sys
@@ -17,6 +19,7 @@ import traceback
 _PATCH_FLAG = os.environ.get("IPYBRIDGE_CONSOLE_PATCH", "1") != "0"
 _PATCH_SILENT = os.environ.get("IPYBRIDGE_CONSOLE_PATCH_SILENT", "1") == "1"
 _SUPPRESS_READLINE_TAB = os.environ.get("IPYBRIDGE_SUPPRESS_READLINE_TAB", "1") == "1"
+_HISTORY_FILE_ENV = "IPYBRIDGE_IPDB_HISTORY_FILE"
 
 
 def _log(message: str) -> None:
@@ -145,15 +148,73 @@ def _install_readline_guard() -> None:
     guard.install()
 
 
+def _install_readline_history(path: str | None) -> None:
+    """Bind readline history to a persistent file when available."""
+    if not path:
+        return
+    try:
+        import readline  # type: ignore
+    except Exception as exc:
+        _log(f"readline unavailable; history disabled: {exc}")
+        return
+    try:
+        expanded = os.path.expanduser(path)
+    except Exception:
+        expanded = path
+    try:
+        parent = os.path.dirname(expanded)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+    except Exception as exc:
+        _log(f"history path unavailable: {exc}")
+        return
+    try:
+        readline.read_history_file(expanded)
+    except FileNotFoundError:
+        pass
+    except Exception as exc:
+        _log(f"history load failed: {exc}")
+    try:
+        atexit.register(readline.write_history_file, expanded)
+    except Exception as exc:
+        _log(f"history write hook failed: {exc}")
+
+
 def _create_prompt_session():
     try:
-        from prompt_toolkit.history import InMemoryHistory
+        from prompt_toolkit.history import FileHistory, InMemoryHistory
         from prompt_toolkit.shortcuts import PromptSession
     except Exception as exc:
         _log(f"prompt_toolkit unavailable: {exc}")
         return None
+
+    def _history_path():
+        path = os.environ.get(_HISTORY_FILE_ENV)
+        if not path:
+            return None
+        try:
+            expanded = os.path.expanduser(path)
+        except Exception:
+            expanded = path
+        try:
+            parent = os.path.dirname(expanded)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+        except Exception as exc:
+            _log(f"history path unavailable: {exc}")
+            return None
+        return expanded
+
+    history = InMemoryHistory()
+    file_path = _history_path()
+    if file_path:
+        try:
+            history = FileHistory(file_path)
+        except Exception as exc:
+            _log(f"history file disabled ({file_path}): {exc}")
+
     try:
-        session = PromptSession(history=InMemoryHistory())
+        session = PromptSession(history=history)
     except Exception as exc:
         _log(f"prompt_toolkit session init failed: {exc}")
         return None
@@ -197,6 +258,7 @@ def _install_input_patch(original_input) -> None:
 if _PATCH_FLAG:
     _log("activating console patches")
     original_input = getattr(builtins, "input", None)
+    _install_readline_history(os.environ.get(_HISTORY_FILE_ENV))
     _install_readline_guard()
     if _SUPPRESS_READLINE_TAB:
         _install_input_patch(original_input)

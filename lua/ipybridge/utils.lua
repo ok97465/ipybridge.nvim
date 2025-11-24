@@ -24,11 +24,59 @@ local is_windows = detect_windows()
 local M = {}
 
 -- Fast file existence check using libuv.
+local function _ensure_dir(path)
+	if not path or path == "" then
+		return
+	end
+	-- Try mkdir -p semantics with whichever API is available.
+	if uv and uv.fs_stat and uv.fs_mkdir then
+		if not uv.fs_stat(path) then
+			pcall(uv.fs_mkdir, path, 448)
+		end
+	end
+	if fn and fn.mkdir then
+		pcall(fn.mkdir, path, "p")
+	end
+end
+
+local function _state_dir()
+	local base = nil
+	if fn and fn.stdpath then
+		local ok, data_dir = pcall(fn.stdpath, "data")
+		if ok and type(data_dir) == "string" and data_dir ~= "" then
+			base = data_dir
+		end
+	end
+	if base == nil or base == "" then
+		local ok_home, home = pcall(fn.expand, "~")
+		if ok_home and type(home) == "string" and home ~= "" then
+			base = home .. "/.local/share"
+		else
+			base = "."
+		end
+	end
+	local dir = tostring(base):gsub("\\", "/") .. "/ipybridge"
+	_ensure_dir(dir)
+	return dir
+end
+
 function M.file_exists(path)
 	if not (uv and uv.fs_stat) then
 		return false
 	end
 	return uv.fs_stat(path) and true or false
+end
+
+-- Return a path inside the plugin's persistent state directory, creating it if needed.
+function M.state_path(filename)
+	local dir = _state_dir()
+	if not dir or dir == "" then
+		return nil
+	end
+	if not filename or filename == "" then
+		return dir
+	end
+	return (dir .. "/" .. tostring(filename)):gsub("\\", "/")
 end
 
 -- Normalize a filesystem path for Python literals (portable across OS).

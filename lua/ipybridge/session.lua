@@ -69,6 +69,14 @@ function Session:build_console_env(state, conn_file)
 		-- Allow ipdb to keep its native TAB completion when completion engines are disabled.
 		env.IPYBRIDGE_SUPPRESS_READLINE_TAB = "0"
 	end
+	local history_path = self.utils.state_path("ipdb_history")
+	if type(history_path) == "string" and #history_path > 0 then
+		local parent = self.fn.fnamemodify(history_path, ":h")
+		if parent and parent ~= "" then
+			pcall(self.fn.mkdir, parent, "p")
+		end
+		env.IPYBRIDGE_IPDB_HISTORY_FILE = history_path
+	end
 	local bp_file = self.breakpoints.get_file_path()
 	if bp_file and #bp_file > 0 then
 		env.IPYBRIDGE_BREAKPOINT_FILE = bp_file

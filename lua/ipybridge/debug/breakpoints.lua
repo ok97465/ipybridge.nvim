@@ -1,6 +1,7 @@
 -- Breakpoint management for ipybridge.nvim.
--- Keeps an in-memory map, renders sign markers, pushes updates to the helper
--- Python process, and keeps a shared JSON file in sync with kernel state.
+-- Keeps an in-memory map, renders sign markers, registers one shared JSON file
+-- under stdpath('data')/ipybridge/breakpoints.json, and syncs that file with
+-- the kernel helper so breakpoints survive Neovim restarts.
 
 local vim = vim
 local api = vim.api
@@ -12,6 +13,7 @@ local utils = require("ipybridge.utils")
 local BP_SIGN_GROUP = "IpybridgeBreakpoints"
 local BP_SIGN_NAME = "IpybridgeBreakpoint"
 local BP_CONDITIONAL_SIGN_NAME = "IpybridgeConditionalBreakpoint"
+local DEFAULT_BP_PATH -- resolved below once normalize_path is available
 
 local Breakpoints = {}
 
@@ -28,6 +30,9 @@ local state = {
 	is_term_open = nil,
 	condition_input = nil,
 }
+
+local ensure_file
+local load_from_disk
 
 local function warn_user(message)
 	if not message then
@@ -247,6 +252,16 @@ local function normalize_path(path)
 	return abs:gsub("\\", "/")
 end
 
+local function resolve_default_path()
+	local ok_data, data_dir = pcall(fn.stdpath, "data")
+	if not ok_data or type(data_dir) ~= "string" or data_dir == "" then
+		return nil
+	end
+	return normalize_path(data_dir .. "/ipybridge/breakpoints.json")
+end
+
+DEFAULT_BP_PATH = resolve_default_path()
+
 local function collect_payload()
 	local payload = {}
 	for file_path, line_map in pairs(state.map) do
@@ -305,6 +320,7 @@ local function ensure_breakpoint_support()
 			state.signs[args.buf] = nil
 		end,
 	})
+	ensure_file()
 	state.support_ready = true
 end
 
@@ -362,22 +378,87 @@ local function refresh_signs_for(bufnr)
 	end
 end
 
-local function ensure_file()
-	local existing = state.file_path
-	if type(existing) == "string" and #existing > 0 then
-		local st = uv.fs_stat(existing)
-		if st and st.type == "file" then
-			return existing
+load_from_disk = function(path)
+	if not path or path == "" then
+		return
+	end
+	local st = uv.fs_stat(path)
+	if not st or st.type ~= "file" then
+		return
+	end
+	local ok_read, lines = pcall(fn.readfile, path, "b")
+	if not ok_read or not lines then
+		warn_user("ipybridge: failed to read breakpoints file")
+		return
+	end
+	local raw = table.concat(lines, "\n")
+	if raw == "" then
+		state.map = {}
+		state.signature = "{}"
+		return
+	end
+	local ok_decode, decoded = pcall(vim.json.decode, raw)
+	if not ok_decode or type(decoded) ~= "table" then
+		warn_user("ipybridge: failed to parse breakpoints file")
+		return
+	end
+	state.map = {}
+	for raw_path, entries in pairs(decoded) do
+		local norm = normalize_path(raw_path)
+		if norm and entries then
+			for _, entry in pairs(entries) do
+				local line = nil
+				local condition = nil
+				if type(entry) == "table" then
+					line = tonumber(entry.line)
+					condition = entry.condition
+				else
+					line = tonumber(entry)
+				end
+				if type(line) == "number" and line > 0 then
+					ensure_line_entry(norm, line)
+					if condition ~= nil then
+						set_line_condition(norm, line, condition)
+					end
+				end
+			end
 		end
 	end
-	local path = fn.tempname() .. ".ipybridge_breakpoints.json"
-	state.file_path = path
-	state.signature = nil
-	state.needs_sync = true
-	state.registered = false
-	local ok = pcall(fn.writefile, { "{}" }, path, "b")
-	if ok then
-		state.signature = "{}"
+	state.signature = vim.json.encode(collect_payload())
+end
+
+ensure_file = function()
+	local path = state.file_path
+	if not path or path == "" then
+		path = DEFAULT_BP_PATH
+		state.file_path = path
+		state.signature = nil
+		state.needs_sync = true
+		state.registered = false
+	end
+	if not path or path == "" then
+		warn_user("ipybridge: breakpoint storage path unavailable")
+		return nil
+	end
+	local parent = fn.fnamemodify(path, ":h")
+	if parent and parent ~= "" then
+		local ok_mkdir = pcall(fn.mkdir, parent, "p")
+		if not ok_mkdir then
+			warn_user("ipybridge: cannot create breakpoint directory: " .. parent)
+			return nil
+		end
+	end
+	local st = uv.fs_stat(path)
+	if not st or st.type ~= "file" then
+		local ok = pcall(fn.writefile, { "{}" }, path, "b")
+		if ok then
+			state.signature = "{}"
+		else
+			warn_user("ipybridge: cannot write breakpoint file: " .. path)
+			return nil
+		end
+	elseif state.signature == nil then
+		load_from_disk(path)
 	end
 	return path
 end
