@@ -285,6 +285,41 @@ def _install_readline_history(path: str | None) -> None:
         _log(f"history write hook failed: {exc}")
 
 
+def _build_prompt_lexer():
+    # Prefer IPython-aware lexing when available so debug input is colorized.
+    try:
+        from prompt_toolkit.lexers import PygmentsLexer
+    except Exception as exc:
+        _log(f"prompt_toolkit pygments lexer unavailable: {exc}")
+        return None
+    try:
+        from ipython_pygments_lexers import IPython3Lexer
+    except Exception:
+        IPython3Lexer = None
+    if IPython3Lexer is not None:
+        return PygmentsLexer(IPython3Lexer)
+    try:
+        from pygments.lexers import PythonLexer
+    except Exception as exc:
+        _log(f"pygments lexer unavailable: {exc}")
+        return None
+    return PygmentsLexer(PythonLexer)
+
+
+def _build_prompt_style():
+    try:
+        from prompt_toolkit.styles.pygments import style_from_pygments_cls
+        from pygments.styles import get_style_by_name
+    except Exception as exc:
+        _log(f"pygments style helper unavailable: {exc}")
+        return None
+    try:
+        return style_from_pygments_cls(get_style_by_name("native"))
+    except Exception as exc:
+        _log(f"pygments style unavailable: {exc}")
+        return None
+
+
 def _create_prompt_session():
     try:
         from prompt_toolkit.history import FileHistory, InMemoryHistory
@@ -303,6 +338,8 @@ def _create_prompt_session():
             _log(f"history file disabled ({file_path}): {exc}")
 
     try:
+        lexer = _build_prompt_lexer()
+        style = _build_prompt_style() if lexer is not None else None
         bindings = KeyBindings()
 
         @bindings.add("enter")
@@ -317,7 +354,7 @@ def _create_prompt_session():
             indent = _next_prompt_indent(text)
             event.current_buffer.insert_text("\n" + indent)
 
-        session = PromptSession(history=history, key_bindings=bindings)
+        session = PromptSession(history=history, key_bindings=bindings, lexer=lexer, style=style)
     except Exception as exc:
         _log(f"prompt_toolkit session init failed: {exc}")
         return None

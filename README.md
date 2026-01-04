@@ -10,6 +10,7 @@ Minimal helper to run IPython/Jupyter in a terminal split and send code from the
   - `jupyter` (for `jupyter console`)
   - `ipykernel`, `jupyter_client`, `pyzmq` (for variable explorer / preview)
   - `ipython` (for the console experience)
+  - `ipython_pygments_lexers`, `pygments` (for ipdb input highlighting)
 
 ## Demo
 
