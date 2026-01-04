@@ -5,9 +5,11 @@ and OSC emitters so the editor can track execution state, surface structured
 output, and control IPython sessions remotely.
 """
 
+import ast
 import base64
 import bdb
 import builtins
+import codeop
 import contextlib
 from contextlib import redirect_stdout
 import io
@@ -646,13 +648,191 @@ class _MiQtAwarePdb:
                     return
                 return super().print_stack_entry(frame_lineno, prompt_prefix, context)
 
+            _mi_multiline_prompt = "... "
+            _mi_indent_step = 4
+            _mi_dedent_tokens = {
+                "elif",
+                "else",
+                "except",
+                "except*",
+                "finally",
+                "case",
+            }
+
+            def _mi_read_input(self, prompt_text):
+                """Read a single input line using cmd.Cmd semantics."""
+                if self.use_rawinput:
+                    try:
+                        return input(prompt_text)
+                    except EOFError:
+                        return "EOF"
+                self.stdout.write(prompt_text)
+                self.stdout.flush()
+                line = self.stdin.readline()
+                if not line:
+                    return "EOF"
+                return line.rstrip("\r\n")
+
+            def _mi_needs_multiline(self, source):
+                if not source or not source.strip():
+                    return False
+                try:
+                    return codeop.compile_command(
+                        source, "<stdin>", "exec"
+                    ) is None
+                except (SyntaxError, OverflowError, ValueError):
+                    return False
+
+            def _mi_line_indent(self, line):
+                return len(line) - len(line.lstrip())
+
+            def _mi_strip_comment(self, line):
+                if "#" not in line:
+                    return line
+                return line.split("#", 1)[0]
+
+            def _mi_opens_block(self, line):
+                if not line:
+                    return False
+                stripped = self._mi_strip_comment(line).rstrip()
+                if not stripped or stripped.lstrip().startswith("#"):
+                    return False
+                return stripped.endswith(":")
+
+            def _mi_first_token(self, text):
+                if not text:
+                    return ""
+                stripped = text.lstrip()
+                if not stripped:
+                    return ""
+                token = stripped.split(None, 1)[0]
+                if token.endswith(":"):
+                    token = token[:-1]
+                return token
+
+            def _mi_update_indent_stack(self, line, stack):
+                if not line or not line.strip():
+                    return
+                indent = self._mi_line_indent(line)
+                while len(stack) > 1 and stack[-1] > indent:
+                    stack.pop()
+                if self._mi_opens_block(line):
+                    stack.append(indent + self._mi_indent_step)
+
+            def _mi_next_indent(self, raw, stack):
+                indent = stack[-1]
+                token = self._mi_first_token(raw)
+                if token in self._mi_dedent_tokens and len(stack) > 1:
+                    indent = stack[-2]
+                return indent
+
+            def _mi_prompt_for_indent(self, indent):
+                return self._mi_multiline_prompt + (" " * indent)
+
+            def _mi_prepare_next_line(self, raw, stack):
+                if not raw or not raw.strip():
+                    return ""
+                if raw[:1].isspace():
+                    return raw
+                indent = self._mi_next_indent(raw, stack)
+                return (" " * indent) + raw
+
+            def _mi_collect_multiline(self, line):
+                if not self._mi_needs_multiline(line):
+                    return line
+                lines = [line]
+                indent_stack = [0]
+                self._mi_update_indent_stack(line, indent_stack)
+                while True:
+                    prompt = self._mi_prompt_for_indent(indent_stack[-1])
+                    next_raw = self._mi_read_input(prompt)
+                    if next_raw == "EOF":
+                        break
+                    next_line = self._mi_prepare_next_line(next_raw, indent_stack)
+                    lines.append(next_line)
+                    self._mi_update_indent_stack(next_line, indent_stack)
+                    block = "\n".join(lines)
+                    if not self._mi_needs_multiline(block):
+                        return block
+                return "\n".join(lines)
+
+            def _mi_capture_last_expr(self, code_ast):
+                if not code_ast.body:
+                    return code_ast, None
+                last = code_ast.body[-1]
+                if not isinstance(last, ast.Expr):
+                    return code_ast, None
+                name = "_ipybridge_pdb_out"
+                code_ast.body[-1] = ast.Assign(
+                    targets=[ast.Name(id=name, ctx=ast.Store())],
+                    value=last.value,
+                )
+                ast.fix_missing_locations(code_ast)
+                return code_ast, name
+
+            def _mi_prepare_exec(self, block, locals_):
+                code_ast = ast.parse(block)
+                code_ast, out_name = self._mi_capture_last_expr(code_ast)
+                had_out = False
+                prev_out = None
+                if out_name is not None:
+                    had_out = out_name in locals_
+                    if had_out:
+                        prev_out = locals_.get(out_name)
+                code = compile(code_ast, "<stdin>", "exec")
+                return code, out_name, had_out, prev_out
+
+            def _mi_maybe_display_last_expr(self, out_name, locals_, had_out, prev_out):
+                if out_name is None:
+                    return
+                out = locals_.pop(out_name, None)
+                if had_out:
+                    locals_[out_name] = prev_out
+                if out is not None:
+                    sys.displayhook(out)
+
+            @contextlib.contextmanager
+            def _mi_io_context(self):
+                save_stdout = sys.stdout
+                save_stdin = sys.stdin
+                save_displayhook = sys.displayhook
+                try:
+                    sys.stdin = self.stdin
+                    sys.stdout = self.stdout
+                    sys.displayhook = self.displayhook
+                    yield
+                finally:
+                    sys.stdout = save_stdout
+                    sys.stdin = save_stdin
+                    sys.displayhook = save_displayhook
+
+            def _mi_exec_block(self, block):
+                if "\n" not in block:
+                    return super().default(block)
+                if block[:1] == "!":
+                    block = block[1:]
+                locals_ = self.curframe_locals
+                globals_ = self.curframe.f_globals
+                try:
+                    code, out_name, had_out, prev_out = self._mi_prepare_exec(
+                        block, locals_
+                    )
+                    with self._mi_io_context():
+                        exec(code, globals_, locals_)
+                        self._mi_maybe_display_last_expr(
+                            out_name, locals_, had_out, prev_out
+                        )
+                except BaseException:
+                    self._error_exc()
+
             def default(self, line):
                 handled = self._mi_apply_alias(line)
                 if handled is not None:
                     return handled
                 if self._mi_handle_matplotlib_magic(line):
                     return None
-                return super().default(line)
+                block = self._mi_collect_multiline(line)
+                return self._mi_exec_block(block)
 
             def _error_exc(self):
                 exc = sys.exception()
