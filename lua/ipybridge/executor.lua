@@ -36,6 +36,49 @@ local function runcell_py_code()
 	return require("ipybridge.exec_magics").build()
 end
 
+local HELPER_RETRY_DELAY_MS = 120
+local ZMQ_BOOTSTRAP_ATTEMPTS = 3
+local ZMQ_BOOTSTRAP_RETRY_DELAY_MS = 200
+local ZMQ_PING_ATTEMPTS = 20
+local ZMQ_PING_DELAY_MS = 100
+local ZMQ_WARMUP_CODE = "import zmq, jupyter_client"
+
+local function resolve_zmq_backend_path(fn)
+	local this = debug.getinfo(1, "S").source:sub(2)
+	local plugin_dir = fn.fnamemodify(this, ":h")
+	local repo_root = fn.fnamemodify(plugin_dir, ":h:h")
+	return repo_root .. "/python/myipy_kernel_client.py"
+end
+
+local function warmup_zmq(fn, state, python_cmd, cb)
+	if type(cb) ~= "function" then
+		return
+	end
+	if state._zmq_warmup_done and state._zmq_warmup_cmd == python_cmd then
+		cb()
+		return
+	end
+	state._zmq_warmup_cmd = python_cmd
+	local warmup_cmd = { python_cmd, "-c", ZMQ_WARMUP_CODE }
+	local completed = false
+	local function finish()
+		if completed then
+			return
+		end
+		completed = true
+		state._zmq_warmup_done = true
+		cb()
+	end
+	local job = fn.jobstart(warmup_cmd, {
+		on_exit = function()
+			vim.schedule(finish)
+		end,
+	})
+	if job <= 0 then
+		finish()
+	end
+end
+
 function Executor.new(state, opts)
 	local self = setmetatable({}, Executor)
 	self.state = state
@@ -77,7 +120,7 @@ end
 
 function Executor:_run_helper_waiters(success)
 	local waiters = self.state._helpers_waiters
-	if not waiters or #waiters == 0 then
+	if #waiters == 0 then
 		return
 	end
 	self.state._helpers_waiters = {}
@@ -91,7 +134,7 @@ end
 
 function Executor:_run_runcell_waiters(success)
 	local waiters = self.state._runcell_waiters
-	if not waiters or #waiters == 0 then
+	if #waiters == 0 then
 		return
 	end
 	self.state._runcell_waiters = {}
@@ -99,6 +142,20 @@ function Executor:_run_runcell_waiters(success)
 		local ok, err = pcall(cb, success)
 		if not ok then
 			warn_once("ipybridge: runcell helper callback failed: " .. tostring(err))
+		end
+	end
+end
+
+function Executor:_run_zmq_waiters(success)
+	local waiters = self.state._zmq_waiters
+	if #waiters == 0 then
+		return
+	end
+	self.state._zmq_waiters = {}
+	for _, cb in ipairs(waiters) do
+		local ok, err = pcall(cb, success)
+		if not ok then
+			warn_once("ipybridge: ensure_zmq callback failed: " .. tostring(err))
 		end
 	end
 end
@@ -114,9 +171,6 @@ function Executor:after_helpers(cb)
 			warn_once("ipybridge: helper callback failed: " .. tostring(err))
 		end
 		return
-	end
-	if not st._helpers_waiters then
-		st._helpers_waiters = {}
 	end
 	table.insert(st._helpers_waiters, cb)
 	self:ensure_helpers()
@@ -149,7 +203,7 @@ function Executor:ensure_helpers()
 				if self.is_open() and not st._helpers_sent then
 					self:ensure_helpers()
 				end
-			end, 120)
+			end, HELPER_RETRY_DELAY_MS)
 			return
 		end
 		self:_run_helper_waiters(false)
@@ -175,9 +229,6 @@ function Executor:ensure_runcell_helpers(cb)
 		return
 	end
 	if type(cb) == "function" then
-		if not st._runcell_waiters then
-			st._runcell_waiters = {}
-		end
 		table.insert(st._runcell_waiters, cb)
 	end
 	if st._runcell_pending or not self.is_open() then
@@ -210,7 +261,7 @@ function Executor:ensure_runcell_helpers(cb)
 					if self.is_open() and not st._runcell_sent then
 						self:ensure_runcell_helpers()
 					end
-				end, 120)
+				end, HELPER_RETRY_DELAY_MS)
 				return
 			end
 			resolve(false)
@@ -225,7 +276,7 @@ function Executor:_flush_pending_exec()
 		return
 	end
 	local queue = st._pending_exec
-	if not queue or #queue == 0 then
+	if #queue == 0 then
 		return
 	end
 	st._pending_exec = {}
@@ -241,7 +292,7 @@ end
 function Executor:_fail_pending_exec(reason)
 	local st = self.state
 	local queue = st._pending_exec
-	if not queue or #queue == 0 then
+	if #queue == 0 then
 		return
 	end
 	st._pending_exec = {}
@@ -265,9 +316,6 @@ function Executor:queue_exec(code, opts)
 	if st._zmq_ready then
 		self:_dispatch_exec_request(code, opts)
 		return
-	end
-	if not st._pending_exec then
-		st._pending_exec = {}
 	end
 	table.insert(st._pending_exec, { code = code, opts = opts })
 	self:ensure_zmq(function(ok)
@@ -315,55 +363,119 @@ function Executor:ensure_zmq(cb)
 		end
 		return
 	end
+	if type(cb) == "function" then
+		table.insert(st._zmq_waiters, cb)
+	end
+	if st._zmq_bootstrap_pending then
+		return
+	end
+	st._zmq_bootstrap_pending = true
 
-	self.ensure_conn_file(function(ok, conn_file)
-		if not ok or not conn_file then
-			self:_fail_pending_exec("conn_file_unavailable")
-			if cb then
-				cb(false)
-			end
+	local backend = resolve_zmq_backend_path(self.fn)
+	local attempt_count = 0
+	local attempt_id = 0
+	local finished = false
+
+	local function bump_attempt_id()
+		attempt_id = attempt_id + 1
+		return attempt_id
+	end
+
+	local function invalidate_attempt()
+		attempt_id = attempt_id + 1
+	end
+
+	local function is_stale(token)
+		return finished or token ~= attempt_id
+	end
+
+	local function finalize(success, reason)
+		if finished then
 			return
 		end
-		local z = require("ipybridge.zmq_client")
-		local this = debug.getinfo(1, "S").source:sub(2)
-		local plugin_dir = self.fn.fnamemodify(this, ":h")
-		local repo_root = self.fn.fnamemodify(plugin_dir, ":h:h")
-		local backend = repo_root .. "/python/myipy_kernel_client.py"
-		local ok_start = z.start(st.config.python_cmd, conn_file, backend, st.config.zmq_debug)
-		if not ok_start then
-			self:_fail_pending_exec("zmq_start_failed")
-			if cb then
-				cb(false)
-			end
-			return
+		finished = true
+		st._zmq_bootstrap_pending = false
+		if success then
+			st._zmq_ready = true
+			self:_flush_pending_exec()
+		else
+			self:_fail_pending_exec(reason or "zmq_unavailable")
 		end
-		local tried = 0
-		local function try_ping()
-			tried = tried + 1
-			if tried > 20 then
-				self:_fail_pending_exec("zmq_ping_timeout")
-				if cb then
-					cb(false)
-				end
+		self:_run_zmq_waiters(success)
+	end
+
+	local start_attempt
+	local schedule_retry
+
+	local function ping_backend(zmq_client, token)
+		local tries = 0
+		local function tick()
+			if is_stale(token) then
 				return
 			end
-			local sent = z.request("ping", {}, function(msg)
+			tries = tries + 1
+			if tries > ZMQ_PING_ATTEMPTS then
+				zmq_client.stop()
+				schedule_retry("zmq_ping_timeout")
+				return
+			end
+			local sent = zmq_client.request("ping", {}, function(msg)
+				if is_stale(token) then
+					return
+				end
 				if msg and msg.ok and msg.tag == "pong" then
-					st._zmq_ready = true
-					self:_flush_pending_exec()
-					if cb then
-						cb(true)
-					end
+					finalize(true)
 				else
-					vim.defer_fn(try_ping, 100)
+					vim.defer_fn(tick, ZMQ_PING_DELAY_MS)
 				end
 			end)
 			if not sent then
-				vim.defer_fn(try_ping, 100)
+				vim.defer_fn(tick, ZMQ_PING_DELAY_MS)
 			end
 		end
-		try_ping()
-	end)
+		tick()
+	end
+
+	local function start_backend(conn_file, token)
+		local z = require("ipybridge.zmq_client")
+		local ok_start = z.start(st.config.python_cmd, conn_file, backend, st.config.zmq_debug)
+		if not ok_start then
+			schedule_retry("zmq_start_failed")
+			return
+		end
+		ping_backend(z, token)
+	end
+
+	schedule_retry = function(reason)
+		if attempt_count >= ZMQ_BOOTSTRAP_ATTEMPTS then
+			finalize(false, reason)
+			return
+		end
+		invalidate_attempt()
+		vim.defer_fn(function()
+			if not finished then
+				start_attempt()
+			end
+		end, ZMQ_BOOTSTRAP_RETRY_DELAY_MS)
+	end
+
+	start_attempt = function()
+		attempt_count = attempt_count + 1
+		local token = bump_attempt_id()
+		self.ensure_conn_file(function(ok, conn_file)
+			if is_stale(token) then
+				return
+			end
+			if not ok then
+				finalize(false, "conn_file_unavailable")
+				return
+			end
+			start_backend(conn_file, token)
+		end)
+	end
+
+	local python_cmd = st.config.python_cmd or "python3"
+	warmup_zmq(self.fn, st, python_cmd, start_attempt)
 end
 
 return Executor

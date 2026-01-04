@@ -126,6 +126,7 @@ require("ipybridge").setup({
 - `debugfile_save_before_run` (boolean): Save the buffer before `%debugfile` execution (default `true`).
 - `debugcell_save_before_run` (boolean): Save the buffer before `%debugcell` execution (default `true`).
 - `debugfile_auto_imports` (string): Statements (e.g. `"import numpy as np;import matplotlib.pyplot as plt;"`) that run silently inside the isolated `%debugfile` namespace before `ipdb` starts. 
+- `zmq_debug` (boolean): Print ZMQ helper debug logs to stderr.
 - `exec_cwd_mode` (string): Working directory behavior for `run_cell` / `run_file`.
   - `'file'`: change directory to the current file's directory before executing
   - `'pwd'`: change directory to Neovim's `getcwd()` (default)

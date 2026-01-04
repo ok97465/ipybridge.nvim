@@ -81,6 +81,11 @@ local M = {
 	_debugfile_imports_signature = nil,
 	_pending_exec = {},
 	_helpers_waiters = {},
+	_runcell_waiters = {},
+	_zmq_waiters = {},
+	_zmq_bootstrap_pending = false,
+	_zmq_warmup_done = false,
+	_zmq_warmup_cmd = nil,
 	-- Guard against double-cleanup when the user types `exit` inside IPython.
 	_term_exit_expected = false,
 }

@@ -49,6 +49,8 @@ function TerminalController:close()
 	end
 	self.clear_debug_state()
 	self.state._zmq_ready = false
+	self.state._zmq_bootstrap_pending = false
+	self.state._zmq_waiters = {}
 	pcall(function()
 		require("ipybridge.zmq_client").stop()
 	end)
