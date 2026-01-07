@@ -308,16 +308,23 @@ def _build_prompt_lexer():
 
 def _build_prompt_style():
     try:
+        from prompt_toolkit.styles import Style, merge_styles
         from prompt_toolkit.styles.pygments import style_from_pygments_cls
         from pygments.styles import get_style_by_name
     except Exception as exc:
         _log(f"pygments style helper unavailable: {exc}")
         return None
     try:
-        return style_from_pygments_cls(get_style_by_name("native"))
+        base = style_from_pygments_cls(get_style_by_name("native"))
     except Exception as exc:
         _log(f"pygments style unavailable: {exc}")
         return None
+    try:
+        overrides = Style.from_dict({"pygments.error": "fg:default bg:default"})
+        return merge_styles([base, overrides])
+    except Exception as exc:
+        _log(f"prompt_toolkit style override unavailable: {exc}")
+        return base
 
 
 def _create_prompt_session():
