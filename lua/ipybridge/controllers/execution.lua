@@ -67,18 +67,99 @@ function ExecutionController:_config_value(key)
 	return cfg[key]
 end
 
-function ExecutionController:_save_buffer_if_requested(option_key)
-	if vim.bo.modified and self:_config_value(option_key) ~= false then
-		pcall(vim.cmd, "write")
-	end
-end
-
 function ExecutionController:_ensure_saved_file(path, action_label)
 	if vim.bo.modified or not self.utils.file_exists(path) then
 		self.warn_user(string.format("ipybridge: file must be saved before %s can run", action_label))
 		return false
 	end
 	return true
+end
+
+function ExecutionController:_is_python_buffer(bufnr)
+	if not (bufnr and self.api.nvim_buf_is_valid(bufnr)) then
+		return false
+	end
+	if not self.api.nvim_buf_is_loaded(bufnr) then
+		return false
+	end
+	local bt = (vim.bo[bufnr] and vim.bo[bufnr].buftype) or ""
+	if bt ~= "" then
+		return false
+	end
+	local ft = (vim.bo[bufnr] and vim.bo[bufnr].filetype) or ""
+	if ft ~= "python" then
+		return false
+	end
+	local name = self.api.nvim_buf_get_name(bufnr)
+	if not name or name == "" then
+		return false
+	end
+	return true
+end
+
+function ExecutionController:_resolve_python_buffer()
+	local current = self.api.nvim_get_current_buf()
+	if self:_is_python_buffer(current) then
+		return current
+	end
+	local last = self.state._last_python_buf
+	if self:_is_python_buffer(last) then
+		return last
+	end
+	for _, buf in ipairs(self.api.nvim_list_bufs()) do
+		if self:_is_python_buffer(buf) then
+			return buf
+		end
+	end
+	return nil
+end
+
+function ExecutionController:_buffer_path(bufnr)
+	local name = self.api.nvim_buf_get_name(bufnr)
+	if not name or name == "" then
+		return nil
+	end
+	local abs = self.fn.fnamemodify(name, ":p")
+	if not abs or abs == "" then
+		return nil
+	end
+	return abs
+end
+
+function ExecutionController:_find_window_for_buf(bufnr)
+	for _, win in ipairs(self.api.nvim_list_wins()) do
+		if self.api.nvim_win_is_valid(win) and self.api.nvim_win_get_buf(win) == bufnr then
+			return win
+		end
+	end
+	return nil
+end
+
+function ExecutionController:_save_buffer_if_requested(option_key, bufnr)
+	if self:_config_value(option_key) == false then
+		return
+	end
+	local target = bufnr or 0
+	if target ~= 0 and not self.api.nvim_buf_is_valid(target) then
+		return
+	end
+	if not (vim.bo[target] and vim.bo[target].modified) then
+		return
+	end
+	if target == 0 then
+		pcall(vim.cmd, "write")
+		return
+	end
+	local win = self:_find_window_for_buf(target)
+	if win and self.api.nvim_win_is_valid(win) then
+		self.api.nvim_win_call(win, function()
+			pcall(vim.cmd, "write")
+		end)
+		return
+	end
+	self.api.nvim_buf_call(target, function()
+		pcall(vim.cmd, "write")
+	end)
 end
 
 function ExecutionController:_move_cursor_to_line(target)
@@ -181,12 +262,17 @@ function ExecutionController:run_cmd(cmd)
 end
 
 function ExecutionController:run_file()
-	local abs_path = self.fn.expand("%:p")
+	local bufnr = self:_resolve_python_buffer()
+	if not bufnr then
+		self.warn_user("ipybridge: unable to resolve file path for runfile; run aborted")
+		return
+	end
+	local abs_path = self:_buffer_path(bufnr)
 	if not (abs_path and #abs_path > 0) then
 		self.warn_user("ipybridge: unable to resolve file path for runfile; run aborted")
 		return
 	end
-	self:_save_buffer_if_requested("runfile_save_before_run")
+	self:_save_buffer_if_requested("runfile_save_before_run", bufnr)
 	self.with_terminal(true, function()
 		if not self.is_open() then
 			return
@@ -213,18 +299,23 @@ function ExecutionController:run_file()
 end
 
 function ExecutionController:debug_file()
-	local abs_path = self.fn.expand("%:p")
+	local bufnr = self:_resolve_python_buffer()
+	if not bufnr then
+		self.warn_user("ipybridge: unable to resolve file path for debugfile; run aborted")
+		return
+	end
+	local abs_path = self:_buffer_path(bufnr)
 	if not (abs_path and #abs_path > 0) then
 		self.warn_user("ipybridge: unable to resolve file path for debugfile; run aborted")
 		return
 	end
-	local win = self.api.nvim_get_current_win()
+	local win = self:_find_window_for_buf(bufnr)
 	if win and self.api.nvim_win_is_valid(win) then
 		self.state._debug_window = win
 	else
 		self.state._debug_window = nil
-	 end
-	self:_save_buffer_if_requested("debugfile_save_before_run")
+	end
+	self:_save_buffer_if_requested("debugfile_save_before_run", bufnr)
 	self.with_terminal(true, function()
 		if not self.is_open() then
 			return

@@ -153,14 +153,23 @@ function Debug.new(ctx)
 		if type(info) ~= "table" then
 			return
 		end
-		local previous_win = vim.api.nvim_get_current_win()
-		local restore_terminal_focus = false
-		if state.term_instance and state.term_instance.win_id then
-			local term_win = state.term_instance.win_id
-			if term_win and vim.api.nvim_win_is_valid(term_win) and previous_win == term_win then
-				restore_terminal_focus = true
+		local term = state.term_instance
+		local term_win = term and term.win_id or nil
+		local term_buf = term and term.buf_id or nil
+		local function is_ipybridge_terminal(win)
+			if not win or not vim.api.nvim_win_is_valid(win) then
+				return false
 			end
+			if term_win and win == term_win then
+				return true
+			end
+			if term_buf and vim.api.nvim_win_get_buf(win) == term_buf then
+				return true
+			end
+			return false
 		end
+		local previous_win = vim.api.nvim_get_current_win()
+		local restore_terminal_focus = is_ipybridge_terminal(previous_win)
 		local generation = tonumber(state._debug_generation) or 0
 		local completed = tonumber(state._debug_generation_complete) or 0
 		if generation <= completed then
@@ -193,19 +202,33 @@ function Debug.new(ctx)
 		line = clamp_cursor_line(bufnr, line)
 		local col = calc_column_from_source(info.source)
 		local preferred = state._debug_window
-		if preferred and not vim.api.nvim_win_is_valid(preferred) then
+		if preferred and (not vim.api.nvim_win_is_valid(preferred) or is_ipybridge_terminal(preferred)) then
 			preferred = nil
 		end
 		local target_win = preferred
 		if not target_win then
 			for _, win in ipairs(vim.api.nvim_list_wins()) do
-				if vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_buf(win) == bufnr then
+				if vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_buf(win) == bufnr and not is_ipybridge_terminal(win) then
 					target_win = win
 					break
 				end
 			end
 			if not target_win then
-				target_win = vim.api.nvim_get_current_win()
+				local current_win = vim.api.nvim_get_current_win()
+				if current_win and vim.api.nvim_win_is_valid(current_win) and not is_ipybridge_terminal(current_win) then
+					target_win = current_win
+				else
+					for _, win in ipairs(vim.api.nvim_list_wins()) do
+						if not is_ipybridge_terminal(win) then
+							target_win = win
+							break
+						end
+					end
+					if not target_win then
+						vim.cmd("vsplit")
+						target_win = vim.api.nvim_get_current_win()
+					end
+				end
 			end
 		end
 		if not target_win or not vim.api.nvim_win_is_valid(target_win) then

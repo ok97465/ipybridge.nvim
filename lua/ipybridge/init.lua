@@ -75,6 +75,7 @@ local M = {
 	_debug_scope = "globals",
 	_debug_window = nil,
 	_prev_editor_win = nil,
+	_last_python_buf = nil,
 	_last_filters_signature = nil,
 	_debugfile_imports_signature = nil,
 	_pending_exec = {},
@@ -103,6 +104,28 @@ local function normalize_path(path)
 		return nil
 	end
 	return abs:gsub("\\", "/")
+end
+
+local function track_python_buffer(bufnr)
+	if not (bufnr and api.nvim_buf_is_valid(bufnr)) then
+		return
+	end
+	if not api.nvim_buf_is_loaded(bufnr) then
+		return
+	end
+	local bt = (vim.bo[bufnr] and vim.bo[bufnr].buftype) or ""
+	if bt ~= "" then
+		return
+	end
+	local ft = (vim.bo[bufnr] and vim.bo[bufnr].filetype) or ""
+	if ft ~= "python" then
+		return
+	end
+	local name = api.nvim_buf_get_name(bufnr)
+	if not name or name == "" then
+		return
+	end
+	M._last_python_buf = bufnr
 end
 
 local function resolve_exec_cwd(path)
@@ -261,14 +284,28 @@ M.setup = function(config)
 			})
 		end
 	end
-		local merged = config or {}
-		if merged.plot_viewer ~= nil then
-			merged = vim.deepcopy(merged)
-			merged.plot_viewer = normalize_plot_viewer_config(merged.plot_viewer)
-		end
-		M.config = vim.tbl_deep_extend("force", M.config, merged)
+	local merged = config or {}
+	if merged.plot_viewer ~= nil then
+		merged = vim.deepcopy(merged)
+		merged.plot_viewer = normalize_plot_viewer_config(merged.plot_viewer)
+	end
+	M.config = vim.tbl_deep_extend("force", M.config, merged)
 	plot_viewer.configure(M.config.plot_viewer)
 	cmp_bridge.configure(M.config.completion or {})
+	local tracker_group = api.nvim_create_augroup("IpybridgeBufferTracker", { clear = true })
+	api.nvim_create_autocmd("FileType", {
+		group = tracker_group,
+		pattern = "python",
+		callback = function(args)
+			track_python_buffer(args.buf)
+		end,
+	})
+	api.nvim_create_autocmd({ "BufEnter", "BufWritePost" }, {
+		group = tracker_group,
+		callback = function(args)
+			track_python_buffer(args.buf)
+		end,
+	})
 
 	breakpoints.ensure_support()
 
