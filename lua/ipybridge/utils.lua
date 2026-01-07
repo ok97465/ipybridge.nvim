@@ -133,7 +133,7 @@ end
 function M.send_exec_block(py_src)
 	local hex = to_hex(py_src)
 	local stmt = string.format(
-		"exec(compile(bytes.fromhex('%s').decode('utf-8'), '<ipybridge>', 'exec'), globals(), globals())\n",
+		"exec(compile(bytes.fromhex('%s').decode('utf-8'), '<ipybridge>', 'exec'), globals(), globals())",
 		hex
 	)
 	return stmt
@@ -143,7 +143,7 @@ end
 function M.exec_file_stmt(path)
 	-- Read and exec file contents in globals(); path is single-quoted
 	local safe = M.py_quote_single(path)
-	return string.format("exec(open('%s', 'r', encoding='utf-8').read(), globals(), globals())\n", safe)
+	return string.format("exec(open('%s', 'r', encoding='utf-8').read(), globals(), globals())", safe)
 end
 
 -- Build a bracketed-paste payload for multiple lines.
@@ -154,7 +154,7 @@ function M.paste_block(lines_tbl)
 	end
 	local separator = is_windows and "\r" or "\n"
 	local body = table.concat(lines_tbl, separator)
-	return "\x1b[200~" .. body .. "\n\x1b[201~\n"
+	return "\x1b[200~" .. body .. "\n\x1b[201~"
 end
 
 -- Check for missing python dependencies.

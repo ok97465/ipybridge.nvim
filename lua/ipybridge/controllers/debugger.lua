@@ -7,7 +7,7 @@ DebuggerController.__index = DebuggerController
 function DebuggerController.new(opts)
 	local self = setmetatable({}, DebuggerController)
 	self.state = assert(opts.state, "debugger controller: state is required")
-	self.term_send_debug = assert(opts.term_send_debug, "debugger controller: term_send_debug is required")
+	self.term_send = assert(opts.term_send, "debugger controller: term_send is required")
 	self.clear_debug_state = assert(opts.clear_debug_state, "debugger controller: clear_debug_state is required")
 	self.is_open = assert(opts.is_open, "debugger controller: is_open checker is required")
 	return self
@@ -22,7 +22,7 @@ function DebuggerController:send(cmd, opts)
 		vim.notify("ipybridge: IPython terminal is not open", vim.log.levels.WARN)
 		return
 	end
-	self.term_send_debug(cmd)
+	self.term_send(cmd)
 	if opts and opts.deactivate then
 		self.clear_debug_state({ restore_signcolumn = opts.restore_signcolumn })
 	end

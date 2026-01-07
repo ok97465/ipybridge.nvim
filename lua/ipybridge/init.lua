@@ -37,8 +37,6 @@ local inspect = vim.inspect
 local fs = vim.fs
 local uv = vim.uv
 local is_windows = uv.os_uname().sysname == "Windows_NT"
--- Use LF newline by default; Windows-specific cases are handled explicitly.
-local newline = "\n"
 
 local queue_exec_request
 local after_helpers
@@ -92,8 +90,6 @@ local M = {
 
 local with_terminal
 local term_send
-local term_send_line
-local term_send_debug
 
 local clear_debug_state
 local handle_terminal_tab
@@ -142,8 +138,6 @@ local debug = Debug.new({
 
 local terminal = Terminal.new({
 	state = M,
-	is_windows = is_windows,
-	newline = newline,
 	warn_user = warn_user,
 	open = function(go_back, cb)
 		if type(M.open) == "function" then
@@ -157,13 +151,11 @@ local terminal = Terminal.new({
 
 with_terminal = terminal.with_terminal
 term_send = terminal.term_send
-term_send_line = terminal.term_send_line
-term_send_debug = terminal.term_send_debug
 
 clear_debug_state = debug.clear_state
 handle_terminal_tab = debug.handle_terminal_tab
 observe_terminal_chunk = debug.observe_terminal_chunk
-debug.set_terminal_senders(term_send, term_send_debug)
+debug.set_terminal_senders(term_send)
 
 ---Toggle a breakpoint at the current cursor line for the active Python buffer.
 function M.toggle_breakpoint()
@@ -455,7 +447,7 @@ terminal_controller = TerminalController.new({
 
 debugger_controller = DebuggerController.new({
 	state = M,
-	term_send_debug = term_send_debug,
+	term_send = term_send,
 	clear_debug_state = clear_debug_state,
 	is_open = function()
 		return M.is_open()
@@ -489,8 +481,6 @@ local execution = ExecutionController.new({
 		with_terminal(go_back, cb)
 	end,
 	term_send = term_send,
-	term_send_line = term_send_line,
-	term_send_debug = term_send_debug,
 	clear_debug_state = clear_debug_state,
 	ensure_runcell_helpers = function(cb)
 		M._ensure_runcell_helpers(cb)

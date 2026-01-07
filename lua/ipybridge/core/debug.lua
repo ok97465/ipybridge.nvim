@@ -17,7 +17,6 @@ function Debug.new(ctx)
 	end
 
 	local term_send = nil
-	local term_send_debug = nil
 	local sync_handler = function() end
 	local prompt_buffer = ""
 
@@ -95,11 +94,11 @@ function Debug.new(ctx)
 			vim.notify("ipybridge: IPython terminal is not open", vim.log.levels.WARN)
 			return
 		end
-		if type(term_send_debug) ~= "function" then
-			warn_user("ipybridge: terminal debug sender unavailable")
+		if type(term_send) ~= "function" then
+			warn_user("ipybridge: terminal sender unavailable")
 			return
 		end
-		term_send_debug(cmd)
+		term_send(cmd)
 		if opts and opts.deactivate then
 			clear_state({ restore_signcolumn = opts.restore_signcolumn })
 		end
@@ -267,9 +266,8 @@ function Debug.new(ctx)
 		send_command = send_command,
 		on_status = on_status,
 		on_location = on_location,
-		set_terminal_senders = function(term_fn, debug_fn)
+		set_terminal_senders = function(term_fn)
 			term_send = term_fn
-			term_send_debug = debug_fn
 		end,
 		set_sync_handler = function(cb)
 			if type(cb) == "function" then

@@ -52,8 +52,6 @@ function ExecutionController.new(opts)
 	self.resolve_exec_cwd = assert(opts.resolve_exec_cwd, "execution controller: resolve_exec_cwd is required")
 	self.with_terminal = assert(opts.with_terminal, "execution controller: with_terminal is required")
 	self.term_send = assert(opts.term_send, "execution controller: term_send is required")
-	self.term_send_line = assert(opts.term_send_line, "execution controller: term_send_line is required")
-	self.term_send_debug = assert(opts.term_send_debug, "execution controller: term_send_debug is required")
 	self.clear_debug_state = assert(opts.clear_debug_state, "execution controller: clear_debug_state is required")
 	self.ensure_runcell_helpers = assert(opts.ensure_runcell_helpers, "execution controller: ensure_runcell_helpers is required")
 	self.exec_with_pipeline = assert(opts.exec_with_pipeline, "execution controller: exec_with_pipeline is required")
@@ -117,7 +115,7 @@ function ExecutionController:_reset_debug_baseline(on_success, context_label)
 					r ~= "" and r or "unknown"
 				)
 			)
-			self.term_send("_myipy_reset_debug_baseline()\n")
+			self.term_send("_myipy_reset_debug_baseline()")
 			on_success()
 		end,
 	})
@@ -138,9 +136,9 @@ function ExecutionController:send_lines(line_start, line_stop)
 		local mode = tostring(self:_config_value("multiline_send_mode") or "exec")
 		if mode == "paste" then
 			local payload = self.utils.paste_block(lines)
-			self.term_send(payload, { raw = true })
+			self.term_send(payload)
 		else
-			local block = table.concat(lines, "\n") .. "\n"
+			local block = table.concat(lines, "\n")
 			local payload = self.utils.send_exec_block(block)
 			self.term_send(payload)
 		end
@@ -163,7 +161,7 @@ function ExecutionController:run_line()
 		if not self.is_open() then
 			return
 		end
-		self.term_send_line(line)
+		self.term_send(line)
 		if idx_line_cursor < n_lines then
 			self.api.nvim_win_set_cursor(0, { idx_line_cursor + 1, 0 })
 		end
@@ -178,11 +176,7 @@ function ExecutionController:run_cmd(cmd)
 		if not self.is_open() then
 			return
 		end
-		if self.state._debug_active then
-			self.term_send_debug(cmd)
-		else
-			self.term_send_line(cmd)
-		end
+		self.term_send(cmd)
 	end)
 end
 
@@ -202,9 +196,9 @@ function ExecutionController:run_file()
 			local safe = self.utils.py_quote_single(abs_path)
 			if cwd_arg and #cwd_arg > 0 then
 				local safecwd = self.utils.py_quote_single(cwd_arg)
-				self.term_send(string.format("runfile('%s','%s')\n", safe, safecwd))
+				self.term_send(string.format("runfile('%s','%s')", safe, safecwd))
 			else
-				self.term_send(string.format("runfile('%s')\n", safe))
+				self.term_send(string.format("runfile('%s')", safe))
 			end
 			self.clear_debug_state()
 		end
@@ -256,9 +250,9 @@ function ExecutionController:debug_file()
 					end
 					dispatched = true
 					if safecwd then
-						self.term_send(string.format("debugfile('%s','%s')\n", safe, safecwd))
+						self.term_send(string.format("debugfile('%s','%s')", safe, safecwd))
 					else
-						self.term_send(string.format("debugfile('%s')\n", safe))
+						self.term_send(string.format("debugfile('%s')", safe))
 					end
 					self:_activate_debug_session()
 				end
@@ -301,9 +295,9 @@ function ExecutionController:run_cell()
 			local safe = self.utils.py_quote_single(path)
 			if cwd_arg and #cwd_arg > 0 then
 				local safecwd = self.utils.py_quote_single(cwd_arg)
-				self.term_send(string.format("runcell(%d, '%s', '%s')\n", idx, safe, safecwd))
+				self.term_send(string.format("runcell(%d, '%s', '%s')", idx, safe, safecwd))
 			else
-				self.term_send(string.format("runcell(%d, '%s')\n", idx, safe))
+				self.term_send(string.format("runcell(%d, '%s')", idx, safe))
 			end
 			self.clear_debug_state()
 			if has_next_cell then
@@ -357,9 +351,9 @@ function ExecutionController:debug_cell()
 				end
 				dispatched = true
 				if safecwd then
-					self.term_send(string.format("debugcell(%d, '%s','%s')\n", idx, safe, safecwd))
+					self.term_send(string.format("debugcell(%d, '%s','%s')", idx, safe, safecwd))
 				else
-					self.term_send(string.format("debugcell(%d, '%s')\n", idx, safe))
+					self.term_send(string.format("debugcell(%d, '%s')", idx, safe))
 				end
 				self:_activate_debug_session()
 				if has_next_cell then
