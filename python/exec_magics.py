@@ -825,6 +825,33 @@ class _MiQtAwarePdb:
                 except BaseException:
                     self._error_exc()
 
+            def _mi_error_with_colors(self, exc):
+                colors = getattr(self, "color_scheme_table", None)
+                if colors is None:
+                    return super()._error_exc()
+                active = getattr(colors, "active_colors", None)
+                if not active:
+                    return super()._error_exc()
+                try:
+                    exc_color = active.excName
+                    normal_color = active.Normal
+                except Exception:
+                    try:
+                        exc_color = active.get("excName")
+                        normal_color = active.get("Normal")
+                    except Exception:
+                        return super()._error_exc()
+                if not exc_color:
+                    return super()._error_exc()
+                message = f"{exc_color}{exc.__class__.__name__}{normal_color}"
+                try:
+                    details = str(exc)
+                except Exception:
+                    details = ""
+                if details:
+                    message += f": {details}"
+                return super().error(message)
+
             def default(self, line):
                 handled = self._mi_apply_alias(line)
                 if handled is not None:
@@ -840,11 +867,11 @@ class _MiQtAwarePdb:
                     return super()._error_exc()
                 theme = getattr(self, "theme", None)
                 if theme is None:
-                    return super()._error_exc()
+                    return self._mi_error_with_colors(exc)
                 try:
                     from pygments.token import Token
                 except Exception:
-                    return super()._error_exc()
+                    return self._mi_error_with_colors(exc)
                 try:
                     message = theme.format(
                         [
@@ -852,9 +879,9 @@ class _MiQtAwarePdb:
                             (Token.Normal, f": {exc}"),
                         ]
                     )
-                    self.error(message)
+                    super().error(message)
                 except Exception:
-                    super()._error_exc()
+                    self._mi_error_with_colors(exc)
 
             def _mi_apply_alias(self, line):
                 try:
