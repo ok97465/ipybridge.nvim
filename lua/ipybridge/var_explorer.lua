@@ -14,6 +14,7 @@ function ExplorerState:new()
 		win = nil,
 		vars = {},
 		_line2name = {},
+		_pending_previews = nil,
 		focus_terminal_on_close = false,
 	}, self)
 end
@@ -136,6 +137,33 @@ local function is_previewable(entry)
 	return #repr >= 3 and repr:sub(-3) == "..."
 end
 
+---Open a preview for a variable entry when available.
+function ExplorerState:preview_entry(name, entry)
+	local target = entry
+	if target == nil then
+		target = self.vars[name]
+	end
+	if target == nil then
+		return nil
+	end
+	if not is_previewable(target) then
+		return false
+	end
+	require("ipybridge.data_viewer").open(name)
+	return true
+end
+
+---Queue a preview request to run after the next vars update.
+function ExplorerState:queue_preview(name)
+	if not name or name == "" then
+		return
+	end
+	if not self._pending_previews then
+		self._pending_previews = {}
+	end
+	self._pending_previews[name] = true
+end
+
 function ExplorerState:drilldown_current()
 	if not self:is_open() then
 		return
@@ -232,6 +260,13 @@ end
 function ExplorerState:on_vars(tbl)
 	self.vars = tbl or {}
 	self:render()
+	if self._pending_previews then
+		local pending = self._pending_previews
+		self._pending_previews = nil
+		for name in pairs(pending) do
+			self:preview_entry(name)
+		end
+	end
 end
 
 function ExplorerState:close()

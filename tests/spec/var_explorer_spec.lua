@@ -134,6 +134,35 @@ it("enter key opens preview for expandable variable", function()
 	assert(env.last_open == "data", "expected data viewer to open for previewable variable")
 end)
 
+it("preview_entry opens preview for previewable variable", function()
+	local explorer, env = fake_env()
+	explorer.on_vars({
+		arr = { type = "ndarray", kind = "ndarray", repr = "array(...)" },
+	})
+	local ok = explorer.preview_entry("arr")
+	assert(ok == true, "expected preview_entry to open preview")
+	assert(env.last_open == "arr", "expected data viewer to open for previewable entry")
+end)
+
+it("preview_entry ignores non-previewable variable", function()
+	local explorer, env = fake_env()
+	explorer.on_vars({
+		value = { type = "int", kind = "int", repr = "1" },
+	})
+	local ok = explorer.preview_entry("value")
+	assert(ok == false, "expected preview_entry to skip non-previewable entry")
+	assert(env.last_open == nil, "data viewer should not open for non-previewable entry")
+end)
+
+it("queue_preview opens after vars update", function()
+	local explorer, env = fake_env()
+	explorer.queue_preview("arr")
+	explorer.on_vars({
+		arr = { type = "ndarray", kind = "ndarray", repr = "array(...)" },
+	})
+	assert(env.last_open == "arr", "expected queued preview to open after vars update")
+end)
+
 it("renders sequence variables without drilldown rows", function()
 	local explorer, _, buf_lines = fake_env()
 	explorer.open()

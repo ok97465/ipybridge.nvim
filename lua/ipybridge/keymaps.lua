@@ -140,6 +140,7 @@ function M.apply_buffer(bufnr)
 	-- Variable explorer and refresh
 	set("n", "<leader>vx", my.var_explorer_open, "IPy: Variable explorer")
 	set("n", "<leader>vr", my.var_explorer_refresh, "IPy: Refresh variables")
+	set("n", "<leader>vp", my.preview_cursor, "IPy: Preview variable")
 end
 
 return M

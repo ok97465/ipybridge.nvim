@@ -211,6 +211,7 @@ require("ipybridge").setup({
 - Default keymaps:
   - `<leader>vx` → open variable explorer
   - `<leader>vr` → refresh variables
+  - `<leader>vp` → preview variable under cursor (when previewable)
 - Explorer buffer shortcuts:
   - `q` → close, `r` → refresh, `<CR>` → open preview when available (DataFrame/ndarray/dataclass/ctypes or truncated repr)
 - Preview window shows DataFrame/ndarray/object summaries; press `r` to refresh, `q` to close. In the viewer, `<CR>` on a dataclass/ctypes field drills down (e.g., `yy.b`, `hh.h2`).
@@ -250,6 +251,7 @@ require("ipybridge").setup({
   - `]c` / `[c` → next/prev cell
   - `<leader>vx` → open variable explorer
   - `<leader>vr` → refresh variables
+  - `<leader>vp` → preview variable under cursor
 - Visual:
   - `<leader>r` → run selection
   - `F9` → run selection

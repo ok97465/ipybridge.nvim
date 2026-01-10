@@ -664,6 +664,25 @@ M.var_explorer_refresh = function()
 	variables_controller:refresh()
 end
 
+---Open a preview for the variable under the cursor when available.
+function M.preview_cursor()
+	local extractor = debug_cursor_tooltip._extract_identifier
+	local pos = api.nvim_win_get_cursor(0)
+	local line = api.nvim_buf_get_lines(api.nvim_get_current_buf(), pos[1] - 1, pos[1], false)[1] or ""
+	local name = extractor(line, pos[2])
+	if not name then
+		return
+	end
+	local vars = M._latest_vars or {}
+	local explorer = require("ipybridge.var_explorer")
+	local opened = explorer.preview_entry(name, vars[name])
+	if opened ~= nil or M._debug_active then
+		return
+	end
+	explorer.queue_preview(name)
+	variables_controller:request_vars()
+end
+
 function M.request_vars()
 	variables_controller:request_vars()
 end
