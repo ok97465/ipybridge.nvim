@@ -233,17 +233,47 @@ def _mi_read_text(path, label):
         return None
 
 
-def _mi_exec_source(source, filename, cwd=None):
+def _mi_exec_source(source, filename, cwd=None, globals_dict=None, locals_dict=None):
     if source is None:
         return
+    if not isinstance(globals_dict, dict):
+        globals_dict = globals()
+    if locals_dict is None or not isinstance(locals_dict, dict):
+        locals_dict = globals_dict
     with _mi_cwd(cwd):
-        with _mi_exec_env(filename):
+        with _mi_exec_env(filename, globals_dict):
             try:
-                exec(compile(source, filename, "exec"), globals(), globals())
+                exec(compile(source, filename, "exec"), globals_dict, locals_dict)
             except SystemExit:
                 pass
             except Exception:
                 _mi_print_exception()
+
+
+def _mi_debug_exec_context():
+    dbg = globals().get("_mi_active_debugger")
+    if dbg is not None and not getattr(dbg, "quitting", False):
+        frame = getattr(dbg, "curframe", None)
+        if frame is not None:
+            glbs = getattr(frame, "f_globals", None)
+            locs = getattr(frame, "f_locals", None)
+            if isinstance(glbs, dict):
+                if not isinstance(locs, dict):
+                    locs = glbs
+                return glbs, locs
+    debug_ns = globals().get("_mi_active_debug_namespace")
+    if debug_ns is not None:
+        glbs = getattr(debug_ns, "globals", None)
+        if isinstance(glbs, dict):
+            return glbs, glbs
+    return None, None
+
+
+def _mi_is_debug_active():
+    dbg = globals().get("_mi_active_debugger")
+    if dbg is not None and not getattr(dbg, "quitting", False):
+        return True
+    return globals().get("_mi_active_debug_namespace") is not None
 
 
 def _mi_matplotlib_backend_hint():
@@ -970,17 +1000,17 @@ def _mi_cwd(path):
 
 
 @contextlib.contextmanager
-def _mi_exec_env(filename):
-    g = globals()
-    prev_file = g.get("__file__", None)
-    g["__file__"] = filename
+def _mi_exec_env(filename, namespace=None):
+    target = namespace if isinstance(namespace, dict) else globals()
+    prev_file = target.get("__file__", None)
+    target["__file__"] = filename
     try:
         yield
     finally:
         if prev_file is None:
-            g.pop("__file__", None)
+            target.pop("__file__", None)
         else:
-            g["__file__"] = prev_file
+            target["__file__"] = prev_file
 
 
 def _mi_acquire_user_namespace():
@@ -1023,6 +1053,8 @@ class _MiDebugNamespace:
             "__loader__",
             "__package__",
             "__spec__",
+            "_mi_active_debug_namespace",
+            "_mi_active_debugger",
         }
 
     def __enter__(self):
@@ -1147,6 +1179,10 @@ def runcell(cell_index, filename, cwd=None):
         return
     prefix = "\n" * start_line
     source = prefix + "\n".join(cell_lines)
+    glbs, locs = _mi_debug_exec_context()
+    if glbs is not None:
+        _mi_exec_source(source, filename, cwd, glbs, locs)
+        return
     _mi_exec_source(source, filename, cwd)
 
 
@@ -1169,10 +1205,23 @@ def _runcell_magic(line):
 
 def runfile(filename, cwd=None):
     """Execute an entire Python file in the user namespace."""
+    if _mi_is_debug_active():
+        print("runfile: unavailable while debugging")
+        return
     source = _mi_read_text(filename, "runfile")
     if source is None:
         return
     _mi_exec_source(source, filename, cwd)
+
+
+def _mi_inject_debug_helpers(debug_ns):
+    if debug_ns is None:
+        return
+    glbs = getattr(debug_ns, "globals", None)
+    if not isinstance(glbs, dict):
+        return
+    glbs.setdefault("runcell", runcell)
+    glbs.setdefault("runfile", runfile)
 
 
 @register_line_magic("runfile")
@@ -1288,6 +1337,7 @@ def _debug_execute_source(label, source, filename, cwd=None, seed_user_ns=False)
             with _mi_exec_env(filename):
                 with _MiDebugNamespace(filename) as debug_ns:
                     glbs["_mi_active_debug_namespace"] = debug_ns
+                    _mi_inject_debug_helpers(debug_ns)
                     if seed_user_ns:
                         try:
                             debug_ns.seed_from_user_ns()

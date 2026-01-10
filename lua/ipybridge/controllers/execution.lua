@@ -285,7 +285,9 @@ function ExecutionController:run_line()
 			self.api.nvim_win_set_cursor(0, { idx_line_cursor + 1, 0 })
 		end
 		if not self.state._debug_active then
-			self.clear_debug_state()
+			if not self.state._debug_active then
+				self.clear_debug_state()
+			end
 		end
 	end)
 end
@@ -327,7 +329,9 @@ function ExecutionController:run_file()
 			else
 				self.term_send(string.format("runfile('%s')", safe))
 			end
-			self.clear_debug_state()
+			if not self.state._debug_active then
+				self.clear_debug_state()
+			end
 		end
 		self.ensure_runcell_helpers(function(ok)
 			if not ok then

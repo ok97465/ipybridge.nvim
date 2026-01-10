@@ -114,6 +114,26 @@ def test_runcell_executes_cells(monkeypatch, tmp_path):
     assert module.__dict__["value"] == 42
 
 
+def test_runcell_executes_in_debug_frame(monkeypatch, tmp_path):
+    module, _ = _load_exec_magics(monkeypatch)
+    file_path = tmp_path / "debug_cell.py"
+    file_path.write_text("# %%\nvalue = value + 1\n", encoding="utf-8")
+
+    frame_globals = {"value": 10}
+    frame_locals = {}
+    frame = types.SimpleNamespace(f_globals=frame_globals, f_locals=frame_locals)
+    module.__dict__["_mi_active_debugger"] = types.SimpleNamespace(
+        curframe=frame,
+        quitting=False,
+    )
+
+    module.runcell(0, str(file_path))
+
+    assert frame_locals["value"] == 11
+    assert frame_globals["value"] == 10
+    assert "value" not in module.__dict__
+
+
 def test_runcell_handles_out_of_range(monkeypatch, tmp_path, capsys):
     module, _ = _load_exec_magics(monkeypatch)
     file_path = tmp_path / "cells.py"
@@ -230,6 +250,37 @@ def test_debugfile_uses_isolated_namespace(monkeypatch, tmp_path):
 
     assert user_ns["foo"] == "foo"
     assert user_ns["foo_exists_before"] is False
+
+
+def test_debugfile_exposes_runcell(monkeypatch, tmp_path):
+    module, _ = _load_exec_magics(monkeypatch)
+    user_ns = {}
+    captured = _prepare_debugfile_runtime(monkeypatch, module, user_ns)
+
+    cell_path = tmp_path / "cells.py"
+    cell_path.write_text("# %%\nanswer = 42\n", encoding="utf-8")
+    script_path = tmp_path / "script.py"
+    script_path.write_text(
+        f"runcell(0, {repr(str(cell_path))})\n",
+        encoding="utf-8",
+    )
+
+    module.debugfile(str(script_path))
+
+    assert captured["globals"]["answer"] == 42
+
+
+def test_runfile_warns_when_debugging(monkeypatch, tmp_path, capsys):
+    module, _ = _load_exec_magics(monkeypatch)
+    module.__dict__["_mi_active_debugger"] = types.SimpleNamespace(quitting=False)
+    script_path = tmp_path / "runfile.py"
+    script_path.write_text("flag = True\n", encoding="utf-8")
+
+    module.runfile(str(script_path))
+    output = capsys.readouterr()
+
+    assert "runfile: unavailable while debugging" in output.out
+    assert "flag" not in module.__dict__
 
 
 def test_debugfile_auto_imports_applied(monkeypatch, tmp_path):

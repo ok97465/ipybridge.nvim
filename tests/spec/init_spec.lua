@@ -606,6 +606,33 @@ it("run_cell defers runcell call until helpers are ready", function()
 	assert(runcell_idx, "runcell command should be sent")
 end)
 
+it("run_cell keeps debug state when active", function()
+	local init_mod, ctx = fresh_init()
+	ctx.file_exists = true
+	ctx.buf_lines = {
+		"# %% cell1",
+		'print("top")',
+		"# %% cell2",
+		'print("bottom")',
+	}
+	ctx.cursor_line = 2
+	init_mod._debug_active = true
+	init_mod._debug_status_active = true
+
+	init_mod.run_cell()
+
+	local runcell_idx
+	for idx, payload in ipairs(ctx.term_payloads or {}) do
+		if payload:match("runcell%(") then
+			runcell_idx = idx
+			break
+		end
+	end
+	assert(runcell_idx, "runcell command should be sent")
+	assert(init_mod._debug_active == true, "run_cell should not clear debug state")
+	assert(init_mod._debug_status_active == true, "run_cell should not clear debug status")
+end)
+
 it("debug_cell pushes breakpoints and triggers debugcell command", function()
 	local init_mod, ctx = fresh_init()
 	ctx.file_exists = true
