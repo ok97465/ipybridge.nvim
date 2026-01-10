@@ -12,6 +12,7 @@ local specs = {
 	"tests.spec.dispatch_spec",
 	"tests.spec.term_ipy_spec",
 	"tests.spec.utils_spec",
+	"tests.spec.sync_controller_spec",
 	"tests.spec.kernel_spec",
 	"tests.spec.session_spec",
 	"tests.spec.zmq_client_spec",
@@ -21,6 +22,7 @@ local specs = {
 	"tests.spec.debug_sign_spec",
 	"tests.spec.debug_scope_spec",
 	"tests.spec.cmp_bridge_spec",
+	"tests.spec.completion_apply_spec",
 }
 
 local any_fail = false
