@@ -2,6 +2,8 @@
 -- Handles console environment setup, helper uploads, breakpoint wiring, and
 -- terminal keymaps so init.lua stays lean.
 local plot_viewer = require("ipybridge.viewer.plot")
+local session_env = require("ipybridge.session_env")
+local session_startup = require("ipybridge.session_startup")
 
 local Session = {}
 Session.__index = Session
@@ -37,76 +39,17 @@ function Session.new(opts)
 	return self
 end
 
----Return the PATH separator and current PYTHONPATH for the host OS.
----@return string, string
-local function resolve_sep()
-	-- Return the path separator and currently exported PYTHONPATH for the host OS.
-	local loop = vim.loop or vim.uv
-	local os_name = loop and loop.os_uname().sysname or ""
-	if os_name == "Windows_NT" then
-		return ";", loop and loop.os_getenv("PYTHONPATH") or ""
-	end
-	return ":", loop and loop.os_getenv("PYTHONPATH") or ""
-end
-
 ---Build the Jupyter console command and env overrides for this session.
 ---@param state table
 ---@param conn_file string
 ---@return string, table
 function Session:build_console_env(state, conn_file)
-	local completion = (state.config or {}).completion
-	local suppress_readline_tab = true
-	if completion then
-		local priority = completion.engine_priority
-		if type(priority) == "table" and vim.tbl_isempty(priority) then
-			suppress_readline_tab = false
-		end
-	end
-	local extra = ""
-	if state.config.simple_prompt then
-		extra = extra .. " --simple-prompt"
-	end
-	local cmd_console = string.format("jupyter console --existing %s%s", conn_file, extra)
-	local env = {}
-	-- Mark the console so the Python bootstrap knows to patch IPython prompts.
-	-- Always set the patch flag so sitecustomize can either suppress or re-enable TAB.
-	env.IPYBRIDGE_CONSOLE_PATCH = "1"
-	env.IPYBRIDGE_CONSOLE_PATCH_SILENT = "1"
-	if not suppress_readline_tab then
-		-- Allow ipdb to keep its native TAB completion when completion engines are disabled.
-		env.IPYBRIDGE_SUPPRESS_READLINE_TAB = "0"
-	end
-	local history_path = nil
-	if self.utils and type(self.utils.state_path) == "function" then
-		history_path = self.utils.state_path("ipdb_history")
-	end
-	if type(history_path) == "string" and #history_path > 0 then
-		local parent = self.fn.fnamemodify(history_path, ":h")
-		if parent and parent ~= "" then
-			pcall(self.fn.mkdir, parent, "p")
-		end
-		env.IPYBRIDGE_IPDB_HISTORY_FILE = history_path
-	end
-	local bp_file = self.breakpoints.get_file_path()
-	if bp_file and #bp_file > 0 then
-		env.IPYBRIDGE_BREAKPOINT_FILE = bp_file
-	end
-	local ok_py_path, py_module_path = pcall(self.py_module.path, "bootstrap_helpers.py")
-	if ok_py_path and type(py_module_path) == "string" and #py_module_path > 0 then
-		local py_root = vim.fs.dirname(py_module_path)
-		if py_root and #py_root > 0 then
-			-- Ensure the Python bootstrap helpers are discoverable when IPython starts.
-			local sep, current = resolve_sep()
-			if current:find(py_root, 1, true) then
-				env.PYTHONPATH = current
-			elseif current ~= "" then
-				env.PYTHONPATH = py_root .. sep .. current
-			else
-				env.PYTHONPATH = py_root
-			end
-		end
-	end
-	return cmd_console, env
+	return session_env.build_console_env({
+		utils = self.utils,
+		fn = self.fn,
+		breakpoints = self.breakpoints,
+		py_module = self.py_module,
+	}, state, conn_file)
 end
 
 ---Reset transient session flags and clean up temp helper files.
@@ -206,92 +149,11 @@ end
 ---@param cwd string
 ---@return table
 function Session:collect_startup_instructions(state, cwd)
-	-- Build the list of IPython setup commands we want to replay once the console is ready.
-	local config = state.config
-	local startup_magics = {}
-	local warmup_code = nil
-
-	if config.matplotlib_backend and #tostring(config.matplotlib_backend) > 0 then
-		local raw_backend = tostring(config.matplotlib_backend)
-		local lowered = raw_backend:lower()
-		local backend_aliases = {
-			qtagg = "qt",
-			qt5agg = "qt",
-			qt6agg = "qt",
-			tkagg = "tk",
-			macosx = "macosx",
-			osx = "macosx",
-		}
-		local magic_backend = backend_aliases[lowered] or lowered
-		table.insert(startup_magics, string.format("%%matplotlib %s", magic_backend))
-		if self.is_windows then
-			local is_qt = magic_backend == "qt" or magic_backend == "qt5" or magic_backend == "qt6"
-			if is_qt then
-				-- Prime the Qt event loop on Windows so the first plot does not hang the session.
-				warmup_code = table.concat({
-					"import matplotlib.pyplot as _ipybridge_warm_plt",
-					"_ipybridge_warm_plt.ion()",
-					"_ipybridge_warm_fig = _ipybridge_warm_plt.figure()",
-					"try:",
-					"    _ipybridge_warm_win = getattr(_ipybridge_warm_fig.canvas.manager, 'window', None)",
-					"    if _ipybridge_warm_win is not None:",
-					"        try:",
-					"            _ipybridge_warm_win.setWindowTitle('Matplotlib')",
-					"        except Exception:",
-					"            pass",
-					"        try:",
-					"            _ipybridge_warm_win.show()",
-					"        except Exception:",
-					"            pass",
-					"        for _ipybridge_warm_attr in ('showNormal', 'raise_', 'activateWindow'):",
-					"            try:",
-					"                getattr(_ipybridge_warm_win, _ipybridge_warm_attr)()",
-					"            except Exception:",
-					"                pass",
-					"    _ipybridge_warm_plt.pause(0.25)",
-					"finally:",
-					"    try:",
-					"        _ipybridge_warm_win = getattr(_ipybridge_warm_fig.canvas.manager, 'window', None)",
-					"        if _ipybridge_warm_win is not None:",
-					"            try:",
-					"                _ipybridge_warm_win.close()",
-					"            except Exception:",
-					"                pass",
-					"    except Exception:",
-					"        pass",
-					"    _ipybridge_warm_plt.close(_ipybridge_warm_fig)",
-					"    del _ipybridge_warm_fig",
-				}, "\n")
-			end
-		end
-	end
-
-	if config.ipython_colors and #tostring(config.ipython_colors) > 0 then
-		local c = tostring(config.ipython_colors)
-		table.insert(startup_magics, string.format("%%colors %s", c))
-	end
-
-	local ar = config.autoreload
-	if ar == nil then
-		ar = 2
-	end
-	local mode = tostring(ar)
-	if mode == "1" or mode == "2" then
-		table.insert(startup_magics, "%load_ext autoreload")
-		table.insert(startup_magics, string.format("%%autoreload %s", mode))
-	end
-
-	local startup_stmt = nil
-	local path_startup_script = self.fs.joinpath(cwd, config.startup_script)
-	if self.utils.file_exists(path_startup_script) then
-		startup_stmt = self.utils.exec_file_stmt(path_startup_script)
-	end
-
-	return {
-		magics = startup_magics,
-		warmup_code = warmup_code,
-		startup_stmt = startup_stmt,
-	}
+	return session_startup.collect_startup_instructions({
+		fs = self.fs,
+		utils = self.utils,
+		is_windows = self.is_windows,
+	}, state, cwd)
 end
 
 ---Start the plot viewer when the browser-backed mode is enabled.
