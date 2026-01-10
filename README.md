@@ -56,9 +56,7 @@ ipybridge streams ipdb suggestions into whichever completion engine you use in t
   require("blink.cmp").setup({
     term = {
       enabled = true,
-      sources = {
-        default = { "ipybridge_debug_hint" }, -- shows up in the UI as “IpyBridge”
-      },
+      sources = { "ipybridge_debug_hint" }, -- shows up in the UI as “IpyBridge”
     },
   })
   ```

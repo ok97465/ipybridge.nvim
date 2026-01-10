@@ -10,9 +10,17 @@ local blink_engine = {
 	id = "blink.cmp",
 }
 
-local function provider_registered()
+local function load_blink_config()
 	local ok, config = pcall(require, "blink.cmp.config")
 	if not ok or type(config) ~= "table" then
+		return nil
+	end
+	return config
+end
+
+local function provider_registered(config)
+	config = config or load_blink_config()
+	if not config then
 		return false
 	end
 	local sources = config.sources
@@ -83,7 +91,10 @@ function blink_engine:accept()
 end
 
 function blink_engine:trigger()
-	return blink.call("show", { providers = { SOURCE_NAME } }) and true or false
+	if blink.call("show", { providers = { SOURCE_NAME } }) == false then
+		return false
+	end
+	return true
 end
 
 return blink_engine

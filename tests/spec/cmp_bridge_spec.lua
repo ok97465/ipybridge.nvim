@@ -305,6 +305,16 @@ it("nvim-cmp engine refuses to trigger when ipybridge source is not configured",
 	cleanup()
 end)
 
+it("treats blink show returning nil as a successful trigger", function()
+	cleanup()
+	package.loaded["blink.cmp"] = {
+		show = function() end,
+	}
+	local engine = require("ipybridge.cmp_bridge.engines.blink")
+	assert(engine:trigger() == true, "trigger should treat nil show return as success")
+	cleanup()
+end)
+
 it("re-registers blink provider after blink config resets providers", function()
 	cleanup()
 	_G.vim = {
