@@ -1,5 +1,5 @@
 -- VariablesController handles variable explorer lifecycle, ZMQ-backed refresh
--- requests, preview payload delivery, and debug cache lookups.
+-- requests, preview payload delivery, and debug preview requests.
 
 local VariablesController = {}
 VariablesController.__index = VariablesController
@@ -135,22 +135,6 @@ function VariablesController:request_preview(name, opts)
 	local max_cols = tonumber(cfg.viewer_max_cols) or 20
 	local debug_mode = self.state._debug_active == true
 	if debug_mode then
-		-- Prefer cached debug previews to avoid redundant ZMQ requests.
-		local use_cache = (row_offset == 0 and col_offset == 0)
-		local payload = nil
-		if use_cache then
-			payload = self.debug_vars.preview_payload(self.state, name)
-			if type(payload) == "table" then
-				payload.row_offset = payload.row_offset or 0
-				payload.col_offset = payload.col_offset or 0
-				payload.max_rows = payload.max_rows or max_rows
-				payload.max_cols = payload.max_cols or max_cols
-				if not deliver_preview_payload(payload, self.warn_user) then
-					self.warn_user("ipybridge: data viewer module unavailable")
-				end
-				return
-			end
-		end
 		local function dispatch_response(msg)
 			if msg and msg.ok and msg.tag == "preview" then
 				if not deliver_preview_payload(msg.data or {}, self.warn_user) then

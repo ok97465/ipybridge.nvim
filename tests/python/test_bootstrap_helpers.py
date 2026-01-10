@@ -219,6 +219,30 @@ def test_coerce_int(value, default, expected, monkeypatch):
 	assert mod._coerce_int(value, default) == expected
 
 
+def test_emit_debug_vars_skips_preview_cache(monkeypatch):
+	mod = _load_bootstrap_helpers(monkeypatch)
+	captured = {}
+
+	def fake_emit(tag, payload):
+		captured[tag] = payload
+
+	def fake_collect_namespace(*_args, **_kwargs):
+		return {"sample": [1, 2, 3]}
+
+	def fake_list_variables(**_kwargs):
+		return {"sample": {"kind": "list", "repr": "[1, 2, 3]", "previewable": True}}
+
+	monkeypatch.setattr(mod, "_myipy_emit", fake_emit)
+	monkeypatch.setattr(mod, "_ipy_collect_namespace", fake_collect_namespace)
+	monkeypatch.setattr(mod, "_ipy_list_variables", fake_list_variables)
+
+	mod._myipy_emit_debug_vars(frame=None)
+	payload = captured.get("vars") or {}
+	entry = (payload.get("__globals__") or {}).get("sample") or {}
+	assert "_preview_cache" not in entry
+	assert "_preview_children" not in entry
+
+
 def test_debug_preview_context_capture_and_compute(monkeypatch):
 	mod = _load_bootstrap_helpers(monkeypatch)
 	logs = []

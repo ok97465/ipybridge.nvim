@@ -67,9 +67,6 @@ def _myipy_prepare_control_handlers():
 
 _PREVIEW_LIMITS = {"rows": 30, "cols": 20}
 
-# Number of nested previews to pre-cache per variable; keeps snapshots bounded.
-_MAX_CHILD_PREVIEWS = 40
-
 # Track baseline object ids captured at debug start so stale globals stay hidden.
 _DEBUG_BASELINE = {}
 _DEBUGFILE_IMPORTS = ""
@@ -803,80 +800,6 @@ _OSC_PREFIX = "\x1b]5379;ipybridge:"
 _OSC_SUFFIX = "\x07"
 
 
-def _cache_preview(name, namespace, rows, cols, visited, cache):
-    if not isinstance(name, str) or name == "":
-        return None
-    if name in cache:
-        return cache[name]
-    if name in visited:
-        return cache.get(name)
-    visited.add(name)
-    ok, obj, err = _ipy_resolve_path(name, namespace)
-    if not ok:
-        preview = {"name": name, "error": err or "Name not found"}
-    else:
-        try:
-            preview = _ipy_preview_data(
-                name,
-                namespace=namespace,
-                max_rows=rows,
-                max_cols=cols,
-            )
-        except Exception as exc:
-            preview = {"name": name, "error": f"preview error: {exc}"}
-    cache[name] = preview
-    return preview
-
-
-def _child_preview_paths(name, preview, remaining):
-    if remaining <= 0 or not isinstance(preview, dict):
-        return []
-    base = name
-    out = []
-    kind = preview.get("kind")
-    seq_kind = preview.get("sequence_kind")
-    if isinstance(seq_kind, str) and seq_kind and kind == "object":
-        effective_kind = seq_kind
-    else:
-        effective_kind = kind
-    if kind in {"ctypes", "dataclass"}:
-        for field in preview.get("fields") or []:
-            fname = field.get("name")
-            if isinstance(fname, str) and fname:
-                out.append(f"{base}.{fname}")
-                if len(out) >= remaining:
-                    break
-    elif kind == "dataframe":
-        cols = preview.get("columns") or []
-        for col in cols:
-            if not isinstance(col, str) or not col:
-                continue
-            out.append(f"{base}['{col}']")
-            if len(out) >= remaining:
-                break
-    elif effective_kind in {"list", "tuple"}:
-        for item in preview.get("items") or []:
-            if item.get("placeholder"):
-                continue
-            idx = item.get("index")
-            if isinstance(idx, int):
-                out.append(f"{base}[{idx}]")
-            elif isinstance(idx, str) and idx:
-                out.append(f"{base}[{idx}]")
-            if len(out) >= remaining:
-                break
-    elif effective_kind == "dict":
-        for item in preview.get("items") or []:
-            if item.get("placeholder"):
-                continue
-            accessor = item.get("path_accessor")
-            if isinstance(accessor, str) and accessor:
-                out.append(f"{base}{accessor}")
-                if len(out) >= remaining:
-                    break
-    return out
-
-
 def _myipy_set_debug_logging(enabled):
     try:
         _ipy_set_debug_logging(bool(enabled))
@@ -994,80 +917,6 @@ _ipy_mod = _myipy_bootstrap_module()
 
 _OSC_PREFIX = "\x1b]5379;ipybridge:"
 _OSC_SUFFIX = "\x07"
-
-
-def _cache_preview(name, namespace, rows, cols, visited, cache):
-    if not isinstance(name, str) or name == "":
-        return None
-    if name in cache:
-        return cache[name]
-    if name in visited:
-        return cache.get(name)
-    visited.add(name)
-    ok, obj, err = _ipy_resolve_path(name, namespace)
-    if not ok:
-        preview = {"name": name, "error": err or "Name not found"}
-    else:
-        try:
-            preview = _ipy_preview_data(
-                name,
-                namespace=namespace,
-                max_rows=rows,
-                max_cols=cols,
-            )
-        except Exception as exc:
-            preview = {"name": name, "error": f"preview error: {exc}"}
-    cache[name] = preview
-    return preview
-
-
-def _child_preview_paths(name, preview, remaining):
-    if remaining <= 0 or not isinstance(preview, dict):
-        return []
-    base = name
-    out = []
-    kind = preview.get("kind")
-    seq_kind = preview.get("sequence_kind")
-    if isinstance(seq_kind, str) and seq_kind and kind == "object":
-        effective_kind = seq_kind
-    else:
-        effective_kind = kind
-    if kind in {"ctypes", "dataclass"}:
-        for field in preview.get("fields") or []:
-            fname = field.get("name")
-            if isinstance(fname, str) and fname:
-                out.append(f"{base}.{fname}")
-                if len(out) >= remaining:
-                    break
-    elif kind == "dataframe":
-        cols = preview.get("columns") or []
-        for col in cols:
-            if not isinstance(col, str) or not col:
-                continue
-            out.append(f"{base}['{col}']")
-            if len(out) >= remaining:
-                break
-    elif effective_kind in {"list", "tuple"}:
-        for item in preview.get("items") or []:
-            if item.get("placeholder"):
-                continue
-            idx = item.get("index")
-            if isinstance(idx, int):
-                out.append(f"{base}[{idx}]")
-            elif isinstance(idx, str) and idx:
-                out.append(f"{base}[{idx}]")
-            if len(out) >= remaining:
-                break
-    elif effective_kind == "dict":
-        for item in preview.get("items") or []:
-            if item.get("placeholder"):
-                continue
-            accessor = item.get("path_accessor")
-            if isinstance(accessor, str) and accessor:
-                out.append(f"{base}{accessor}")
-                if len(out) >= remaining:
-                    break
-    return out
 
 
 def _myipy_set_debug_logging(enabled):
@@ -1248,40 +1097,15 @@ def _myipy_emit_debug_vars(frame=None):
         rows = int(_PREVIEW_LIMITS.get("rows") or 30)
         cols = int(_PREVIEW_LIMITS.get("cols") or 20)
         previewable = 0
-        visited = set()
-        cache = {}
 
-        def enrich(scope_map):
+        def count_previewable(scope_map):
             nonlocal previewable
-            for name, entry in list(scope_map.items()):
-                preview = _cache_preview(name, namespace, rows, cols, visited, cache)
-                if preview is None:
-                    continue
-                entry["_preview_cache"] = preview
-                if isinstance(preview, dict) and not preview.get("error"):
+            for entry in scope_map.values():
+                if isinstance(entry, dict) and entry.get("previewable"):
                     previewable += 1
-                remaining = _MAX_CHILD_PREVIEWS
-                child_map = {}
-                # Breadth-first drill-down collects a bounded set of nested previews.
-                queue = list(_child_preview_paths(name, preview, remaining))
-                while queue and remaining > 0:
-                    child = queue.pop(0)
-                    child_preview = _cache_preview(
-                        child, namespace, rows, cols, visited, cache
-                    )
-                    if child_preview is None:
-                        continue
-                    child_map[child] = child_preview
-                    remaining -= 1
-                    extra = _child_preview_paths(child, child_preview, remaining)
-                    for grand in extra:
-                        if grand not in visited and grand not in queue:
-                            queue.append(grand)
-                if child_map:
-                    entry["_preview_children"] = child_map
 
-        enrich(locals_data)
-        enrich(globals_data)
+        count_previewable(locals_data)
+        count_previewable(globals_data)
         if isinstance(namespace, dict):
             context_ns = namespace
         else:
