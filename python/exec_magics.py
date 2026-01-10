@@ -531,6 +531,7 @@ class _MiQtAwarePdb:
 
     @classmethod
     def get(cls):
+        """Return the debugger class with Qt-aware breakpoint handling."""
         if cls._cls is not None:
             return cls._cls
         try:
@@ -1037,6 +1038,7 @@ class _MiDebugNamespace:
         return self
 
     def seed_from_user_ns(self):
+        """Seed the isolated namespace with the current IPython user_ns."""
         if not self._user_ns or not self.globals:
             return
         try:
@@ -1057,6 +1059,7 @@ class _MiDebugNamespace:
             sys.modules["__main__"] = self._prev_main
 
     def commit(self):
+        """Commit values back into the IPython user namespace."""
         if not self._user_ns:
             return
         try:
@@ -1070,6 +1073,7 @@ class _MiDebugNamespace:
             self._user_ns[key] = value
 
     def sync_from_frame(self, frame):
+        """Sync variables from a frame into the IPython user namespace."""
         if not self._user_ns:
             return
         mappings = []
@@ -1119,6 +1123,7 @@ def _mi_resolve_cell(lines, index):
 
 
 def runcell(cell_index, filename, cwd=None):
+    """Execute the specified cell in a file that uses Jupyter-style markers."""
     text = _mi_read_text(filename, "runcell")
     if text is None:
         return
@@ -1147,6 +1152,7 @@ def runcell(cell_index, filename, cwd=None):
 
 @register_line_magic("runcell")
 def _runcell_magic(line):
+    """IPython line magic wrapper for runcell."""
     try:
         parts = shlex.split(line)
     except Exception:
@@ -1162,6 +1168,7 @@ def _runcell_magic(line):
 
 
 def runfile(filename, cwd=None):
+    """Execute an entire Python file in the user namespace."""
     source = _mi_read_text(filename, "runfile")
     if source is None:
         return
@@ -1170,6 +1177,7 @@ def runfile(filename, cwd=None):
 
 @register_line_magic("runfile")
 def _runfile_magic(line):
+    """IPython line magic wrapper for runfile."""
     try:
         parts = shlex.split(line)
     except Exception:
@@ -1353,6 +1361,7 @@ def _debug_execute_source(label, source, filename, cwd=None, seed_user_ns=False)
 
 
 def debugfile(filename, cwd=None):
+    """Debug a Python file using the IPython debugger."""
     source = _mi_read_text(filename, "debugfile")
     if source is None:
         return
@@ -1360,6 +1369,7 @@ def debugfile(filename, cwd=None):
 
 
 def debugcell(cell_index, filename, cwd=None):
+    """Debug a specific cell in a file that uses Jupyter-style markers."""
     text = _mi_read_text(filename, "debugcell")
     if text is None:
         return
@@ -1389,6 +1399,7 @@ def debugcell(cell_index, filename, cwd=None):
 
 @register_line_magic("debugfile")
 def _debugfile_magic(line):
+    """IPython line magic wrapper for debugfile."""
     try:
         parts = shlex.split(line)
     except Exception:
@@ -1404,6 +1415,7 @@ def _debugfile_magic(line):
 
 @register_line_magic("debugcell")
 def _debugcell_magic(line):
+    """IPython line magic wrapper for debugcell."""
     try:
         parts = shlex.split(line)
     except Exception:

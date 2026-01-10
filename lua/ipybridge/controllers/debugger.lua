@@ -4,6 +4,9 @@
 local DebuggerController = {}
 DebuggerController.__index = DebuggerController
 
+---Create a new DebuggerController instance.
+---@param opts table
+---@return table
 function DebuggerController.new(opts)
 	local self = setmetatable({}, DebuggerController)
 	self.state = assert(opts.state, "debugger controller: state is required")
@@ -13,6 +16,9 @@ function DebuggerController.new(opts)
 	return self
 end
 
+---Send an ipdb command through the terminal transport.
+---@param cmd string
+---@param opts table|nil
 function DebuggerController:send(cmd, opts)
 	if not self.state._debug_active then
 		vim.notify("ipybridge: Debugger is not active", vim.log.levels.WARN)
@@ -28,22 +34,27 @@ function DebuggerController:send(cmd, opts)
 	end
 end
 
+---Step over the current line in ipdb.
 function DebuggerController:step_over()
 	self:send("!next")
 end
 
+---Step into the current call in ipdb.
 function DebuggerController:step_into()
 	self:send("!step")
 end
 
+---Step out of the current frame in ipdb.
 function DebuggerController:step_out()
 	self:send("!return")
 end
 
+---Continue execution and clear debug state.
 function DebuggerController:continue_exec()
 	self:send("!continue", { deactivate = true, restore_signcolumn = false })
 end
 
+---Quit the debugger and clear debug state.
 function DebuggerController:quit()
 	self:send("!exit", { deactivate = true, restore_signcolumn = true })
 end

@@ -419,6 +419,7 @@ class _DebugPreviewContext:
         self.globals = None
 
     def capture(self, frame, namespace, rows, cols):
+        """Capture the latest debug frame/namespace and preview limits."""
         if frame is not None:
             if isinstance(namespace, dict):
                 self.namespace = namespace
@@ -446,6 +447,7 @@ class _DebugPreviewContext:
         )
 
     def compute(self, name, rows=None, cols=None, row_offset=None, col_offset=None):
+        """Compute a preview payload for a variable in the captured context."""
         effective_rows = _coerce_int(rows, self.rows)
         effective_cols = _coerce_int(cols, self.cols)
         if effective_rows <= 0:
@@ -521,9 +523,11 @@ class _DebugPreviewServer:
 
     @property
     def context(self):
+        """Return the active debug preview context."""
         return self._context
 
     def ensure_running(self):
+        """Start the preview server thread if needed and return the port."""
         if self._port:
             return self._port
         try:

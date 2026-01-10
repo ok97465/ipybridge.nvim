@@ -54,10 +54,12 @@ _VIEWER_ASSET_CACHE: Dict[str, bytes] = {}
 
 
 def _now() -> float:
+    """Return a unix timestamp for event payloads."""
     return time.time()
 
 
 def _load_viewer_html() -> str:
+    """Read the plot viewer HTML template from disk."""
     return (_ASSET_ROOT / "index.html").read_text(encoding="utf-8")
 
 
@@ -115,6 +117,7 @@ class PlotEntry:
     png: bytes = field(repr=False)
 
     def summary(self) -> dict:
+        """Return a JSON-serializable summary of the plot metadata."""
         return {
             "id": self.plot_id,
             "figure": self.figure_number,
@@ -139,6 +142,7 @@ class PlotStore:
         self._lock = threading.Lock()
 
     def add(self, entry: PlotEntry) -> List[PlotEntry]:
+        """Add a plot entry and evict any overflow entries."""
         removed: List[PlotEntry] = []
         with self._lock:
             self._entries.append(entry)
@@ -148,13 +152,16 @@ class PlotStore:
         return removed
 
     def all(self) -> List[PlotEntry]:
+        """Return a copy of all stored entries."""
         with self._lock:
             return list(self._entries)
 
     def summaries(self) -> List[dict]:
+        """Return summary payloads for all stored entries."""
         return [entry.summary() for entry in self.all()]
 
     def get(self, plot_id: str) -> Optional[PlotEntry]:
+        """Look up a plot entry by id."""
         with self._lock:
             for entry in self._entries:
                 if entry.plot_id == plot_id:
@@ -162,6 +169,7 @@ class PlotStore:
         return None
 
     def remove(self, plot_id: str) -> Optional[PlotEntry]:
+        """Remove a plot entry and update the current selection."""
         with self._lock:
             new_entries: List[PlotEntry] = []
             removed: Optional[PlotEntry] = None
@@ -185,6 +193,7 @@ class PlotStore:
         return removed
 
     def clear(self) -> List[PlotEntry]:
+        """Clear all stored entries and reset selection."""
         with self._lock:
             removed = list(self._entries)
             self._entries = []
@@ -192,6 +201,7 @@ class PlotStore:
         return removed
 
     def select(self, plot_id: str) -> Optional[PlotEntry]:
+        """Select a plot entry by id and return it."""
         entry = self.get(plot_id)
         if entry:
             with self._lock:
@@ -199,6 +209,7 @@ class PlotStore:
         return entry
 
     def _rotate(self, step: int) -> Optional[PlotEntry]:
+        """Rotate selection by step and return the selected entry."""
         with self._lock:
             if not self._entries:
                 return None
@@ -215,12 +226,15 @@ class PlotStore:
             return self._entries[new_idx]
 
     def next(self) -> Optional[PlotEntry]:
+        """Select the next plot entry."""
         return self._rotate(1)
 
     def prev(self) -> Optional[PlotEntry]:
+        """Select the previous plot entry."""
         return self._rotate(-1)
 
     def selected(self) -> Optional[PlotEntry]:
+        """Return the currently selected entry, if any."""
         with self._lock:
             if not self._selected:
                 return None
@@ -230,6 +244,7 @@ class PlotStore:
         return None
 
     def max_entries(self) -> int:
+        """Return the maximum number of stored entries."""
         return self._max_entries
 
 
@@ -246,6 +261,7 @@ class EventStream:
         self._next_id = 1
 
     def register(self) -> tuple[int, "queue.Queue[dict]"]:
+        """Register a new SSE client and return its queue."""
         with self._lock:
             client_id = self._next_id
             self._next_id += 1
@@ -254,10 +270,12 @@ class EventStream:
             return client_id, q
 
     def unregister(self, client_id: int) -> None:
+        """Remove an SSE client by id."""
         with self._lock:
             self._clients.pop(client_id, None)
 
     def publish(self, event: str, payload: dict) -> None:
+        """Publish an event payload to all connected clients."""
         message = {
             "event": event,
             "payload": payload,
@@ -292,20 +310,24 @@ class PlotRequestHandler(BaseHTTPRequestHandler):
     def log_message(
         self, format: str, *args
     ) -> None:  # noqa: A003 - match BaseHTTPRequestHandler signature
+        """Override to silence default HTTP logging."""
         # Silence default logging; Neovim already prints kernel logs.
         return
 
     # Routing helpers -----------------------------------------------------
 
     def _parse(self):
+        """Parse the current request path and query string."""
         parsed = urlparse(self.path)
         return parsed.path or "/", parse_qs(parsed.query)
 
     def _token_valid(self, params: dict) -> bool:
+        """Validate the request token against the server token."""
         token = params.get("token", [""])[0]
         return token == self.server.context.token
 
     def _send_json(self, payload: dict, status: HTTPStatus = HTTPStatus.OK) -> None:
+        """Serialize and send a JSON response payload."""
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status.value)
         self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -316,6 +338,7 @@ class PlotRequestHandler(BaseHTTPRequestHandler):
     # HTTP verbs ----------------------------------------------------------
 
     def do_GET(self) -> None:  # noqa: N802
+        """Handle GET requests for UI, assets, and data endpoints."""
         path, params = self._parse()
         if not self._token_valid(params):
             self._send_json({"error": "unauthorized"}, HTTPStatus.UNAUTHORIZED)
@@ -353,6 +376,7 @@ class PlotRequestHandler(BaseHTTPRequestHandler):
         self._send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
 
     def do_POST(self) -> None:  # noqa: N802
+        """Handle POST requests for selection and navigation actions."""
         path, params = self._parse()
         if not self._token_valid(params):
             self._send_json({"error": "unauthorized"}, HTTPStatus.UNAUTHORIZED)
@@ -376,6 +400,7 @@ class PlotRequestHandler(BaseHTTPRequestHandler):
         self._send_json({"error": "unknown endpoint"}, HTTPStatus.NOT_FOUND)
 
     def do_DELETE(self) -> None:  # noqa: N802
+        """Handle DELETE requests to remove plots."""
         path, params = self._parse()
         if not self._token_valid(params):
             self._send_json({"error": "unauthorized"}, HTTPStatus.UNAUTHORIZED)
@@ -393,6 +418,7 @@ class PlotRequestHandler(BaseHTTPRequestHandler):
     # Views ---------------------------------------------------------------
 
     def _serve_index(self) -> None:
+        """Serve the plot viewer HTML shell."""
         token = self.server.context.token
         html = _viewer_html().replace("__PLOT_TOKEN__", token)
         payload = html.encode("utf-8")
@@ -404,6 +430,7 @@ class PlotRequestHandler(BaseHTTPRequestHandler):
         self.wfile.write(payload)
 
     def _serve_asset(self, name: str, content_type: str) -> None:
+        """Serve static assets for the viewer UI."""
         payload = _viewer_asset(name)
         self.send_response(HTTPStatus.OK.value)
         self.send_header("Content-Type", content_type)
@@ -413,6 +440,7 @@ class PlotRequestHandler(BaseHTTPRequestHandler):
         self.wfile.write(payload)
 
     def _serve_events(self) -> None:
+        """Stream Server-Sent Events for plot updates."""
         ctx = self.server.context
         client_id, q = ctx.events.register()
         try:
@@ -469,6 +497,7 @@ class PlotServer:
     # HTTP lifecycle ------------------------------------------------------
 
     def start(self) -> None:
+        """Start the HTTP server thread if it is not running."""
         with self._lock:
             if self._httpd:
                 return
@@ -488,6 +517,7 @@ class PlotServer:
             self._thread = thread
 
     def shutdown(self) -> None:
+        """Shut down the HTTP server and clear thread state."""
         with self._lock:
             if not self._httpd:
                 return
@@ -508,18 +538,22 @@ class PlotServer:
 
     @property
     def token(self) -> str:
+        """Return the auth token required for HTTP requests."""
         return self._token
 
     @property
     def port(self) -> Optional[int]:
+        """Return the bound HTTP port, if running."""
         return self._port
 
     def url(self) -> Optional[str]:
+        """Return the viewer URL with token query, if running."""
         if self._port is None:
             return None
         return f"http://{self._host}:{self._port}/?token={self._token}"
 
     def status(self) -> dict:
+        """Return a status snapshot for the viewer UI."""
         selected = self._store.selected()
         return {
             "status": "ready" if self._httpd else "stopped",
@@ -535,18 +569,21 @@ class PlotServer:
         }
 
     def current_selection(self) -> Optional[dict]:
+        """Return the currently selected plot summary, if any."""
         entry = self._store.selected()
         return entry.summary() if entry else None
 
     def set_backend_state(
         self, name: Optional[str], active: bool, required: Optional[str] = None
     ) -> None:
+        """Update the active backend state metadata."""
         self._backend_name = name
         self._backend_active = active
         if required:
             self._backend_required = required
 
     def snapshot_events(self) -> List[tuple[str, dict]]:
+        """Return initial SSE events for new clients."""
         return [
             ("plot-sync", self.list_plots()),
             (
@@ -560,6 +597,7 @@ class PlotServer:
         ]
 
     def list_plots(self) -> dict:
+        """Return a plot list payload for the UI."""
         entries = self._store.summaries()
         selected = self._store.selected()
         return {
@@ -568,10 +606,12 @@ class PlotServer:
         }
 
     def png_payload(self, plot_id: str) -> Optional[bytes]:
+        """Return the PNG bytes for a stored plot."""
         entry = self._store.get(plot_id)
         return entry.png if entry else None
 
     def add_entry(self, entry: PlotEntry) -> None:
+        """Store a new plot entry and publish SSE events."""
         removed = self._store.add(entry)
         self.events.publish("plot-added", entry.summary())
         self.events.publish("plot-selected", entry.summary())
@@ -579,6 +619,7 @@ class PlotServer:
             self.events.publish("plot-removed", item.summary())
 
     def select_plot(self, plot_id: str) -> dict:
+        """Select a plot by id and publish SSE updates."""
         entry = self._store.select(plot_id)
         if not entry:
             return {"ok": False, "error": "not found"}
@@ -587,6 +628,7 @@ class PlotServer:
         return {"ok": True, "selected": summary}
 
     def rotate_plot(self, step: int) -> dict:
+        """Rotate selection by step and publish SSE updates."""
         entry = self._store.next() if step > 0 else self._store.prev()
         if not entry:
             return {"ok": False, "error": "no plots"}
@@ -595,6 +637,7 @@ class PlotServer:
         return {"ok": True, "selected": summary}
 
     def remove_plot(self, plot_id: str) -> Optional[dict]:
+        """Remove a plot and publish SSE updates."""
         entry = self._store.remove(plot_id)
         if not entry:
             return None
@@ -610,6 +653,7 @@ class PlotServer:
         }
 
     def clear_plots(self) -> dict:
+        """Clear all plots and publish SSE updates."""
         removed = [entry.summary() for entry in self._store.clear()]
         for item in removed:
             self.events.publish("plot-removed", item)
@@ -638,6 +682,7 @@ class PlotCommandRouter:
         }
 
     def handle(self, action: Optional[str], payload: Optional[dict]) -> dict:
+        """Dispatch an action to the matching plot handler."""
         if not action:
             return {"ok": False, "error": "missing action"}
         handler = self._handlers.get(action.lower())
@@ -646,18 +691,22 @@ class PlotCommandRouter:
         return handler(payload or {})
 
     def _status(self, payload: dict) -> dict:
+        """Return current plot status payload."""
         return {"ok": True, "data": self._status_provider()}
 
     def _list(self, payload: dict) -> dict:
+        """Return the plot list payload."""
         return {"ok": True, "data": self._server.list_plots()}
 
     def _select(self, payload: dict) -> dict:
+        """Select a plot by id from the payload."""
         plot_id = payload.get("id") if isinstance(payload, dict) else None
         if not plot_id:
             return {"ok": False, "error": "missing id"}
         return self._server.select_plot(str(plot_id))
 
     def _delete(self, payload: dict) -> dict:
+        """Delete a plot by id, falling back to current selection."""
         plot_id = payload.get("id") if isinstance(payload, dict) else None
         if not plot_id:
             selected = self._server.current_selection()
@@ -688,9 +737,11 @@ class _PlotServerController:
 
     @property
     def server(self) -> Optional[PlotServer]:
+        """Return the active PlotServer instance, if any."""
         return self._server
 
     def inject_server(self, server: Optional[PlotServer]) -> None:
+        """Inject an existing server instance and rebuild the router."""
         self._server = server
         if server is None:
             self._command_router = None
@@ -698,10 +749,12 @@ class _PlotServerController:
         self._command_router = PlotCommandRouter(server, self._status_provider)
 
     def configure(self, options: Optional[dict]) -> None:
+        """Update runtime configuration for future server starts."""
         if options:
             self._config.update(options)
 
     def ensure_running(self) -> None:
+        """Start a PlotServer if one is not already running."""
         if self._server:
             return
         server = PlotServer(self._config.get("max_entries", 40))
@@ -711,6 +764,7 @@ class _PlotServerController:
         self._emit_status()
 
     def shutdown(self) -> None:
+        """Stop the PlotServer and reset routing state."""
         if not self._server:
             return
         server = self._server
@@ -720,21 +774,25 @@ class _PlotServerController:
         self._emit_status({"status": "stopped"})
 
     def status(self) -> dict:
+        """Return the current server status snapshot."""
         if self._server:
             return self._server.status()
         return {"status": "stopped"}
 
     def add_entry(self, entry: PlotEntry) -> None:
+        """Add a plot entry if the server is available."""
         if self._server:
             self._server.add_entry(entry)
 
     def set_backend_state(
         self, name: Optional[str], active: bool, required: str
     ) -> None:
+        """Update backend state metadata on the server."""
         if self._server:
             self._server.set_backend_state(name, active, required)
 
     def handle_command(self, action: Optional[str], payload: Optional[dict]) -> dict:
+        """Handle a UI command via the command router."""
         router = self._command_router
         if not router:
             server = self._server
@@ -771,6 +829,7 @@ class _MatplotlibHookManager:
         ).lower()
 
     def install(self) -> None:
+        """Install pyplot hooks for show/savefig and backend changes."""
         if self._hooks_installed:
             return
         import matplotlib.pyplot as plt  # type: ignore
@@ -806,6 +865,7 @@ class _MatplotlibHookManager:
         self._hooks_installed = True
 
     def disable(self) -> None:
+        """Disable hooks and reset backend state tracking."""
         self.uninstall()
         self._restore_inline_capture()
         self._backend_name = None
@@ -813,6 +873,7 @@ class _MatplotlibHookManager:
         self._status_changed(None)
 
     def uninstall(self) -> None:
+        """Remove previously installed pyplot hooks."""
         if not self._hooks_installed:
             return
         import matplotlib.pyplot as plt  # type: ignore
@@ -823,6 +884,7 @@ class _MatplotlibHookManager:
         self._hooks_installed = False
 
     def force_backend(self) -> None:
+        """Force the required backend and enable inline capture if needed."""
         import matplotlib.pyplot as plt  # type: ignore
         import matplotlib  # type: ignore
 
@@ -837,6 +899,7 @@ class _MatplotlibHookManager:
         self._enable_inline_capture()
 
     def sync_backend_state(self) -> None:
+        """Sync backend name/active state and notify listeners when changed."""
         import matplotlib  # type: ignore
 
         backend = matplotlib.get_backend()
@@ -854,6 +917,7 @@ class _MatplotlibHookManager:
             self._status_changed(None)
 
     def capture(self, reason: str) -> None:
+        """Capture active figures and forward them to the plot server."""
         self.sync_backend_state()
         if not self._backend_active:
             return
@@ -865,6 +929,7 @@ class _MatplotlibHookManager:
                 self._close_manager(manager)
 
     def snapshot(self) -> dict:
+        """Return a snapshot of backend state for status payloads."""
         return {
             "backend": self._backend_name,
             "backend_active": self._backend_active,
@@ -1076,6 +1141,7 @@ class PlotRuntime:
     # Public API ---------------------------------------------------------
 
     def enable(self, options: Optional[dict] = None) -> dict:
+        """Enable plot capture and start the HTTP server if needed."""
         self._server_controller.configure(options)
         self._server_controller.ensure_running()
         if self._hooks:
@@ -1085,12 +1151,14 @@ class PlotRuntime:
         return self._emit_status()
 
     def disable(self) -> dict:
+        """Disable plot capture and shut down the HTTP server."""
         if self._hooks:
             self._hooks.disable()
         self._server_controller.shutdown()
         return self._emit_status({"status": "stopped"})
 
     def status(self) -> dict:
+        """Return the current runtime and backend status snapshot."""
         payload = self._server_controller.status()
         hook_snapshot = (
             self._hooks.snapshot()
@@ -1105,10 +1173,12 @@ class PlotRuntime:
         return payload
 
     def capture(self, reason: str) -> None:
+        """Capture the current figure with an optional reason tag."""
         if self._hooks:
             self._hooks.capture(reason)
 
     def handle_command(self, action: str, payload: Optional[dict] = None) -> dict:
+        """Handle a plot command from the UI and return a response payload."""
         return self._server_controller.handle_command(action, payload)
 
     # Internals ----------------------------------------------------------
@@ -1137,6 +1207,7 @@ class PlotRuntime:
 
 
 def create_runtime(callback: Optional[Callable[[dict], None]] = None) -> PlotRuntime:
+    """Create a PlotRuntime instance with an optional status callback."""
     return PlotRuntime(callback)
 
 

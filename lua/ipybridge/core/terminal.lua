@@ -4,6 +4,9 @@
 
 local Terminal = {}
 
+---Build terminal helpers for opening and sending input to IPython.
+---@param ctx table
+---@return table
 function Terminal.new(ctx)
 	local state = assert(ctx.state, "terminal: state table is required")
 	local warn_user = ctx.warn_user or function() end
@@ -12,6 +15,9 @@ function Terminal.new(ctx)
 	end
 	local open_fn = ctx.open
 
+	---Ensure the terminal is open before running the callback.
+	---@param go_back boolean|nil
+	---@param cb function
 	local function with_terminal(go_back, cb)
 		if type(cb) ~= "function" then
 			return
@@ -31,6 +37,8 @@ function Terminal.new(ctx)
 		end)
 	end
 
+	---Send a payload to the terminal and append a newline.
+	---@param payload string
 	local function term_send(payload)
 		if not state.term_instance then
 			return

@@ -8,6 +8,7 @@ ExecutionController.__index = ExecutionController
 local CELL_PATTERN = [[^# %%\+]]
 local CELL_RE = vim.regex(CELL_PATTERN)
 
+-- Find the start of the current cell by scanning upwards for a cell marker.
 local function get_start_line_cell(api, idx_seed)
 	local lines = api.nvim_buf_get_lines(0, 0, idx_seed, false)
 	for idx = #lines, 1, -1 do
@@ -18,6 +19,7 @@ local function get_start_line_cell(api, idx_seed)
 	return 1
 end
 
+-- Find the end of the current cell by scanning downwards for a cell marker.
 local function get_stop_line_cell(api, idx_offset)
 	local n_lines = api.nvim_buf_line_count(0)
 	local lines = api.nvim_buf_get_lines(0, idx_offset - 1, n_lines, false)
@@ -29,6 +31,7 @@ local function get_stop_line_cell(api, idx_offset)
 	return n_lines, false
 end
 
+-- Count how many cell markers appear before the given line.
 local function count_cells_before(api, line_start)
 	local upper = math.max((line_start or 1) - 1, 0)
 	local pre_lines = api.nvim_buf_get_lines(0, 0, upper, false)
@@ -41,6 +44,9 @@ local function count_cells_before(api, line_start)
 	return idx
 end
 
+---Create a new ExecutionController instance.
+---@param opts table
+---@return table
 function ExecutionController.new(opts)
 	local self = setmetatable({}, ExecutionController)
 	self.state = assert(opts.state, "execution controller: state is required")
@@ -62,11 +68,18 @@ function ExecutionController.new(opts)
 	return self
 end
 
+---Get an option value from the current config table.
+---@param key string
+---@return any
 function ExecutionController:_config_value(key)
 	local cfg = self.state.config or {}
 	return cfg[key]
 end
 
+---Ensure a file is saved before running a command that needs it.
+---@param path string
+---@param action_label string
+---@return boolean
 function ExecutionController:_ensure_saved_file(path, action_label)
 	if vim.bo.modified or not self.utils.file_exists(path) then
 		self.warn_user(string.format("ipybridge: file must be saved before %s can run", action_label))
@@ -75,6 +88,9 @@ function ExecutionController:_ensure_saved_file(path, action_label)
 	return true
 end
 
+---Check if a buffer is a valid, loaded Python file buffer.
+---@param bufnr integer
+---@return boolean
 function ExecutionController:_is_python_buffer(bufnr)
 	if not (bufnr and self.api.nvim_buf_is_valid(bufnr)) then
 		return false
@@ -97,6 +113,8 @@ function ExecutionController:_is_python_buffer(bufnr)
 	return true
 end
 
+---Resolve the current or most recent Python buffer.
+---@return integer|nil
 function ExecutionController:_resolve_python_buffer()
 	local current = self.api.nvim_get_current_buf()
 	if self:_is_python_buffer(current) then
@@ -114,6 +132,9 @@ function ExecutionController:_resolve_python_buffer()
 	return nil
 end
 
+---Resolve a buffer's absolute path.
+---@param bufnr integer
+---@return string|nil
 function ExecutionController:_buffer_path(bufnr)
 	local name = self.api.nvim_buf_get_name(bufnr)
 	if not name or name == "" then
@@ -126,6 +147,9 @@ function ExecutionController:_buffer_path(bufnr)
 	return abs
 end
 
+---Find a window that is displaying the buffer.
+---@param bufnr integer
+---@return integer|nil
 function ExecutionController:_find_window_for_buf(bufnr)
 	for _, win in ipairs(self.api.nvim_list_wins()) do
 		if self.api.nvim_win_is_valid(win) and self.api.nvim_win_get_buf(win) == bufnr then
@@ -135,6 +159,9 @@ function ExecutionController:_find_window_for_buf(bufnr)
 	return nil
 end
 
+---Save the target buffer if the relevant config flag allows it.
+---@param option_key string
+---@param bufnr integer|nil
 function ExecutionController:_save_buffer_if_requested(option_key, bufnr)
 	if self:_config_value(option_key) == false then
 		return
@@ -162,12 +189,15 @@ function ExecutionController:_save_buffer_if_requested(option_key, bufnr)
 	end)
 end
 
+---Move the cursor to the target line, clamped to the buffer size.
+---@param target integer
 function ExecutionController:_move_cursor_to_line(target)
 	local total = self.api.nvim_buf_line_count(0)
 	local idx_line = math.min(target, total)
 	self.api.nvim_win_set_cursor(0, { idx_line, 0 })
 end
 
+---Mark the session as active for debugging and refresh filters if needed.
 function ExecutionController:_activate_debug_session()
 	local st = self.state
 	local was_debug = st._debug_active
@@ -182,6 +212,9 @@ function ExecutionController:_activate_debug_session()
 	end
 end
 
+---Reset the debug baseline in the kernel, falling back to terminal on error.
+---@param on_success function
+---@param context_label string|nil
 function ExecutionController:_reset_debug_baseline(on_success, context_label)
 	self.exec_with_pipeline("_myipy_reset_debug_baseline()", {
 		require_helpers = true,
@@ -202,6 +235,9 @@ function ExecutionController:_reset_debug_baseline(on_success, context_label)
 	})
 end
 
+---Send a range of lines into the REPL using the configured mode.
+---@param line_start integer
+---@param line_stop integer
 function ExecutionController:send_lines(line_start, line_stop)
 	local lines = self.api.nvim_buf_get_lines(0, line_start, line_stop, false)
 	if not lines or #lines == 0 then
@@ -226,6 +262,7 @@ function ExecutionController:send_lines(line_start, line_stop)
 	end)
 end
 
+---Run the currently selected visual lines.
 function ExecutionController:run_lines()
 	local line_start0, line_end_excl0 = self.utils.selection_line_range()
 	if not line_start0 then
@@ -234,6 +271,7 @@ function ExecutionController:run_lines()
 	self:send_lines(line_start0, line_end_excl0)
 end
 
+---Run the current line and advance the cursor by one line.
 function ExecutionController:run_line()
 	local n_lines = self.api.nvim_buf_line_count(0)
 	local line = self.api.nvim_get_current_line()
@@ -252,6 +290,8 @@ function ExecutionController:run_line()
 	end)
 end
 
+---Send a raw command line to the REPL.
+---@param cmd string
 function ExecutionController:run_cmd(cmd)
 	self.with_terminal(true, function()
 		if not self.is_open() then
@@ -261,6 +301,7 @@ function ExecutionController:run_cmd(cmd)
 	end)
 end
 
+---Run the current Python file through the runcell helpers.
 function ExecutionController:run_file()
 	local bufnr = self:_resolve_python_buffer()
 	if not bufnr then
@@ -298,6 +339,7 @@ function ExecutionController:run_file()
 	end)
 end
 
+---Debug the current Python file using debugfile helpers.
 function ExecutionController:debug_file()
 	local bufnr = self:_resolve_python_buffer()
 	if not bufnr then
@@ -334,6 +376,7 @@ function ExecutionController:debug_file()
 				if cwd_arg and #cwd_arg > 0 then
 					safecwd = self.utils.py_quote_single(cwd_arg)
 				end
+				-- Guard against double-dispatch if the baseline reset callback runs twice.
 				local dispatched = false
 				local function dispatch_debugfile()
 					if dispatched then
@@ -359,6 +402,7 @@ function ExecutionController:debug_file()
 	end)
 end
 
+---Run the current cell delimited by Jupyter-style markers.
 function ExecutionController:run_cell()
 	local idx_line_cursor = self.api.nvim_win_get_cursor(0)[1]
 	local line_start = get_start_line_cell(self.api, idx_line_cursor)
@@ -398,6 +442,7 @@ function ExecutionController:run_cell()
 	end)
 end
 
+---Debug the current cell delimited by Jupyter-style markers.
 function ExecutionController:debug_cell()
 	local abs_path = self.fn.expand("%:p")
 	if not (abs_path and #abs_path > 0) then
@@ -435,6 +480,7 @@ function ExecutionController:debug_cell()
 			if cwd_arg and #cwd_arg > 0 then
 				safecwd = self.utils.py_quote_single(cwd_arg)
 			end
+			-- Guard against double-dispatch if the baseline reset callback runs twice.
 			local dispatched = false
 			local function dispatch_debugcell()
 				if dispatched then
@@ -456,12 +502,14 @@ function ExecutionController:debug_cell()
 	end)
 end
 
+---Move the cursor to the start of the previous cell.
 function ExecutionController:up_cell()
 	local idx_line_cursor = self.api.nvim_win_get_cursor(0)[1]
 	local line_start = get_start_line_cell(self.api, idx_line_cursor - 2)
 	self:_move_cursor_to_line(math.min(line_start + 1, self.api.nvim_buf_line_count(0)))
 end
 
+---Move the cursor to the start of the next cell.
 function ExecutionController:down_cell()
 	local idx_line_cursor = self.api.nvim_win_get_cursor(0)[1]
 	local line_stop, has_next_cell = get_stop_line_cell(self.api, idx_line_cursor + 1)

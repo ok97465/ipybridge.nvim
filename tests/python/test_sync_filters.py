@@ -8,6 +8,7 @@ import pytest
 
 
 def _run_sync_filters(monkeypatch, *, names, types_list, max_repr, enable_logs, namespace):
+    """Render and exec the sync_filters template with injected helpers."""
 	root = Path(__file__).resolve().parents[2]
 	template_path = root / "python" / "sync_filters.py"
 	template = template_path.read_text(encoding="utf-8")

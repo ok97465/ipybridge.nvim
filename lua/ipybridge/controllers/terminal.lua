@@ -6,6 +6,9 @@ local TerminalNavigator = require("ipybridge.controllers.terminal_navigator")
 local TerminalController = {}
 TerminalController.__index = TerminalController
 
+---Create a new TerminalController instance.
+---@param opts table
+---@return table
 function TerminalController.new(opts)
 	local self = setmetatable({}, TerminalController)
 	self.state = assert(opts.state, "terminal controller: state is required")
@@ -26,6 +29,7 @@ function TerminalController.new(opts)
 	return self
 end
 
+---Handle terminal exit events and trigger cleanup when needed.
 function TerminalController:handle_term_exit()
 	if self.state._term_exit_expected then
 		self.state._term_exit_expected = false
@@ -36,10 +40,14 @@ function TerminalController:handle_term_exit()
 	self:close()
 end
 
+---Open the IPython terminal session.
+---@param go_back boolean|nil
+---@param cb function|nil
 function TerminalController:open(go_back, cb)
 	self.session_manager:open(self.state, go_back, cb)
 end
 
+---Close the terminal session and tear down helper state.
 function TerminalController:close()
 	if self.is_open() then
 		self.state._term_exit_expected = true
@@ -72,6 +80,7 @@ function TerminalController:close()
 	self.state._prev_editor_win = nil
 end
 
+---Toggle the terminal session visibility.
 function TerminalController:toggle()
 	if self.is_open() then
 		self:close()
@@ -84,10 +93,12 @@ function TerminalController:toggle()
 	end)
 end
 
+---Focus the IPython terminal window.
 function TerminalController:goto_ipy()
 	self.navigator:goto_terminal()
 end
 
+---Return focus to the previous editor window.
 function TerminalController:goto_vi()
 	self.navigator:goto_editor()
 end

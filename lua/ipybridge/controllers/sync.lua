@@ -5,6 +5,7 @@
 local SyncController = {}
 SyncController.__index = SyncController
 
+-- Encode Lua values into JSON with a safe fallback.
 local function encode_json(value)
 	local ok, encoded = pcall(vim.json.encode, value)
 	if not ok or not encoded then
@@ -13,11 +14,15 @@ local function encode_json(value)
 	return encoded
 end
 
+-- Retry on transient bootstrap/transport errors.
 local function should_retry(reason)
 	local r = tostring(reason or "")
 	return r == "helpers_failed" or r == "zmq_unavailable" or r == "conn_file_unavailable"
 end
 
+---Create a new SyncController instance.
+---@param opts table
+---@return table
 function SyncController.new(opts)
 	local self = setmetatable({}, SyncController)
 	self.state = assert(opts.state, "sync controller: state is required")
@@ -29,6 +34,7 @@ function SyncController.new(opts)
 	return self
 end
 
+---Sync variable filter settings into the kernel via the helper template.
 function SyncController:sync_var_filters()
 	if not self.is_open() then
 		return
@@ -44,6 +50,7 @@ function SyncController:sync_var_filters()
 	local enable_logs = cfg.zmq_debug and true or false
 	local names_json = encode_json(names)
 	local types_json = encode_json(types)
+	-- Avoid re-sending the same filter payload repeatedly.
 	local signature =
 		table.concat({ names_json, "\0", types_json, "\0", tostring(max_repr), "\0", enable_logs and "1" or "0" })
 	if self.state._last_filters_signature == signature then
@@ -78,6 +85,8 @@ function SyncController:sync_var_filters()
 	self.state._last_filters_signature = signature
 end
 
+---Sync debugfile import snippets into the kernel.
+---@param cb function|nil
 function SyncController:sync_debugfile_imports(cb)
 	if not self.is_open() then
 		if type(cb) == "function" then
@@ -88,6 +97,7 @@ function SyncController:sync_debugfile_imports(cb)
 	self.ensure_helpers()
 	local block = vim.trim((self.state.config or {}).debugfile_auto_imports or "")
 	local payload = encode_json(block)
+	-- Avoid re-sending identical imports blocks.
 	local signature = payload
 	if self.state._debugfile_imports_signature == signature then
 		if type(cb) == "function" then

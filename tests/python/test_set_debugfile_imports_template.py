@@ -1,3 +1,5 @@
+"""Tests template substitution for debugfile auto-import payloads."""
+
 import json
 from pathlib import Path
 
@@ -8,6 +10,7 @@ TEMPLATE_PATH = Path(__file__).resolve().parents[2] / "python" / "set_debugfile_
 
 
 def _render_template(block: str) -> str:
+    """Render the debugfile imports template with a JSON payload."""
     template = TEMPLATE_PATH.read_text()
     payload = json.dumps(block)
     return template.replace("__IMPORTS_JSON__", payload)

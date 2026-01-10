@@ -4,6 +4,7 @@
 local VariablesController = {}
 VariablesController.__index = VariablesController
 
+-- Deliver variable snapshots to the explorer UI module.
 local function deliver_vars_to_explorer(payload, warn_user)
 	local ok, vx = pcall(require, "ipybridge.var_explorer")
 	if not ok or not vx or type(vx.on_vars) ~= "function" then
@@ -15,6 +16,7 @@ local function deliver_vars_to_explorer(payload, warn_user)
 	return true
 end
 
+-- Deliver preview payloads to the data viewer UI module.
 local function deliver_preview_payload(payload, warn_user)
 	local ok, dv = pcall(require, "ipybridge.data_viewer")
 	if not ok or not dv or type(dv.on_preview) ~= "function" then
@@ -26,6 +28,7 @@ local function deliver_preview_payload(payload, warn_user)
 	return true
 end
 
+-- Send a structured preview error payload (or fallback warning).
 local function deliver_preview_error(name, message, warn_user)
 	local delivered = deliver_preview_payload({ name = name, error = message }, warn_user)
 	if not delivered then
@@ -33,6 +36,9 @@ local function deliver_preview_error(name, message, warn_user)
 	end
 end
 
+---Create a new VariablesController instance.
+---@param opts table
+---@return table
 function VariablesController.new(opts)
 	local self = setmetatable({}, VariablesController)
 	self.state = assert(opts.state, "variables controller: state is required")
@@ -43,6 +49,8 @@ function VariablesController.new(opts)
 	return self
 end
 
+---Open the variable explorer and trigger a refresh when needed.
+---@param focus_terminal_on_close boolean|nil
 function VariablesController:open(focus_terminal_on_close)
 	local vx = require("ipybridge.var_explorer")
 	vx.open(focus_terminal_on_close)
@@ -53,6 +61,7 @@ function VariablesController:open(focus_terminal_on_close)
 	self:request_vars()
 end
 
+---Refresh the explorer contents, preferring debug snapshots when active.
 function VariablesController:refresh()
 	if self.state._debug_active then
 		self.debug_vars.push_to_explorer(self.state)
@@ -61,6 +70,7 @@ function VariablesController:refresh()
 	self:request_vars()
 end
 
+---Request a variable snapshot over ZMQ and dispatch to the explorer.
 function VariablesController:request_vars()
 	self.sync_var_filters()
 	if self.state._debug_active then
@@ -104,6 +114,9 @@ function VariablesController:request_vars()
 	end)
 end
 
+---Request a preview payload for a given variable name.
+---@param name string
+---@param opts table|nil
 function VariablesController:request_preview(name, opts)
 	if not name or #name == 0 then
 		return
@@ -122,6 +135,7 @@ function VariablesController:request_preview(name, opts)
 	local max_cols = tonumber(cfg.viewer_max_cols) or 20
 	local debug_mode = self.state._debug_active == true
 	if debug_mode then
+		-- Prefer cached debug previews to avoid redundant ZMQ requests.
 		local use_cache = (row_offset == 0 and col_offset == 0)
 		local payload = nil
 		if use_cache then
@@ -178,6 +192,7 @@ function VariablesController:request_preview(name, opts)
 		return
 	end
 
+	-- Keep filters in sync before issuing non-debug preview requests.
 	self.sync_var_filters()
 	local function dispatch_preview_request()
 		local z = require("ipybridge.zmq_client")

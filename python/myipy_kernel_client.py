@@ -29,6 +29,7 @@ class Logger:
         self._enabled = enabled
 
     def log(self, message: str) -> None:
+        """Emit a debug line to stderr when logging is enabled."""
         if not self._enabled:
             return
         try:
@@ -47,6 +48,7 @@ class BootstrapPayload:
         self._template = helpers_path.read_text(encoding="utf-8")
 
     def build(self, enable_debug: bool) -> str:
+        """Render the bootstrap prelude with injected module source."""
         prelude = self._template.replace("__MODULE_B64__", self._module_b64)
         flag = "True" if enable_debug else "False"
         prelude = (
@@ -73,15 +75,18 @@ class KernelChannel:
 
     @property
     def client(self):  # type: ignore[override]
+        """Return the initialized kernel client or raise if missing."""
         if self._client is None:
             raise RuntimeError("kernel client is not initialised")
         return self._client
 
     @property
     def debug_port(self) -> Optional[int]:
+        """Return the debug preview server port if known."""
         return self._debug_port
 
     def connect(self, conn_file: str, prelude: str) -> None:
+        """Connect to the kernel and execute the bootstrap prelude."""
         client = self._client_factory()
         client.load_connection_file(conn_file)
         client.start_channels()
@@ -386,6 +391,7 @@ class KernelChannel:
         *,
         user_expression: Optional[str] = None,
     ) -> Tuple[bool, Optional[dict], Optional[str]]:
+        """Execute code and return a parsed JSON payload when available."""
         exec_id = self.client.execute(
             code,
             store_history=False,
@@ -636,6 +642,7 @@ class DebugPreviewClient:
         self._port: Optional[int] = None
 
     def ensure_port(self) -> Optional[int]:
+        """Resolve and cache the debug preview server port."""
         if self._port:
             return self._port
         channel_port = getattr(self._channel, "debug_port", None)
@@ -692,6 +699,7 @@ class DebugPreviewClient:
     def request(
         self, name: str, rows: int, cols: int, row_offset: int, col_offset: int
     ) -> Tuple[bool, Optional[dict], Optional[str]]:
+        """Request a preview payload for a named variable."""
         return self._send(
             {
                 "op": "preview",
@@ -706,6 +714,7 @@ class DebugPreviewClient:
     def complete(
         self, code: str, cursor_pos: int, debug: bool = True
     ) -> Tuple[bool, Optional[dict], Optional[str]]:
+        """Request debugger completions for the provided code snippet."""
         return self._send(
             {
                 "op": "complete",
@@ -727,6 +736,7 @@ class RequestProcessor:
         self._logger = logger
 
     def process_stream(self, stream: IO[str], output: IO[str]) -> None:
+        """Process JSON requests from stdin and write responses to stdout."""
         for raw in stream:
             line = raw.strip()
             if not line:
@@ -974,6 +984,7 @@ class RequestProcessor:
 
 
 def parse_args(argv: Optional[list] = None) -> argparse.Namespace:
+    """Parse CLI arguments for the kernel client helper."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--conn-file", required=True)
     parser.add_argument("--debug", action="store_true")
@@ -981,6 +992,7 @@ def parse_args(argv: Optional[list] = None) -> argparse.Namespace:
 
 
 def main() -> int:
+    """Run the kernel client helper and process stdin requests."""
     opts = parse_args()
     logger = Logger(opts.debug)
 

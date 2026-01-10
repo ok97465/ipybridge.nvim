@@ -4,6 +4,9 @@
 local TerminalNavigator = {}
 TerminalNavigator.__index = TerminalNavigator
 
+---Create a new TerminalNavigator instance.
+---@param opts table
+---@return table
 function TerminalNavigator.new(opts)
 	local self = setmetatable({}, TerminalNavigator)
 	self.state = assert(opts.state, "terminal navigator: state is required")
@@ -12,6 +15,10 @@ function TerminalNavigator.new(opts)
 	return self
 end
 
+---Cache the last non-terminal editor window for focus restoration.
+---@param current_win integer
+---@param current_buf integer
+---@param term_buf integer|nil
 function TerminalNavigator:_remember_editor_win(current_win, current_buf, term_buf)
 	if current_win and self.api.nvim_win_is_valid(current_win) then
 		local bt = (vim.bo[current_buf] and vim.bo[current_buf].buftype) or ""
@@ -21,6 +28,7 @@ function TerminalNavigator:_remember_editor_win(current_win, current_buf, term_b
 	end
 end
 
+---Focus the terminal window, remembering the previous editor window.
 function TerminalNavigator:goto_terminal()
 	self.with_terminal(false, function()
 		local term = self.state.term_instance
@@ -46,6 +54,7 @@ function TerminalNavigator:goto_terminal()
 	end)
 end
 
+---Return focus to the previous editor window from the terminal.
 function TerminalNavigator:goto_editor()
 	local curbuf = self.api.nvim_win_get_buf(0)
 	local bt = (vim.bo[curbuf] and vim.bo[curbuf].buftype) or ""

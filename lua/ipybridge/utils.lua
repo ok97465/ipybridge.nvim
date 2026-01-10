@@ -23,7 +23,7 @@ local is_windows = detect_windows()
 
 local M = {}
 
--- Fast file existence check using libuv.
+-- Ensure the target directory exists using the available filesystem APIs.
 local function _ensure_dir(path)
 	if not path or path == "" then
 		return
@@ -39,6 +39,7 @@ local function _ensure_dir(path)
 	end
 end
 
+-- Resolve and create the plugin state directory.
 local function _state_dir()
 	local base = nil
 	if fn and fn.stdpath then
@@ -60,6 +61,9 @@ local function _state_dir()
 	return dir
 end
 
+---Check whether a filesystem path exists.
+---@param path string
+---@return boolean
 function M.file_exists(path)
 	if not (uv and uv.fs_stat) then
 		return false
@@ -67,7 +71,9 @@ function M.file_exists(path)
 	return uv.fs_stat(path) and true or false
 end
 
--- Return a path inside the plugin's persistent state directory, creating it if needed.
+---Return a path inside the plugin's persistent state directory, creating it if needed.
+---@param filename string|nil
+---@return string|nil
 function M.state_path(filename)
 	local dir = _state_dir()
 	if not dir or dir == "" then
@@ -86,16 +92,23 @@ local function _norm_path(p)
 	return tostring(p or ""):gsub("\\", "/")
 end
 
+---Escape a path for use inside single-quoted Python literals.
+---@param p string
+---@return string
 function M.py_quote_single(p)
 	return _norm_path(p):gsub("'", "\\'")
 end
 
+---Escape a path for use inside double-quoted Python literals.
+---@param p string
+---@return string
 function M.py_quote_double(p)
 	return _norm_path(p):gsub('"', '\\"')
 end
 
--- Return a 0-indexed (start_row, end_row_exclusive) line range for visual selection.
--- Works reliably even when called directly from a visual-mode mapping by using getpos('v').
+---Return a 0-indexed (start_row, end_row_exclusive) range for visual selections.
+---Uses getpos('v') so visual-mode mappings behave consistently.
+---@return integer|nil, integer|nil
 function M.selection_line_range()
 	local mode = fn.mode()
 	-- Visual modes: 'v' (charwise), 'V' (linewise), CTRL-V (blockwise).
@@ -129,7 +142,9 @@ local function to_hex(s)
 	end))
 end
 
--- Build a Python exec(compile(...)) that decodes a hex-encoded block and executes it in globals().
+---Build a Python exec(compile(...)) statement that runs a hex-encoded block.
+---@param py_src string
+---@return string
 function M.send_exec_block(py_src)
 	local hex = to_hex(py_src)
 	local stmt = string.format(
@@ -142,15 +157,18 @@ function M.send_exec_block(py_src)
 	return stmt
 end
 
--- Build a short Python statement to exec a file's contents in globals().
+---Build a short Python statement to exec a file's contents in globals().
+---@param path string
+---@return string
 function M.exec_file_stmt(path)
 	-- Read and exec file contents in globals(); path is single-quoted
 	local safe = M.py_quote_single(path)
 	return string.format("exec(open('%s', 'r', encoding='utf-8').read(), globals(), globals())", safe)
 end
 
--- Build a bracketed-paste payload for multiple lines.
--- Used when multiline selections are sent in 'paste' mode so prompts stay aligned.
+---Build a bracketed-paste payload for multiline selections.
+---@param lines_tbl string[]
+---@return string
 function M.paste_block(lines_tbl)
 	if not lines_tbl or #lines_tbl == 0 then
 		return ""
@@ -160,8 +178,10 @@ function M.paste_block(lines_tbl)
 	return "\x1b[200~" .. body .. "\n\x1b[201~"
 end
 
--- Check for missing python dependencies.
--- Returns a table of missing modules, or nil if all are present.
+---Check for missing Python dependencies by running check_deps.py.
+---@param python_cmd string
+---@param modules string[]
+---@return string[]|nil, string|nil
 function M.check_python_deps(python_cmd, modules)
 	local py_module = require("ipybridge.py_module")
 	local ok_path, script_path = pcall(py_module.path, "check_deps.py")

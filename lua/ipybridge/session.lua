@@ -6,6 +6,7 @@ local plot_viewer = require("ipybridge.viewer.plot")
 local Session = {}
 Session.__index = Session
 
+-- Fetch a required dependency from opts and fail fast when missing.
 local function dependency(tbl, key)
 	local value = tbl[key]
 	assert(value ~= nil, string.format("ipybridge.session: missing dependency '%s'", key))
@@ -36,6 +37,8 @@ function Session.new(opts)
 	return self
 end
 
+---Return the PATH separator and current PYTHONPATH for the host OS.
+---@return string, string
 local function resolve_sep()
 	-- Return the path separator and currently exported PYTHONPATH for the host OS.
 	local loop = vim.loop or vim.uv
@@ -46,6 +49,10 @@ local function resolve_sep()
 	return ":", loop and loop.os_getenv("PYTHONPATH") or ""
 end
 
+---Build the Jupyter console command and env overrides for this session.
+---@param state table
+---@param conn_file string
+---@return string, table
 function Session:build_console_env(state, conn_file)
 	local completion = (state.config or {}).completion
 	local suppress_readline_tab = true
@@ -102,6 +109,8 @@ function Session:build_console_env(state, conn_file)
 	return cmd_console, env
 end
 
+---Reset transient session flags and clean up temp helper files.
+---@param state table
 function Session:reset_state(state)
 	state._term_exit_expected = false
 	state._helpers_sent = false
@@ -127,6 +136,8 @@ function Session:reset_state(state)
 	state._helpers_waiters = {}
 end
 
+---Attach breakpoint hooks so debug commands flow through the exec pipeline.
+---@param state table
 function Session:attach_breakpoints(state)
 	self.breakpoints.attach_session({
 		exec = function(payload, opts)
@@ -142,6 +153,8 @@ function Session:attach_breakpoints(state)
 	})
 end
 
+---Apply terminal buffer keymaps and completion hooks.
+---@param state table
 function Session:setup_terminal_keymaps(state)
 	pcall(function()
 		local term = state.term_instance
@@ -188,6 +201,10 @@ function Session:setup_terminal_keymaps(state)
 	end)
 end
 
+---Collect startup magics/scripts to run after the console opens.
+---@param state table
+---@param cwd string
+---@return table
 function Session:collect_startup_instructions(state, cwd)
 	-- Build the list of IPython setup commands we want to replay once the console is ready.
 	local config = state.config
@@ -277,6 +294,8 @@ function Session:collect_startup_instructions(state, cwd)
 	}
 end
 
+---Start the plot viewer when the browser-backed mode is enabled.
+---@param state table
 function Session:_maybe_enable_plot_viewer(state)
 	if plot_viewer.mode() ~= "browser" then
 		return
@@ -288,6 +307,9 @@ function Session:_maybe_enable_plot_viewer(state)
 	end
 end
 
+---Run startup steps after an optional delay to let the kernel settle.
+---@param state table
+---@param opts table
 function Session:run_deferred_startup(state, opts)
 	local go_back = opts.go_back
 	local callback = opts.callback

@@ -4,12 +4,14 @@ local M = {}
 
 local registry = {}
 
+-- Notify once for handler failures to avoid spamming.
 local function notify_once(tag, err)
 	vim.schedule(function()
 		vim.notify(string.format("ipybridge: handler for %s failed: %s", tag, err), vim.log.levels.WARN)
 	end)
 end
 
+-- Lazily resolve a module method and invoke it with an optional transform.
 local function lazy_method(module_name, method_name, transform)
 	local resolved = nil
 	return function(msg)
