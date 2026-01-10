@@ -136,6 +136,9 @@ function M.send_exec_block(py_src)
 		"exec(compile(bytes.fromhex('%s').decode('utf-8'), '<ipybridge>', 'exec'), globals(), globals())",
 		hex
 	)
+	if stmt:sub(-1) ~= "\n" then
+		stmt = stmt .. "\n"
+	end
 	return stmt
 end
 
