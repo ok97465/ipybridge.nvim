@@ -99,6 +99,7 @@ require("ipybridge").setup({
         debugfile_save_before_run = true, -- save buffer before debugfile to use up-to-date file
         debugcell_save_before_run = true, -- save buffer before debugcell to use up-to-date file
         debugfile_auto_imports = "import numpy as np;import matplotlib.pyplot as plt;", -- hidden imports before %debugfile
+        debug_cursor_tooltip = true,     -- show previews for simple names while debugging
 
         -- Variable explorer / preview (ZMQ backend requires ipykernel + jupyter_client + pyzmq)
         viewer_max_rows = 30,
@@ -125,6 +126,7 @@ require("ipybridge").setup({
 - `debugfile_save_before_run` (boolean): Save the buffer before `%debugfile` execution (default `true`).
 - `debugcell_save_before_run` (boolean): Save the buffer before `%debugcell` execution (default `true`).
 - `debugfile_auto_imports` (string): Statements (e.g. `"import numpy as np;import matplotlib.pyplot as plt;"`) that run silently inside the isolated `%debugfile` namespace before `ipdb` starts. 
+- `debug_cursor_tooltip` (boolean|table): Show a floating preview for simple variable names when the cursor is on them during debug. Use `false` to disable; table accepts `enabled`, `border`, and `max_width`.
 - `zmq_debug` (boolean): Print ZMQ helper debug logs to stderr.
 - `exec_cwd_mode` (string): Working directory behavior for `run_cell` / `run_file`.
   - `'file'`: change directory to the current file's directory before executing

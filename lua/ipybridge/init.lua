@@ -19,6 +19,7 @@ local kernel = require("ipybridge.kernel")
 local py_module = require("ipybridge.py_module")
 local debug_vars = require("ipybridge.debug.vars")
 local breakpoints = require("ipybridge.debug.breakpoints")
+local debug_cursor_tooltip = require("ipybridge.debug.cursor_tooltip")
 local cmp_bridge = require("ipybridge.cmp_bridge")
 local cmp_constants = require("ipybridge.cmp_bridge.constants")
 local debug_completion = require("ipybridge.debug.completion")
@@ -223,6 +224,8 @@ M.config = {
 	-- Variable explorer: hide variables by exact name or type name (supports '*' suffix as prefix wildcard)
 	hidden_var_names = { "pi", "newaxis", "MODULE_B64" },
 	hidden_type_names = { "ZMQInteractiveShell", "Axes", "Figure", "AxesSubplot" },
+	-- Debug cursor tooltip: show floating variable preview on cursor move during debug.
+	debug_cursor_tooltip = true,
 	-- Import statements (single string) injected into the debugfile namespace before ipdb starts.
 	debugfile_auto_imports = "",
 	-- ZMQ backend debug logs (Python client prints to stderr)
@@ -257,6 +260,12 @@ end
 
 M.setup = function(config)
 	if config ~= nil then
+		if config.debug_cursor_tooltip ~= nil then
+			local t = type(config.debug_cursor_tooltip)
+			if t ~= "boolean" and t ~= "table" then
+				error("ipybridge: debug_cursor_tooltip must be a boolean or table")
+			end
+		end
 		if config.plot_viewer ~= nil then
 			local t = type(config.plot_viewer)
 			if t ~= "string" and t ~= "table" then
@@ -292,6 +301,7 @@ M.setup = function(config)
 	M.config = vim.tbl_deep_extend("force", M.config, merged)
 	plot_viewer.configure(M.config.plot_viewer)
 	cmp_bridge.configure(M.config.completion or {})
+	debug_cursor_tooltip.setup(M.config.debug_cursor_tooltip)
 	local tracker_group = api.nvim_create_augroup("IpybridgeBufferTracker", { clear = true })
 	api.nvim_create_autocmd("FileType", {
 		group = tracker_group,
@@ -635,12 +645,14 @@ end
 ---@param info table
 function M.on_debug_status(info)
 	debug.on_status(info)
+	debug_cursor_tooltip.on_debug_status(info)
 end
 
 ---Handle debug location payload emitted from the embedded debugger.
 ---@param info table
 function M.on_debug_location(info)
 	debug.on_location(info)
+	debug_cursor_tooltip.clear()
 end
 
 ---@param focus_terminal_on_close boolean|nil
