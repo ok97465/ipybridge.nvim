@@ -233,12 +233,12 @@ function ExecutionController:_reset_debug_baseline(on_success, context_label)
 	})
 end
 
----Send a range of lines into the REPL using the configured mode.
+---Send a range of lines into the REPL via bracketed paste.
 ---@param line_start integer
 ---@param line_stop integer
 function ExecutionController:send_lines(line_start, line_stop)
 	local lines = self.api.nvim_buf_get_lines(0, line_start, line_stop, false)
-	if not lines or #lines == 0 then
+	if #lines == 0 then
 		return
 	end
 	if not self.state._debug_active then
@@ -248,15 +248,8 @@ function ExecutionController:send_lines(line_start, line_stop)
 		if not self.is_open() then
 			return
 		end
-		local mode = tostring(self:_config_value("multiline_send_mode") or "exec")
-		if mode == "paste" then
-			local payload = self.utils.paste_block(lines)
-			self.term_send(payload)
-		else
-			local block = table.concat(lines, "\n")
-			local payload = self.utils.send_exec_block(block)
-			self.term_send(payload)
-		end
+		local payload = self.utils.paste_block(lines)
+		self.term_send(payload)
 	end)
 end
 

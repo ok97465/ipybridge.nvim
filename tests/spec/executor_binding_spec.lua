@@ -166,9 +166,6 @@ local function setup_env()
 		paste_block = function()
 			return ""
 		end,
-		send_exec_block = function()
-			return ""
-		end,
 		py_quote_single = function()
 			return ""
 		end,

@@ -235,11 +235,6 @@ M.config = {
 	--  - 2: Reload all modules (except those excluded)
 	--  - 'disable': Do not configure autoreload
 	autoreload = 2,
-	-- How to send multi-line selections/cells to IPython.
-	-- 'exec'  : send as hex-encoded Python and exec() it (robust, default)
-	-- 'paste' : send as plain text using bracketed paste so the console shows
-	--           the code exactly as if it was typed (Spyder-like echo).
-	multiline_send_mode = "paste",
 	-- Extra terminal-mode keymaps applied after the IPython console buffer is created.
 	terminal_keymaps = nil,
 	completion = {

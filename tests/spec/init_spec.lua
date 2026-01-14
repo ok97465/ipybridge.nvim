@@ -370,10 +370,6 @@ local function fresh_init()
 				ctx.last_py_quote_double = text
 				return text
 			end,
-			send_exec_block = function(block)
-				ctx.last_exec_block = block
-				return "exec_block:" .. tostring(block)
-			end,
 			paste_block = function(lines_tbl)
 				ctx.paste_payload = lines_tbl
 				return "paste"

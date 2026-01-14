@@ -83,13 +83,6 @@ local function fresh_utils(opts)
 	return require("ipybridge.utils")
 end
 
-it("send_exec_block wraps payload as exec compile call", function()
-	local utils = fresh_utils()
-	local stmt = utils.send_exec_block("print(123)\n")
-	assert(stmt:match("exec%(compile%(bytes.fromhex%('%x+'%)"), "expected exec compile wrapper")
-	assert(stmt:sub(-1) == "\n", "expected trailing newline")
-end)
-
 it("py_quote helpers normalise slashes and escape quotes", function()
 	local utils = fresh_utils()
 	local sample = "C:\\temp\\mix'\""

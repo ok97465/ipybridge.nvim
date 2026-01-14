@@ -140,7 +140,6 @@ require("ipybridge").setup({
   - `1`: Reload modules imported with `%aimport`.
   - `2`: Reload all modules automatically (except excluded); recommended default.
   - `'disable'`: Do not configure or enable autoreload.
-- `multiline_send_mode` (string): How selections/cells are sent. `'exec'` executes a hex-encoded block via `exec()`; `'paste'`(default) sends a plain-text bracketed paste so the console echoes the code like typed.
 - `terminal_keymaps` (function|nil): Extra terminal-mode mappings appended after the defaults when the IPython console buffer opens. Provide a callback `function(set)` where `set(lhs, rhs, opts)` mirrors `vim.keymap.set` (mode/buffer handled automatically). Defaults for the terminal (`<leader>iv`, `<Tab>`, `<C-c>` → interrupt) are created only when `set_default_keymaps` is `true`.
 
 
