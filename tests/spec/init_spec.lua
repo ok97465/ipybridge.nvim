@@ -53,6 +53,9 @@ local function stub_vim(ctx)
 		inspect = function()
 			return "inspect"
 		end,
+		tbl_isempty = function(tbl)
+			return next(tbl) == nil
+		end,
 		tbl_deep_extend = function(_, base, extra)
 			local merged = {}
 			if type(base) == "table" then

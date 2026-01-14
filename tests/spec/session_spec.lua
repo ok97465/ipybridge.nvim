@@ -145,45 +145,55 @@ end
 
 local function windows_vim(py_path)
 	py_path = py_path or ""
+	local loop = {
+		os_uname = function()
+			return { sysname = "Windows_NT" }
+		end,
+		os_getenv = function(name)
+			if name == "PYTHONPATH" then
+				return py_path
+			end
+			return ""
+		end,
+	}
 	return {
-		loop = {
-			os_uname = function()
-				return { sysname = "Windows_NT" }
-			end,
-			os_getenv = function(name)
-				if name == "PYTHONPATH" then
-					return py_path
-				end
-				return ""
-			end,
-		},
+		uv = loop,
+		loop = loop,
 		fs = {
 			dirname = function(path)
 				return (path:gsub("[/\\][^/\\]+$", ""))
 			end,
 		},
+		tbl_isempty = function(tbl)
+			return next(tbl) == nil
+		end,
 	}
 end
 
 local function posix_vim(py_path)
 	py_path = py_path or ""
+	local loop = {
+		os_uname = function()
+			return { sysname = "Linux" }
+		end,
+		os_getenv = function(name)
+			if name == "PYTHONPATH" then
+				return py_path
+			end
+			return ""
+		end,
+	}
 	return {
-		loop = {
-			os_uname = function()
-				return { sysname = "Linux" }
-			end,
-			os_getenv = function(name)
-				if name == "PYTHONPATH" then
-					return py_path
-				end
-				return ""
-			end,
-		},
+		uv = loop,
+		loop = loop,
 		fs = {
 			dirname = function(path)
 				return (path:gsub("[/\\][^/\\]+$", ""))
 			end,
 		},
+		tbl_isempty = function(tbl)
+			return next(tbl) == nil
+		end,
 	}
 end
 
@@ -224,7 +234,11 @@ it("build_console_env merges pythonpath on Windows", function()
 		return "C:\\helpers\\bootstrap_helpers.py"
 	end
 	local state = {
-		config = {},
+		config = {
+			completion = {
+				engine_priority = { "nvim_cmp" },
+			},
+		},
 	}
 	local cmd, env = session:build_console_env(state, "conn.json")
 	assert(not cmd:find("--simple-prompt", 1, true), "simple prompt flag should not be set")
@@ -243,7 +257,11 @@ it("build_console_env sets pythonpath when missing on posix", function()
 		return "/opt/ipybridge/bootstrap_helpers.py"
 	end
 	local state = {
-		config = {},
+		config = {
+			completion = {
+				engine_priority = { "nvim_cmp" },
+			},
+		},
 	}
 	local cmd, env = session:build_console_env(state, "/tmp/conn.json")
 	assert(cmd:find("/tmp/conn.json", 1, true), "connection file not in command")
@@ -291,13 +309,16 @@ it("setup_terminal_keymaps applies defaults and custom mappings", function()
 	})
 	local state = {
 		term_instance = { buf_id = 41 },
-	config = {
-		set_default_keymaps = true,
-		terminal_keymaps = function(set)
-			set("<C-z>", function() end, { silent = false, desc = "Custom" })
-		end,
-	},
-	interrupt = function() end,
+		config = {
+			set_default_keymaps = true,
+			completion = {
+				engine_priority = { "nvim_cmp" },
+			},
+			terminal_keymaps = function(set)
+				set("<C-z>", function() end, { silent = false, desc = "Custom" })
+			end,
+		},
+		interrupt = function() end,
 	}
 	session:setup_terminal_keymaps(state)
 	assert(cmp_calls == 1, "cmp bridge ensure should be called once")
@@ -363,12 +384,15 @@ it("setup_terminal_keymaps skips defaults when disabled", function()
 	local session = fresh_session()
 	local state = {
 		term_instance = { buf_id = 99 },
-	config = {
-		set_default_keymaps = false,
-		terminal_keymaps = function(set)
-			set("<C-x>", "<C-x>", { desc = "noop" })
-		end,
-	},
+		config = {
+			set_default_keymaps = false,
+			completion = {
+				engine_priority = { "nvim_cmp" },
+			},
+			terminal_keymaps = function(set)
+				set("<C-x>", "<C-x>", { desc = "noop" })
+			end,
+		},
 	}
 	session:setup_terminal_keymaps(state)
 	local seen = {}

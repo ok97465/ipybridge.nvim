@@ -40,7 +40,7 @@ function SyncController:sync_var_filters()
 		return
 	end
 	self.ensure_helpers()
-	local cfg = self.state.config or {}
+	local cfg = self.state.config
 	local names = type(cfg.hidden_var_names) == "table" and cfg.hidden_var_names or {}
 	local types = type(cfg.hidden_type_names) == "table" and cfg.hidden_type_names or {}
 	local max_repr = tonumber(cfg.var_repr_limit) or 120
@@ -95,7 +95,7 @@ function SyncController:sync_debugfile_imports(cb)
 		return
 	end
 	self.ensure_helpers()
-	local block = vim.trim((self.state.config or {}).debugfile_auto_imports or "")
+	local block = vim.trim(self.state.config.debugfile_auto_imports or "")
 	local payload = encode_json(block)
 	-- Avoid re-sending identical imports blocks.
 	local signature = payload

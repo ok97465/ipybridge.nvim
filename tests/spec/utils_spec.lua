@@ -80,6 +80,12 @@ local function fresh_utils(opts)
 		v = { shell_error = 0 },
 	}
 	package.loaded["ipybridge.utils"] = nil
+	package.loaded["ipybridge.utils.fs"] = nil
+	package.loaded["ipybridge.utils.platform"] = nil
+	package.loaded["ipybridge.utils.paste"] = nil
+	package.loaded["ipybridge.utils.selection"] = nil
+	package.loaded["ipybridge.utils.py"] = nil
+	package.loaded["ipybridge.utils.deps"] = nil
 	return require("ipybridge.utils")
 end
 

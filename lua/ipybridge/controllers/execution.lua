@@ -72,7 +72,7 @@ end
 ---@param key string
 ---@return any
 function ExecutionController:_config_value(key)
-	local cfg = self.state.config or {}
+	local cfg = self.state.config
 	return cfg[key]
 end
 

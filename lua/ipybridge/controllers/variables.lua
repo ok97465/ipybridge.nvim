@@ -76,7 +76,7 @@ function VariablesController:request_vars()
 	if self.state._debug_active then
 		return
 	end
-	local cfg = self.state.config or {}
+	local cfg = self.state.config
 	local max_repr = tonumber(cfg.var_repr_limit) or 120
 	if max_repr <= 0 then
 		max_repr = 120
@@ -130,7 +130,7 @@ function VariablesController:request_preview(name, opts)
 	if col_offset < 0 then
 		col_offset = 0
 	end
-	local cfg = self.state.config or {}
+	local cfg = self.state.config
 	local max_rows = tonumber(cfg.viewer_max_rows) or 30
 	local max_cols = tonumber(cfg.viewer_max_cols) or 20
 	local debug_mode = self.state._debug_active == true

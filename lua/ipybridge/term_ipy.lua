@@ -10,17 +10,10 @@ local fn = vim.fn
 local M = {}
 
 local OscParser = require("ipybridge.osc_parser")
+local dispatch = require("ipybridge.core.dispatch")
 
 local function default_on_message(msg)
-	local ok, dispatch = pcall(require, "ipybridge.core.dispatch")
-	if not ok or not dispatch then
-		return
-	end
-	local handler = dispatch.handle
-	if type(handler) ~= "function" then
-		return
-	end
-	pcall(handler, msg)
+	dispatch.handle(msg)
 end
 
 local function noop() end
@@ -54,27 +47,12 @@ end
 
 function TermIpy:new(cmd, cwd, opts)
 	local tb = setmetatable({}, TermIpy)
-	if opts and type(opts.on_message) == "function" then
-		tb._on_message = opts.on_message
-	else
-		tb._on_message = default_on_message
-	end
-	if opts and type(opts.env) == "table" then
-		tb._env = opts.env
-	else
-		tb._env = nil
-	end
-	if opts and type(opts.on_exit) == "function" then
-		-- Allow callers to react when the terminal job terminates (e.g. user typed exit).
-		tb._on_exit = opts.on_exit
-	else
-		tb._on_exit = nil
-	end
-	if opts and type(opts.on_stdout_chunk) == "function" then
-		tb._on_stdout_chunk = opts.on_stdout_chunk
-	else
-		tb._on_stdout_chunk = noop
-	end
+	opts = opts or {}
+	tb._on_message = opts.on_message or default_on_message
+	tb._env = opts.env
+	-- Allow callers to react when the terminal job terminates (e.g. user typed exit).
+	tb._on_exit = opts.on_exit
+	tb._on_stdout_chunk = opts.on_stdout_chunk or noop
 	tb._osc_pending = ""
 	tb._decoder = OscParser:new({
 		on_message = function(tag, payload)
@@ -87,23 +65,11 @@ end
 
 function TermIpy:_handle_hidden_message(tag, payload)
 	local handler = self._on_message or default_on_message
-	if type(handler) ~= "function" then
-		return
-	end
-	local ok, err = pcall(handler, { tag = tag, data = payload })
-	if not ok then
-		vim.notify(
-			"ipybridge: hidden message handler failed for " .. tostring(tag) .. ": " .. tostring(err),
-			vim.log.levels.WARN
-		)
-	end
+	handler({ tag = tag, data = payload })
 end
 
 function TermIpy:__extract_hidden(text)
 	local decoder = self._decoder
-	if not decoder then
-		return text
-	end
 	local visible = decoder:ingest(text)
 	self._osc_pending = decoder:pending()
 	return visible
@@ -117,7 +83,7 @@ function TermIpy:send(cmd)
 	api.nvim_chan_send(self.job_id, cmd)
 	if api.nvim_buf_is_loaded(self.buf_id) and api.nvim_win_is_valid(self.win_id) then
 		local n_lines = api.nvim_buf_line_count(self.buf_id)
-		pcall(api.nvim_win_set_cursor, self.win_id, { n_lines, 0 })
+		api.nvim_win_set_cursor(self.win_id, { n_lines, 0 })
 	end
 end
 
@@ -127,7 +93,7 @@ function TermIpy:scroll_to_bottom()
 		return
 	end
 	local n_lines = api.nvim_buf_line_count(self.buf_id)
-	pcall(api.nvim_win_set_cursor, self.win_id, { n_lines, 0 })
+	api.nvim_win_set_cursor(self.win_id, { n_lines, 0 })
 end
 
 function TermIpy:startinsert()
@@ -179,27 +145,18 @@ function TermIpy:__spawn(cmd, cwd)
 end
 
 function TermIpy:__notify_stdout(text)
-	if type(self._on_stdout_chunk) ~= "function" then
-		return
-	end
-	if type(text) ~= "string" or text == "" then
-		return
-	end
 	local sanitized = text:gsub("\r", "")
-	if sanitized == "" then
-		return
+	if sanitized ~= "" then
+		self._on_stdout_chunk(sanitized)
 	end
-	pcall(self._on_stdout_chunk, sanitized)
 end
 
 function TermIpy:__on_stdout(data)
+	local decoder = self._decoder
 	for _, line in ipairs(data) do
-		if line ~= nil and line ~= "" then
-			local decoder = self._decoder
-			local visible = decoder and decoder:ingest(line) or line
-			if visible and visible ~= "" then
-				self:__notify_stdout(visible)
-			end
+		local visible = decoder:ingest(line)
+		if visible ~= "" then
+			self:__notify_stdout(visible)
 		end
 	end
 end

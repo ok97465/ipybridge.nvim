@@ -99,49 +99,37 @@ end
 ---Apply terminal buffer keymaps and completion hooks.
 ---@param state table
 function Session:setup_terminal_keymaps(state)
-	pcall(function()
-		local term = state.term_instance
-		-- Keymaps rely on the terminal buffer still being alive, so we guard the setup.
-		if not term then
-			return
+	local term = state.term_instance
+	local buf = term.buf_id
+	local function define_terminal_map(lhs, rhs, opts)
+		local options = opts and vim.deepcopy(opts) or {}
+		options.buffer = buf
+		if options.silent == nil then
+			options.silent = true
 		end
-		local buf = term.buf_id
-		local function define_terminal_map(lhs, rhs, opts)
-			local options = type(opts) == "table" and vim.deepcopy(opts) or {}
-			options.buffer = buf
-			if options.silent == nil then
-				options.silent = true
-			end
-			vim.keymap.set("t", lhs, rhs, options)
-		end
+		vim.keymap.set("t", lhs, rhs, options)
+	end
 
-		self.cmp_bridge.ensure()
+	self.cmp_bridge.ensure()
 
-		local config = state.config or {}
-		local completion = config.completion
-		local tab_enabled = true
-		if completion then
-			local priority = completion.engine_priority
-			if type(priority) == "table" and vim.tbl_isempty(priority) then
-				tab_enabled = false
-			end
-		end
-		if config.set_default_keymaps ~= false then
-			self.keymaps.apply_terminal_defaults(define_terminal_map, {
-				goto_vi = state.goto_vi,
-				goto_desc = "IPy: Back to editor",
-				handle_tab = tab_enabled and self.handle_terminal_tab or nil,
-				tab_desc = "IPy: Debug completion trigger",
-				interrupt = state.interrupt,
-				interrupt_desc = "IPy: Keyboard interrupt",
-			})
-		end
+	local config = state.config
+	local completion = config.completion
+	local tab_enabled = not vim.tbl_isempty(completion.engine_priority)
+	if config.set_default_keymaps ~= false then
+		self.keymaps.apply_terminal_defaults(define_terminal_map, {
+			goto_vi = state.goto_vi,
+			goto_desc = "IPy: Back to editor",
+			handle_tab = tab_enabled and self.handle_terminal_tab or nil,
+			tab_desc = "IPy: Debug completion trigger",
+			interrupt = state.interrupt,
+			interrupt_desc = "IPy: Keyboard interrupt",
+		})
+	end
 
-		local custom_maps = config.terminal_keymaps
-		if type(custom_maps) == "function" then
-			custom_maps(define_terminal_map)
-		end
-	end)
+	local custom_maps = config.terminal_keymaps
+	if custom_maps then
+		custom_maps(define_terminal_map)
+	end
 end
 
 ---Collect startup magics/scripts to run after the console opens.
