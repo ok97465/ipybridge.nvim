@@ -35,6 +35,13 @@ local function base_deps()
 			getcwd = function()
 				return "/tmp/project"
 			end,
+			fnamemodify = function(path, modifier)
+				if modifier == ":h" then
+					return (path:gsub("[/\\][^/\\]+$", ""))
+				end
+				return path
+			end,
+			mkdir = function(_path, _opts) end,
 		},
 		kernel = {
 			ensure = function(_python_cmd, _cb) end,
@@ -103,6 +110,9 @@ local function base_deps()
 			end,
 			exec_file_stmt = function(_path)
 				return nil
+			end,
+			state_path = function(filename)
+				return "/tmp/ipybridge/" .. tostring(filename or "")
 			end,
 		},
 		py_module = {
@@ -214,12 +224,10 @@ it("build_console_env merges pythonpath on Windows", function()
 		return "C:\\helpers\\bootstrap_helpers.py"
 	end
 	local state = {
-		config = {
-			simple_prompt = true,
-		},
+		config = {},
 	}
 	local cmd, env = session:build_console_env(state, "conn.json")
-	assert(cmd:find("--simple-prompt", 1, true), "expected simple prompt flag")
+	assert(not cmd:find("--simple-prompt", 1, true), "simple prompt flag should not be set")
 	assert(env.IPYBRIDGE_BREAKPOINT_FILE == "C:\\tmp\\breakpoints.json", "breakpoint file missing")
 	assert(
 		env.PYTHONPATH == "C:\\helpers;C:\\existing",

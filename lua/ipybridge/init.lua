@@ -216,9 +216,7 @@ M.config = {
 	--  - 'pwd' : cd to Neovim's current working directory before executing
 	--  - 'none': do not change directory
 	exec_cwd_mode = "pwd",
-	-- Console prompt/color options
-	-- Use a rich prompt (colors, toolbar) by default; set true to simplify.
-	simple_prompt = false,
+	-- Console prompt styling options.
 	-- Optional color scheme for ZMQTerminalInteractiveShell (e.g., 'Linux', 'LightBG', 'NoColor').
 	ipython_colors = "Linux",
 	-- Variable explorer: hide variables by exact name or type name (supports '*' suffix as prefix wildcard)
