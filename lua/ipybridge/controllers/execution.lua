@@ -212,7 +212,7 @@ function ExecutionController:_activate_debug_session()
 	end
 end
 
----Reset the debug baseline in the kernel, falling back to terminal on error.
+---Reset the debug baseline in the kernel.
 ---@param on_success function
 ---@param context_label string|nil
 function ExecutionController:_reset_debug_baseline(on_success, context_label)
@@ -224,13 +224,11 @@ function ExecutionController:_reset_debug_baseline(on_success, context_label)
 			local label = context_label or "debug action"
 			self.warn_user(
 				string.format(
-					"ipybridge: failed to reset debug baseline via ZMQ for %s; falling back to terminal call (%s)",
+					"ipybridge: failed to reset debug baseline via ZMQ for %s (%s)",
 					label,
 					r ~= "" and r or "unknown"
 				)
 			)
-			self.term_send("_myipy_reset_debug_baseline()")
-			on_success()
 		end,
 	})
 end
@@ -285,9 +283,7 @@ function ExecutionController:run_line()
 			self.api.nvim_win_set_cursor(0, { idx_line_cursor + 1, 0 })
 		end
 		if not self.state._debug_active then
-			if not self.state._debug_active then
-				self.clear_debug_state()
-			end
+			self.clear_debug_state()
 		end
 	end)
 end

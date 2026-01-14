@@ -634,7 +634,7 @@ class KernelChannel:
 
 
 class DebugPreviewClient:
-    """Handle debug preview requests with socket fallback."""
+    """Handle debug preview requests over the debug preview socket."""
 
     def __init__(self, channel: KernelChannel, logger: Logger) -> None:
         self._channel = channel
@@ -827,25 +827,24 @@ class RequestProcessor:
             row_offset = 0
         if col_offset < 0:
             col_offset = 0
-        name_esc = str(name).replace("'", "\\'")
         if debug_mode:
             ok, data, err = self._preview.request(
                 name, max_rows, max_cols, row_offset, col_offset
             )
             if not ok:
-                self._logger.log(f"debug preview socket fallback err={err}")
-                code = (
-                    f"__mi_debug_preview('{name_esc}', max_rows={max_rows}, "
-                    f"max_cols={max_cols}, row_offset={row_offset}, col_offset={col_offset})"
-                )
-                ok, data, err = self._channel.run_and_collect(code)
-            response = {"id": req_id, "ok": bool(ok), "tag": "preview"}
-            if ok and data is not None:
+                self._logger.log(f"debug preview socket error: {err}")
+                return {
+                    "id": req_id,
+                    "ok": False,
+                    "tag": "preview",
+                    "error": err or "debug preview failed",
+                }
+            response = {"id": req_id, "ok": True, "tag": "preview"}
+            if data is not None:
                 response["data"] = data
-            else:
-                response["error"] = err or "debug preview failed"
             return response
 
+        name_esc = str(name).replace("'", "\\'")
         code = f"__mi_preview('{name_esc}', max_rows={max_rows}, max_cols={max_cols}, row_offset={row_offset}, col_offset={col_offset})"
         self._logger.log(
             f"preview exec code={KernelChannel._shorten(code)} debug={debug_mode}"
@@ -904,27 +903,25 @@ class RequestProcessor:
     def _debug_complete_internal(
         self, code: str, cursor: int
     ) -> Tuple[bool, Optional[dict], Optional[str]]:
-        """Ask the side-car server for completions; fall back to the kernel on error."""
+        """Ask the side-car server for debugger completions."""
         ok, data, err = self._preview.complete(code, cursor, True)
-        if ok:
-            return ok, data, err
-        self._logger.log(f"debug completion socket err={err}")
-        return self._channel.complete(code, cursor)
+        if not ok:
+            self._logger.log(f"debug completion socket err={err}")
+        return ok, data, err
 
     def _debug_complete_helper(
         self, code: str, cursor: int
     ) -> Tuple[bool, Optional[dict], Optional[str]]:
-        """Execute __mi_debug_complete inside the kernel and fall back if needed."""
+        """Execute __mi_debug_complete inside the kernel."""
         try:
             code_expr = json.dumps(code)
         except Exception:
             code_expr = json.dumps(str(code))
         request = f"__mi_debug_complete({code_expr}, {cursor}, debug=True)"
         ok, data, err = self._channel.run_and_collect(request)
-        if ok:
-            return True, data, None
-        self._logger.log(f"debug completion helper err={err}")
-        return self._channel.complete(code, cursor)
+        if not ok:
+            self._logger.log(f"debug completion helper err={err}")
+        return ok, data, err
 
     def _resolve_completion(
         self, code: str, cursor: int, debug: bool, style: str
