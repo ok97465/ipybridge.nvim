@@ -3,6 +3,7 @@
 -- Keeps a small surface for terminal lifecycle and send helpers.
 
 local Terminal = {}
+local CTRL_U = string.char(21)
 
 ---Build terminal helpers for opening and sending input to IPython.
 ---@param ctx table
@@ -37,7 +38,7 @@ function Terminal.new(ctx)
 		end)
 	end
 
-	---Send a payload to the terminal and append a newline.
+	---Send a payload to the terminal after clearing the input line, then append a newline.
 	---@param payload string
 	local function term_send(payload)
 		if not state.term_instance then
@@ -49,6 +50,7 @@ function Terminal.new(ctx)
 		if payload == "" then
 			return
 		end
+		state.term_instance:send(CTRL_U)
 		state.term_instance:send(payload)
 		-- Defer the newline slightly so terminals that need a delay behave consistently.
 		vim.defer_fn(function()
