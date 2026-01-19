@@ -12,6 +12,7 @@ local specs = {
 	"tests.spec.dispatch_spec",
 	"tests.spec.terminal_spec",
 	"tests.spec.term_ipy_spec",
+	"tests.spec.plot_viewer_spec",
 	"tests.spec.utils_spec",
 	"tests.spec.execution_spec",
 	"tests.spec.sync_controller_spec",

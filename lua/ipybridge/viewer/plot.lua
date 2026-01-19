@@ -82,6 +82,13 @@ function PlotViewer.configure(opts)
 	state.browser_opened = false
 end
 
+---Reset viewer state between IPython sessions.
+function PlotViewer.reset_session()
+	state.server = nil
+	state.browser_opened = false
+	state.required_backend = REQUIRED_BACKEND
+end
+
 function PlotViewer.mode()
 	return config.mode
 end

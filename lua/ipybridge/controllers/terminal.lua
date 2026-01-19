@@ -2,6 +2,7 @@
 -- cleanup, and delegation of focus duties to the TerminalNavigator.
 
 local TerminalNavigator = require("ipybridge.controllers.terminal_navigator")
+local plot_viewer = require("ipybridge.viewer.plot")
 
 local TerminalController = {}
 TerminalController.__index = TerminalController
@@ -78,6 +79,7 @@ function TerminalController:close()
 	self.state._pending_exec = {}
 	self.state._helpers_waiters = {}
 	self.state._prev_editor_win = nil
+	plot_viewer.reset_session()
 end
 
 ---Toggle the terminal session visibility.

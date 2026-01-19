@@ -10,6 +10,7 @@
   - Omit parameter listings when parameters are trivial or self-explanatory.
 - When modifying code, review file header comments and update them if needed.
 - After edits, review comments in modified code and improve them as needed.
+- Please make sure to understand the overall logic of the plugin flow and avoid adding unnecessary defensive code.
 
 ## Testing
 - After code changes, always run tests.
