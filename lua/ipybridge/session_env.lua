@@ -23,7 +23,8 @@ end
 function M.build_console_env(ctx, state, conn_file)
 	local completion = state.config.completion
 	local suppress_readline_tab = not vim.tbl_isempty(completion.engine_priority)
-	local cmd_console = string.format("jupyter console --existing %s", conn_file)
+	local python_cmd = (state.config and state.config.python_cmd) or "python3"
+	local cmd_console = { python_cmd, "-m", "jupyter", "console", "--existing", conn_file }
 	local env = {
 		IPYBRIDGE_CONSOLE_PATCH = "1",
 		IPYBRIDGE_CONSOLE_PATCH_SILENT = "1",

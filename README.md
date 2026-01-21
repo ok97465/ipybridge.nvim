@@ -140,7 +140,7 @@ require("ipybridge").setup({
   - `1`: Reload modules imported with `%aimport`.
   - `2`: Reload all modules automatically (except excluded); recommended default.
   - `'disable'`: Do not configure or enable autoreload.
-- `terminal_keymaps` (function|nil): Extra terminal-mode mappings appended after the defaults when the IPython console buffer opens. Provide a callback `function(set)` where `set(lhs, rhs, opts)` mirrors `vim.keymap.set` (mode/buffer handled automatically). Defaults for the terminal (`<leader>iv`, `<Tab>`, `<C-c>` → interrupt) are created only when `set_default_keymaps` is `true`.
+- `terminal_keymaps` (function|nil): Extra terminal-mode mappings appended after the defaults when the IPython console buffer opens. Provide a callback `function(set)` where `set(lhs, rhs, opts)` mirrors `vim.keymap.set` (mode/buffer handled automatically). Defaults for the terminal (`<leader>iv`, `<leader>ir`, `<Tab>`, `<C-c>` -> interrupt) are created only when `set_default_keymaps` is `true`.
 
 
 ## API
@@ -155,6 +155,7 @@ require("ipybridge").setup({
 - `require('ipybridge').open(go_back)` — Open the terminal. If `go_back` is `true`, jump back to the previous window after initialization.
 - `require('ipybridge').close()` — Close the terminal job if running.
 - `require('ipybridge').toggle()` — Toggle the IPython terminal split.
+- `require('ipybridge').restart()` — Restart the kernel and refresh the IPython console in place.
 - `require('ipybridge').goto_ipy()` — Focus the IPython split and enter insert mode.
 - `require('ipybridge').goto_vi()` — Return focus from the IPython split to the previous window.
 
@@ -232,6 +233,7 @@ require("ipybridge").setup({
 ### Python buffers
 - Normal:
   - `<leader>ti` → toggle IPython terminal
+  - `<leader>ir` → restart kernel
   - `<leader>ii` → focus IPython terminal
   - `<leader>iv` → back to the editor window
   - `<leader><CR>` → run current cell (`# %%` delimited)
@@ -260,6 +262,7 @@ require("ipybridge").setup({
 - `<Tab>` → trigger debugger completion hints inside `ipdb`
 - `<C-c>` → send an interrupt to the kernel
 - `<leader>iv` → leave terminal-mode and jump back to the previous window
+- `<leader>ir` → restart kernel
 - `Shift+F6` → exit debugger (`!exit`)
 - `F10` → debugger step over
 - `F11` → debugger step into
@@ -281,6 +284,7 @@ require("ipybridge").setup({
 - `:IpybridgeVarsRefresh` → refresh variables
 - `:IpybridgePreview <name>` → open preview for a variable or path (supports dotted/indexed paths, e.g., `yy.b`, `yy.c`, `hh.h2`, `arr[0]`)
 - `:IpybridgeDebugFile` → debug the current file via `%debugfile`
+- `:IpybridgeRestart` → restart the kernel and refresh the IPython console
 - `:IpybridgeInterrupt` → send an interrupt signal to the connected kernel (Ctrl+C equivalent)
 - `:IpybridgePlots` → open the plot viewer (browser UI)
 - `:IpybridgePlotNext` → show the next captured plot
@@ -296,6 +300,7 @@ vim.api.nvim_create_autocmd('FileType', {
   pattern = 'python',
   callback = function()
     vim.keymap.set('n', '<leader>ti', ipybridge.toggle, { buffer = true })
+    vim.keymap.set('n', '<leader>ir', ipybridge.restart, { buffer = true })
     vim.keymap.set('n', '<leader>ii', ipybridge.goto_ipy, { buffer = true })
     vim.keymap.set('n', '<leader>iv', ipybridge.goto_vi,  { buffer = true })
     vim.keymap.set('n', '<leader><CR>', ipybridge.run_cell, { buffer = true })

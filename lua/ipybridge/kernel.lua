@@ -1,10 +1,11 @@
 -- Kernel management helpers.
 -- Launches a standalone IPython kernel, tracks its connection file, polls for
--- readiness, and exposes stop/ensure helpers to the rest of the plugin.
+-- readiness, and exposes stop/ensure helpers with a Windows-friendly shutdown.
 
 local uv = vim.uv
 local fn = vim.fn
 local py_module = require("ipybridge.py_module")
+local is_windows = uv.os_uname().sysname == "Windows_NT"
 
 local K = {
 	job = nil,
@@ -38,6 +39,34 @@ local function build_env()
 		return { PYTHONPATH = root .. sep .. current }
 	end
 	return { PYTHONPATH = root }
+end
+
+local function stop_job(job_id)
+	if not job_id then
+		return
+	end
+	pcall(fn.jobstop, job_id)
+	if type(fn.jobwait) ~= "function" then
+		return
+	end
+	local ok, result = pcall(fn.jobwait, { job_id }, 800)
+	if not ok or type(result) ~= "table" then
+		return
+	end
+	if result[1] ~= -1 or not is_windows then
+		return
+	end
+	if type(fn.jobpid) ~= "function" or type(fn.system) ~= "function" then
+		return
+	end
+	local pid = fn.jobpid(job_id)
+	if type(pid) == "table" then
+		pid = pid[1]
+	end
+	if type(pid) ~= "number" or pid <= 0 then
+		return
+	end
+	pcall(fn.system, { "taskkill", "/T", "/F", "/PID", tostring(pid) })
 end
 
 -- Ensure a standalone Jupyter kernel is running and return its connection file via callback.
@@ -97,7 +126,7 @@ end
 -- Stop the kernel job and clear connection info.
 function M.stop()
 	if K.job then
-		pcall(fn.jobstop, K.job)
+		stop_job(K.job)
 	end
 	K.job = nil
 	K.conn_file = nil

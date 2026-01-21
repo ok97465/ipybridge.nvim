@@ -33,6 +33,11 @@ local function fresh_client(env)
 			env.last_notify = { msg = msg, level = level }
 		end,
 		log = { levels = { WARN = "WARN" } },
+		uv = {
+			os_uname = function()
+				return env.os_uname or { sysname = "Linux" }
+			end,
+		},
 		schedule = function(fn)
 			fn()
 		end,
@@ -57,6 +62,18 @@ local function fresh_client(env)
 				if job_opts and job_opts.on_exit then
 					job_opts.on_exit(job)
 				end
+			end,
+			jobwait = function(jobs, timeout)
+				env.jobwait_args = { jobs = jobs, timeout = timeout }
+				return env.jobwait_result or { 0 }
+			end,
+			jobpid = function(job)
+				env.jobpid_arg = job
+				return env.jobpid_result or job
+			end,
+			system = function(cmd)
+				env.system_args = cmd
+				return env.system_result or ""
 			end,
 			chansend = function(job, payload)
 				env.sent = { job = job, payload = payload }
@@ -112,6 +129,20 @@ it("on_exit flushes pending callbacks with failure", function()
 	end)
 	env.job_opts.on_exit()
 	assert(fallback and fallback.ok == false, "pending callback not informed of exit")
+end)
+
+it("stop on windows kills lingering job", function()
+	local client, env = fresh_client({
+		job_id = 11,
+		os_uname = { sysname = "Windows_NT" },
+		jobwait_result = { -1 },
+		jobpid_result = 654,
+	})
+	client.start("python3", "/tmp/kernel.json", "/path/backend.py", false)
+	client.stop()
+	assert(env.system_args, "expected taskkill invocation")
+	assert(env.system_args[1] == "taskkill", "expected taskkill command")
+	assert(env.system_args[#env.system_args] == "654", "expected taskkill pid argument")
 end)
 
 local all_ok = true

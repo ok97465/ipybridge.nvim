@@ -513,7 +513,13 @@ it("open starts console and attaches breakpoint session", function()
 		"expected kernel.ensure to use default python"
 	)
 	assert(ctx.term_invocation, "TermIpy:new should be invoked")
-	assert(ctx.term_invocation.cmd:match("jupyter console --existing"), "expected jupyter console command")
+	local cmd = ctx.term_invocation.cmd
+	assert(type(cmd) == "table", "expected console command list")
+	assert(cmd[1] == "python3", "expected default python command")
+	assert(cmd[2] == "-m", "expected module execution")
+	assert(cmd[3] == "jupyter", "expected jupyter module")
+	assert(cmd[4] == "console", "expected console subcommand")
+	assert(cmd[5] == "--existing", "expected existing flag")
 	assert(ctx.term_invocation.cwd == ctx.cwd, "expected cwd to be forwarded")
 	local env = ctx.term_invocation.opts and ctx.term_invocation.opts.env or {}
 	assert(
