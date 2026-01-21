@@ -280,6 +280,7 @@ function Session:open(state, go_back, cb, opts)
 			on_exit = state._handle_term_exit,
 			win_id = opts.win_id,
 			cleanup_buf = opts.cleanup_buf,
+			winfixbuf = state.config.terminal_winfixbuf,
 		})
 
 		self:reset_state(state)
