@@ -29,6 +29,7 @@ end
 local function fresh_term(opts)
 	package.loaded["ipybridge.term_ipy"] = nil
 	local env = mock_vim.new()
+	local option_calls = {}
 	_G.vim = env.vim
 	vim.NIL = json.NIL
 	-- Provide minimal api/fn tables required by term_ipy
@@ -55,6 +56,9 @@ local function fresh_term(opts)
 		nvim_set_current_buf = function() end,
 		nvim_win_close = function() end,
 		nvim_chan_send = function() end,
+		nvim_set_option_value = function(name, value, opt)
+			table.insert(option_calls, { name = name, value = value, opts = opt })
+		end,
 	}
 	vim.json = {
 		decode = function(str)
@@ -68,6 +72,7 @@ local function fresh_term(opts)
 		end,
 	}
 	vim.cmd = function() end
+	env.option_calls = option_calls
 	local term_mod = require("ipybridge.term_ipy")
 	local term = term_mod.TermIpy:new("dummy", ".", opts)
 	return env, term
@@ -103,6 +108,20 @@ it("buffers partial OSC payload until complete", function()
 	assert(#seen == 1, "message not delivered after completion")
 	assert(seen[1].tag == "preview", "tag mismatch after completion")
 	assert(seen[1].data.ok == true, "payload mismatch after completion")
+end)
+
+it("enables winfixbuf when requested", function()
+	local env = fresh_term({ winfixbuf = true })
+	assert(#env.option_calls == 1, "expected winfixbuf to be set once")
+	local call = env.option_calls[1]
+	assert(call.name == "winfixbuf", "expected winfixbuf option")
+	assert(call.value == true, "expected winfixbuf enabled")
+	assert(type(call.opts) == "table" and call.opts.win == 1, "expected window-scoped option")
+end)
+
+it("skips winfixbuf when disabled", function()
+	local env = fresh_term()
+	assert(#env.option_calls == 0, "expected no window options when disabled")
 end)
 
 it("skips invalid JSON payloads with warning", function()

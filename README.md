@@ -82,6 +82,7 @@ require("ipybridge").setup({
         startup_script = "import_in_console.py", -- looked up in CWD
         sleep_ms_after_open = 1000,      -- defer init to allow IPython to start
         set_default_keymaps = true,      -- applies by default (can set false)
+        terminal_winfixbuf = false,      -- keep terminal window pinned to its buffer
 
         -- Matplotlib backend
         matplotlib_backend = nil,        -- e.g. 'qt', 'inline', 'macosx', 'tk', 'agg'
@@ -116,6 +117,7 @@ require("ipybridge").setup({
 - `startup_script` (string): If this file exists under current working directory, `ipython -i <startup_script>` is used.
 - `sleep_ms_after_open` (number): Milliseconds to wait (non-blocking) before running initial setup such as `%matplotlib` or `%load_ext autoreload`.
 - `set_default_keymaps` (boolean, default: `true`): Apply buffer-local keymaps for Python files only.
+- `terminal_winfixbuf` (boolean, default: `false`): Lock the terminal window to its buffer (`winfixbuf`) so `:edit` won't replace it.
 
 ### Additional options
 
@@ -141,6 +143,7 @@ require("ipybridge").setup({
   - `2`: Reload all modules automatically (except excluded); recommended default.
   - `'disable'`: Do not configure or enable autoreload.
 - `terminal_keymaps` (function|nil): Extra terminal-mode mappings appended after the defaults when the IPython console buffer opens. Provide a callback `function(set)` where `set(lhs, rhs, opts)` mirrors `vim.keymap.set` (mode/buffer handled automatically). Defaults for the terminal (`<leader>iv`, `<leader>ir`, `<Tab>`, `<C-c>` -> interrupt) are created only when `set_default_keymaps` is `true`.
+- `terminal_winfixbuf` (boolean): Prevent terminal window buffer replacement by enabling `winfixbuf`.
 
 
 ## API

@@ -235,6 +235,8 @@ M.config = {
 	autoreload = 2,
 	-- Extra terminal-mode keymaps applied after the IPython console buffer is created.
 	terminal_keymaps = nil,
+	-- Lock the terminal window to its buffer to prevent accidental replacement.
+	terminal_winfixbuf = false,
 	completion = {
 		engine_priority = vim.deepcopy(cmp_constants.default_engine_priority),
 	},
@@ -278,6 +280,7 @@ M.setup = function(config)
 			debugcell_save_before_run = { config.debugcell_save_before_run, "b", true },
 			debugfile_auto_imports = { config.debugfile_auto_imports, "s", true },
 			terminal_keymaps = { config.terminal_keymaps, "function", true },
+			terminal_winfixbuf = { config.terminal_winfixbuf, "b", true },
 			completion = { config.completion, "table", true },
 		})
 		if config.completion and config.completion.engine_priority ~= nil then

@@ -1,6 +1,7 @@
 -- Thin wrapper around a dedicated terminal buffer used to host IPython.
 -- Handles OSC parsing, split/window/bookkeeping, and message dispatch to the
 -- rest of the plugin, with optional reuse of an existing window on restart.
+-- Supports optional window pinning via 'winfixbuf' to prevent buffer replacement.
 -- Neovim 0.11+ is required by the plugin entry.
 -- This module assumes those APIs are available.
 local vim = vim
@@ -52,6 +53,7 @@ function TermIpy:new(cmd, cwd, opts)
 	opts = opts or {}
 	tb._on_message = opts.on_message or default_on_message
 	tb._env = opts.env
+	tb._winfixbuf = opts.winfixbuf == true
 	-- Allow callers to react when the terminal job terminates (e.g. user typed exit).
 	tb._on_exit = opts.on_exit
 	tb._on_stdout_chunk = opts.on_stdout_chunk or noop
@@ -120,6 +122,16 @@ function TermIpy:show()
 		vim.cmd(split_cmd)
 		self.win_id = api.nvim_get_current_win()
 		api.nvim_set_current_buf(self.buf_id)
+		self:__apply_window_options(self.win_id)
+	end
+end
+
+function TermIpy:__apply_window_options(win_id)
+	if not win_id or not api.nvim_win_is_valid(win_id) then
+		return
+	end
+	if self._winfixbuf then
+		api.nvim_set_option_value("winfixbuf", true, { win = win_id })
 	end
 end
 
@@ -171,6 +183,7 @@ function TermIpy:__spawn(cmd, cwd, opts)
 		self.win_id = api.nvim_get_current_win()
 		spawn_in_current()
 	end
+	self:__apply_window_options(self.win_id)
 	self:__cleanup_buffer(cleanup_buf)
 end
 
