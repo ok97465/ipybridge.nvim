@@ -252,7 +252,9 @@ end
 ---@param state table
 ---@param go_back boolean|nil
 ---@param cb function|nil
-function Session:open(state, go_back, cb)
+---@param opts table|nil
+function Session:open(state, go_back, cb, opts)
+	opts = opts or {}
 	local cwd = self.fn.getcwd()
 	local python_cmd = state.config.python_cmd
 	local core_deps = { "ipykernel", "jupyter_client", "ipython", "jupyter_console" }
@@ -276,6 +278,8 @@ function Session:open(state, go_back, cb)
 			on_stdout_chunk = self.observe_terminal_chunk,
 			env = env,
 			on_exit = state._handle_term_exit,
+			win_id = opts.win_id,
+			cleanup_buf = opts.cleanup_buf,
 		})
 
 		self:reset_state(state)

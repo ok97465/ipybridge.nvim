@@ -566,6 +566,11 @@ M.toggle = function()
 	terminal_controller:toggle()
 end
 
+---Restart the IPython terminal and kernel.
+M.restart = function()
+	terminal_controller:restart()
+end
+
 ---Jump to the IPython terminal split and enter insert mode.
 M.goto_ipy = function()
 	terminal_controller:goto_ipy()

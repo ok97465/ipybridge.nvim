@@ -1,6 +1,6 @@
 -- Thin wrapper around a dedicated terminal buffer used to host IPython.
 -- Handles OSC parsing, split/window/bookkeeping, and message dispatch to the
--- rest of the plugin.
+-- rest of the plugin, with optional reuse of an existing window on restart.
 -- Neovim 0.11+ is required by the plugin entry.
 -- This module assumes those APIs are available.
 local vim = vim
@@ -25,16 +25,18 @@ local split_cmd = "botright vsplit"
 
 local function __handle_exit(term)
 	return function(job_id, code, event)
-		if term:isshow() then
+		local keep_window = term._preserve_window == true
+		if term:isshow() and not keep_window then
 			api.nvim_win_close(term.win_id, true)
 		end
 		term:stopinsert()
-		if term.buf_id and api.nvim_buf_is_loaded(term.buf_id) then
+		if term.buf_id and api.nvim_buf_is_loaded(term.buf_id) and not keep_window then
 			api.nvim_buf_delete(term.buf_id, { force = true })
 		end
 		term.buf_id = nil
 		term.win_id = nil
 		term.job_id = nil
+		term._preserve_window = nil
 		local cb = term._on_exit
 		if type(cb) == "function" then
 			-- Defer to main loop so plugin cleanup runs outside termopen callback.
@@ -59,8 +61,13 @@ function TermIpy:new(cmd, cwd, opts)
 			tb:_handle_hidden_message(tag, payload)
 		end,
 	})
-	tb:__spawn(cmd, cwd)
+	tb:__spawn(cmd, cwd, opts)
 	return tb
+end
+
+---Mark the terminal instance to preserve its window/buffer on restart.
+function TermIpy:prepare_restart()
+	self._preserve_window = true
 end
 
 function TermIpy:_handle_hidden_message(tag, payload)
@@ -116,32 +123,55 @@ function TermIpy:show()
 	end
 end
 
-function TermIpy:__spawn(cmd, cwd)
+function TermIpy:__cleanup_buffer(buf_id)
+	if not buf_id or buf_id == self.buf_id then
+		return
+	end
+	if api.nvim_buf_is_loaded(buf_id) then
+		api.nvim_buf_delete(buf_id, { force = true })
+	end
+end
+
+function TermIpy:__spawn(cmd, cwd, opts)
 	-- Create a split, attach a scratch buffer, and launch terminal job.
-	vim.cmd(split_cmd)
-	self.win_id = api.nvim_get_current_win()
-	self.buf_id = api.nvim_create_buf(false, false)
-	api.nvim_set_current_buf(self.buf_id)
+	opts = opts or {}
+	local target_win = opts.win_id
+	local cleanup_buf = opts.cleanup_buf
 	local this = self
-	self.job_id = fn.termopen(cmd, {
-		detach = false,
-		cwd = cwd,
-		env = self._env,
-		on_exit = __handle_exit(self),
-		on_stdout = function(job_id, data, event)
-			-- Forward to instance parser. `data` is an array of lines.
-			if not data then
-				return
-			end
-			this:__on_stdout(data)
-		end,
-		on_stderr = function(job_id, data, event)
-			if not data then
-				return
-			end
-			this:__on_stdout(data)
-		end,
-	})
+	local function spawn_in_current()
+		self.buf_id = api.nvim_create_buf(false, false)
+		api.nvim_set_current_buf(self.buf_id)
+		self.job_id = fn.termopen(cmd, {
+			detach = false,
+			cwd = cwd,
+			env = self._env,
+			on_exit = __handle_exit(self),
+			on_stdout = function(job_id, data, event)
+				-- Forward to instance parser. `data` is an array of lines.
+				if not data then
+					return
+				end
+				this:__on_stdout(data)
+			end,
+			on_stderr = function(job_id, data, event)
+				if not data then
+					return
+				end
+				this:__on_stdout(data)
+			end,
+		})
+	end
+	if target_win and api.nvim_win_is_valid(target_win) then
+		self.win_id = target_win
+		api.nvim_win_call(target_win, function()
+			spawn_in_current()
+		end)
+	else
+		vim.cmd(split_cmd)
+		self.win_id = api.nvim_get_current_win()
+		spawn_in_current()
+	end
+	self:__cleanup_buffer(cleanup_buf)
 end
 
 function TermIpy:__notify_stdout(text)

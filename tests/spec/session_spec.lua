@@ -70,6 +70,7 @@ local function base_deps()
 			if not my then
 				my = {
 					goto_vi = function() end,
+					restart = function() end,
 					run_file = function() end,
 					debug_file = function() end,
 					quit_debug = function() end,
@@ -89,6 +90,7 @@ local function base_deps()
 			map("<Tab>", opts.handle_tab, "IPy: Debug completion trigger")
 			map("<C-c>", opts.interrupt, "IPy: Keyboard interrupt")
 			map("<leader>iv", my.goto_vi, "IPy: Back to editor")
+			map("<leader>ir", my.restart, "IPy: Restart kernel")
 			map("<F5>", my.run_file, "IPy: Run file (%run)")
 			map("<F6>", my.debug_file, "IPy: Debug file (%debugfile)")
 			map("<S-F6>", my.quit_debug, "IPy: Quit debugger (!exit)")
@@ -241,7 +243,13 @@ it("build_console_env merges pythonpath on Windows", function()
 		},
 	}
 	local cmd, env = session:build_console_env(state, "conn.json")
-	assert(not cmd:find("--simple-prompt", 1, true), "simple prompt flag should not be set")
+	assert(type(cmd) == "table", "console command should be a list")
+	assert(cmd[1] == "python3", "expected default python command")
+	assert(cmd[2] == "-m", "expected module execution")
+	assert(cmd[3] == "jupyter", "expected jupyter module")
+	assert(cmd[4] == "console", "expected console subcommand")
+	assert(cmd[5] == "--existing", "expected existing flag")
+	assert(cmd[6] == "conn.json", "expected connection file")
 	assert(env.IPYBRIDGE_BREAKPOINT_FILE == "C:\\tmp\\breakpoints.json", "breakpoint file missing")
 	assert(
 		env.PYTHONPATH == "C:\\helpers;C:\\existing",
@@ -264,7 +272,9 @@ it("build_console_env sets pythonpath when missing on posix", function()
 		},
 	}
 	local cmd, env = session:build_console_env(state, "/tmp/conn.json")
-	assert(cmd:find("/tmp/conn.json", 1, true), "connection file not in command")
+	assert(type(cmd) == "table", "console command should be a list")
+	assert(cmd[1] == "python3", "expected default python command")
+	assert(cmd[6] == "/tmp/conn.json", "expected connection file")
 	assert(
 		env.PYTHONPATH == "/opt/ipybridge",
 		string.format("pythonpath should be set to helper root, got %s", tostring(env.PYTHONPATH))
@@ -288,6 +298,7 @@ it("setup_terminal_keymaps applies defaults and custom mappings", function()
 	local cmp_calls = 0
 	local stub_module = {
 		goto_vi = function() end,
+		restart = function() end,
 		run_file = function() end,
 		debug_file = function() end,
 		quit_debug = function() end,
@@ -337,6 +348,11 @@ it("setup_terminal_keymaps applies defaults and custom mappings", function()
 	assert(
 		seen["<leader>iv"].rhs == stub_module.goto_vi,
 		"default <leader>iv should use ipybridge goto_vi"
+	)
+	assert(seen["<leader>ir"], "default <leader>ir mapping missing")
+	assert(
+		seen["<leader>ir"].rhs == stub_module.restart,
+		"default <leader>ir should use ipybridge restart"
 	)
 	local ctrl_c = seen["<C-c>"]
 	assert(ctrl_c, "default <C-c> mapping missing")
@@ -401,6 +417,7 @@ it("setup_terminal_keymaps skips defaults when disabled", function()
 	end
 	assert(seen["<C-x>"], "custom map should be applied when defaults disabled")
 	assert(not seen["<leader>iv"], "default <leader>iv should not be applied when disabled")
+	assert(not seen["<leader>ir"], "default <leader>ir should not be applied when disabled")
 	assert(not seen["<Tab>"], "default <Tab> should not be applied when disabled")
 	assert(not seen["<C-c>"], "default <C-c> should not be applied when disabled")
 	assert(not seen["<F5>"], "default <F5> should not be applied when disabled")

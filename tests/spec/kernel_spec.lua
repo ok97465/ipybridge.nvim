@@ -45,6 +45,9 @@ local function fake_vim(env)
 		new_timer = function()
 			return timer
 		end,
+		os_uname = function()
+			return env.os_uname or { sysname = "Linux" }
+		end,
 	}
 	local fn = {
 		tempname = function()
@@ -59,6 +62,18 @@ local function fake_vim(env)
 		end,
 		jobstop = function(job)
 			env.stopped = job
+		end,
+		jobwait = function(jobs, timeout)
+			env.jobwait_args = { jobs = jobs, timeout = timeout }
+			return env.jobwait_result or { 0 }
+		end,
+		jobpid = function(job)
+			env.jobpid_arg = job
+			return env.jobpid_result or job
+		end,
+		system = function(cmd)
+			env.system_args = cmd
+			return env.system_result or ""
 		end,
 	}
 	local function schedule_wrap(cb)
@@ -139,6 +154,20 @@ it("stop terminates job and clears state", function()
 		assert(ok, "kernel should start again after stop")
 	end)
 	env.tick()
+end)
+
+it("stop on windows kills lingering job", function()
+	local env = {
+		os_uname = { sysname = "Windows_NT" },
+		jobwait_result = { -1 },
+		jobpid_result = 321,
+	}
+	local kernel = fresh_kernel(env)
+	kernel.ensure("python3", function() end)
+	kernel.stop()
+	assert(env.system_args, "expected taskkill invocation")
+	assert(env.system_args[1] == "taskkill", "expected taskkill command")
+	assert(env.system_args[#env.system_args] == "321", "expected taskkill pid argument")
 end)
 
 local all_ok = true

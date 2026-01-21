@@ -3,6 +3,8 @@
 -- routes responses back to Lua callbacks with basic supervision/error handling.
 
 local fn = vim.fn
+local uv = vim.uv or vim.loop
+local is_windows = uv and uv.os_uname and uv.os_uname().sysname == "Windows_NT"
 
 local WARNING = vim.log.levels.WARN
 
@@ -10,6 +12,34 @@ local function notify_once(message)
 	vim.schedule(function()
 		vim.notify("[ipybridge.zmq] " .. message, WARNING)
 	end)
+end
+
+local function stop_job(job_id)
+	if not job_id then
+		return
+	end
+	pcall(fn.jobstop, job_id)
+	if type(fn.jobwait) ~= "function" then
+		return
+	end
+	local ok, result = pcall(fn.jobwait, { job_id }, 800)
+	if not ok or type(result) ~= "table" then
+		return
+	end
+	if result[1] ~= -1 or not is_windows then
+		return
+	end
+	if type(fn.jobpid) ~= "function" or type(fn.system) ~= "function" then
+		return
+	end
+	local pid = fn.jobpid(job_id)
+	if type(pid) == "table" then
+		pid = pid[1]
+	end
+	if type(pid) ~= "number" or pid <= 0 then
+		return
+	end
+	pcall(fn.system, { "taskkill", "/T", "/F", "/PID", tostring(pid) })
 end
 
 -- Maintain buffered stdout data until full JSON lines are available.
@@ -134,7 +164,7 @@ end
 
 function Client:stop()
 	if self.job_id then
-		pcall(fn.jobstop, self.job_id)
+		stop_job(self.job_id)
 	end
 	self:_on_exit()
 end
