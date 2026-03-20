@@ -1,7 +1,8 @@
 -- Breakpoint management for ipybridge.nvim.
--- Keeps an in-memory map, renders sign markers, registers one shared JSON file
--- under stdpath('data')/ipybridge/breakpoints.json, and syncs that file with
--- the kernel helper so breakpoints survive Neovim restarts.
+-- Keeps an in-memory map, renders sign markers, coordinates overlap with the
+-- active debug line, registers one shared JSON file under
+-- stdpath('data')/ipybridge/breakpoints.json, and syncs that file with the
+-- kernel helper so breakpoints survive Neovim restarts.
 
 local vim = vim
 local api = vim.api
@@ -29,10 +30,12 @@ local state = {
 	exec = nil,
 	is_term_open = nil,
 	condition_input = nil,
+	debug_overlay = nil,
 }
 
 local ensure_file
 local load_from_disk
+local refresh_signs_for
 
 local function warn_user(message)
 	if not message then
@@ -252,6 +255,58 @@ local function normalize_path(path)
 	return abs:gsub("\\", "/")
 end
 
+local function get_line_metadata(bufnr, line)
+	if type(bufnr) ~= "number" or type(line) ~= "number" or line < 1 then
+		return nil
+	end
+	if not api.nvim_buf_is_valid(bufnr) then
+		return nil
+	end
+	local norm = normalize_path(api.nvim_buf_get_name(bufnr))
+	if not norm then
+		return nil
+	end
+	local entry = state.map[norm]
+	if type(entry) ~= "table" then
+		return nil
+	end
+	local meta = entry[line]
+	if type(meta) ~= "table" then
+		return nil
+	end
+	return meta
+end
+
+local function line_sign_kind(bufnr, line)
+	local meta = get_line_metadata(bufnr, line)
+	if not meta then
+		return nil
+	end
+	if entry_condition(meta) then
+		return "conditional"
+	end
+	return "breakpoint"
+end
+
+local function overlay_matches(bufnr, line)
+	local overlay = state.debug_overlay
+	if type(overlay) ~= "table" then
+		return false
+	end
+	return overlay.bufnr == bufnr and overlay.line == line
+end
+
+local function refresh_overlay_buffers(previous, current)
+	local seen = {}
+	for _, location in ipairs({ previous, current }) do
+		local bufnr = type(location) == "table" and location.bufnr or nil
+		if type(bufnr) == "number" and not seen[bufnr] then
+			seen[bufnr] = true
+			refresh_signs_for(bufnr)
+		end
+	end
+end
+
 local function resolve_default_path()
 	local ok_data, data_dir = pcall(fn.stdpath, "data")
 	if not ok_data or type(data_dir) ~= "string" or data_dir == "" then
@@ -328,7 +383,7 @@ function Breakpoints.ensure_support()
 	ensure_breakpoint_support()
 end
 
-local function refresh_signs_for(bufnr)
+refresh_signs_for = function(bufnr)
 	if not bufnr or not api.nvim_buf_is_loaded(bufnr) then
 		return
 	end
@@ -367,14 +422,16 @@ local function refresh_signs_for(bufnr)
 		return a.line < b.line
 	end)
 	for _, item in ipairs(items) do
-		state.seq = state.seq + 1
-		local id = state.seq
-		local sign_name = entry_condition(item.meta) and BP_CONDITIONAL_SIGN_NAME or BP_SIGN_NAME
-		vim.fn.sign_place(id, BP_SIGN_GROUP, sign_name, bufnr, {
-			lnum = item.line,
-			priority = 80,
-		})
-		state.signs[bufnr][item.line] = { id = id, sign = sign_name }
+		if not overlay_matches(bufnr, item.line) then
+			state.seq = state.seq + 1
+			local id = state.seq
+			local sign_name = entry_condition(item.meta) and BP_CONDITIONAL_SIGN_NAME or BP_SIGN_NAME
+			vim.fn.sign_place(id, BP_SIGN_GROUP, sign_name, bufnr, {
+				lnum = item.line,
+				priority = 80,
+			})
+			state.signs[bufnr][item.line] = { id = id, sign = sign_name }
+		end
 	end
 end
 
@@ -481,6 +538,33 @@ function Breakpoints.get_file_path()
 	return ensure_file()
 end
 
+function Breakpoints.get_line_sign_kind(bufnr, line)
+	return line_sign_kind(bufnr, line)
+end
+
+function Breakpoints.show_debug_overlay(bufnr, line)
+	ensure_breakpoint_support()
+	if type(bufnr) ~= "number" or type(line) ~= "number" or line < 1 then
+		Breakpoints.clear_debug_overlay()
+		return
+	end
+	local previous = state.debug_overlay
+	if overlay_matches(bufnr, line) then
+		return
+	end
+	state.debug_overlay = { bufnr = bufnr, line = line }
+	refresh_overlay_buffers(previous, state.debug_overlay)
+end
+
+function Breakpoints.clear_debug_overlay()
+	local previous = state.debug_overlay
+	if not previous then
+		return
+	end
+	state.debug_overlay = nil
+	refresh_overlay_buffers(previous, nil)
+end
+
 function Breakpoints.attach_session(opts)
 	state.exec = opts and opts.exec or nil
 	state.is_term_open = opts and opts.is_term_open or nil
@@ -490,6 +574,7 @@ function Breakpoints.attach_session(opts)
 end
 
 function Breakpoints.detach_session()
+	Breakpoints.clear_debug_overlay()
 	state.exec = nil
 	state.is_term_open = nil
 	state.registered = false
@@ -663,6 +748,7 @@ function Breakpoints.on_session_close()
 	if state.file_path then
 		pcall(os.remove, state.file_path)
 	end
+	state.debug_overlay = nil
 	state.file_path = nil
 	state.signature = nil
 	state.needs_sync = false

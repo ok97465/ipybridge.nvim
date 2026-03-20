@@ -1,13 +1,26 @@
 -- Manages the sign shown for the current debug line inside tracked buffers.
--- Encapsulates sign definition, placement, and temporary signcolumn tweaks.
+-- Encapsulates composite sign variants and temporary signcolumn tweaks.
 local vim = vim
 local api = vim.api
 local fn = vim.fn
 
 local SIGN_GROUP = "IpybridgeDebugLine"
-local SIGN_NAME = "IpybridgeDebugArrow"
 local SIGN_ID = 90210
 local DEBUG_SIGNCOLUMN = "yes:3"
+local SIGN_VARIANTS = {
+	default = {
+		name = "IpybridgeDebugArrow",
+		text = "=>",
+	},
+	breakpoint = {
+		name = "IpybridgeDebugArrowBreakpoint",
+		text = ">B",
+	},
+	conditional = {
+		name = "IpybridgeDebugArrowConditionalBreakpoint",
+		text = ">?",
+	},
+}
 
 local state = {
 	defined = false,
@@ -23,7 +36,19 @@ local function ensure_defined()
 	end
 	state.defined = true
 	pcall(api.nvim_set_hl, 0, "IpybridgeDebugArrow", { default = true, link = "DiagnosticHint" })
-	pcall(fn.sign_define, SIGN_NAME, { text = "=>", texthl = "IpybridgeDebugArrow", numhl = "" })
+	for _, variant in pairs(SIGN_VARIANTS) do
+		pcall(fn.sign_define, variant.name, {
+			text = variant.text,
+			texthl = "IpybridgeDebugArrow",
+			numhl = "",
+		})
+	end
+end
+
+local function resolve_sign_name(opts)
+	opts = type(opts) == "table" and opts or {}
+	local variant = SIGN_VARIANTS[opts.breakpoint_kind] or SIGN_VARIANTS.default
+	return variant.name
 end
 
 local function ensure_signcolumn(win)
@@ -47,14 +72,15 @@ end
 
 local M = {}
 
-function M.place(bufnr, lnum, win)
+function M.place(bufnr, lnum, win, opts)
 	if type(bufnr) ~= "number" or type(lnum) ~= "number" then
 		return
 	end
 	ensure_defined()
 	ensure_signcolumn(win)
 	pcall(fn.sign_unplace, SIGN_GROUP)
-	local ok = pcall(fn.sign_place, SIGN_ID, SIGN_GROUP, SIGN_NAME, bufnr, {
+	local sign_name = resolve_sign_name(opts)
+	local ok = pcall(fn.sign_place, SIGN_ID, SIGN_GROUP, sign_name, bufnr, {
 		lnum = lnum,
 		priority = 100,
 	})

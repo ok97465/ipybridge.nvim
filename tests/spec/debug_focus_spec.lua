@@ -168,6 +168,8 @@ it("restores terminal focus after debugger jumps from terminal window", function
 	with_debug_env(function(ctx)
 		local vars_pushed = false
 		local sign_places = 0
+		local overlay_calls = {}
+		local received_breakpoint_kind = nil
 		local debugger = ctx.Debug.new({
 			state = ctx.state,
 			cmp_bridge = {
@@ -179,8 +181,9 @@ it("restores terminal focus after debugger jumps from terminal window", function
 				end,
 			},
 			debug_sign = {
-				place = function()
+				place = function(_, _, _, opts)
 					sign_places = sign_places + 1
+					received_breakpoint_kind = opts and opts.breakpoint_kind or nil
 				end,
 				clear = function() end,
 			},
@@ -193,6 +196,13 @@ it("restores terminal focus after debugger jumps from terminal window", function
 				end,
 			},
 			normalize_path = ctx.normalize_path,
+			lookup_breakpoint_kind = function(bufnr, line)
+				table.insert(overlay_calls, { kind = "lookup", bufnr = bufnr, line = line })
+				return "breakpoint"
+			end,
+			show_debug_overlay = function(bufnr, line)
+				table.insert(overlay_calls, { kind = "show", bufnr = bufnr, line = line })
+			end,
 			warn_user = function() end,
 			fn = {
 				bufadd = function()
@@ -221,6 +231,9 @@ it("restores terminal focus after debugger jumps from terminal window", function
 		expect(ctx.state._latest_vars.value.repr == "1", "latest vars should reflect current scope")
 		expect(vars_pushed, "variable explorer should receive updated scope")
 		expect(sign_places == 1, "debug sign should be placed once")
+		expect(received_breakpoint_kind == "breakpoint", "debug sign should receive overlapping breakpoint kind")
+		expect(overlay_calls[1] and overlay_calls[1].kind == "lookup", "debug flow should inspect breakpoint state first")
+		expect(overlay_calls[2] and overlay_calls[2].kind == "show", "debug flow should mark the active debug overlay")
 		expect(ctx.set_current_history[1] == ctx.code_win, "should visit code window first")
 		expect(ctx.set_current_history[#ctx.set_current_history] == ctx.term_win, "final focus should return to terminal")
 		expect(ctx.current_win == ctx.term_win, "terminal should regain focus")

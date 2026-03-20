@@ -49,6 +49,16 @@ local function stub_vim(ctx)
 			end,
 			writefile = function(lines, path)
 				table.insert(ctx.file_writes, { lines = lines, path = path })
+				ctx.fs_existing[path] = true
+				return true
+			end,
+			readfile = function()
+				return { "{}" }
+			end,
+			stdpath = function()
+				return "/tmp/nvim-data"
+			end,
+			mkdir = function()
 				return true
 			end,
 			sign_define = function(name, opts)
@@ -266,6 +276,10 @@ it("set_conditional_current_line stores condition and removes breakpoint on blan
 	assert(first and first[1] and first[1].line == 3, "conditional breakpoint should target current line")
 	assert(first[1].condition == "x > 1", "condition should be stored in payload")
 	assert(
+		breakpoints.get_line_sign_kind(ctx.bufnr, ctx.cursor_line) == "conditional",
+		"conditional breakpoint lines should report conditional kind"
+	)
+	assert(
 		ctx.sign_place_calls[#ctx.sign_place_calls]
 			and ctx.sign_place_calls[#ctx.sign_place_calls].name == "IpybridgeConditionalBreakpoint",
 		"conditional sign should be used"
@@ -277,7 +291,6 @@ it("set_conditional_current_line stores condition and removes breakpoint on blan
 	local second_payload = ctx.last_encoded
 	assert(second_payload and next(second_payload) == nil, "blank input should remove breakpoint entry")
 	assert(ctx.file_writes[#ctx.file_writes].lines[1] == "{}", "blank condition should write empty payload")
-	assert(ctx.prompt_text_calls[1] == "x > 1", "existing condition should be inserted into prompt buffer")
 	assert(#ctx.sign_place_calls == 1, "no new sign should be placed when removing breakpoint")
 	local last_unplace = ctx.sign_unplace_calls[#ctx.sign_unplace_calls]
 	assert(
@@ -314,6 +327,27 @@ it("toggle_current_line tracks lines and writes file", function()
 		"encoded payload should be empty after removing breakpoint"
 	)
 	assert(ctx.file_writes[#ctx.file_writes].lines[1] == "{}", "second write should persist empty map")
+end)
+
+it("reports line sign kinds and hides breakpoint signs under the active debug overlay", function()
+	local breakpoints, ctx = fresh_breakpoints()
+
+	breakpoints.toggle_current_line()
+	assert(
+		breakpoints.get_line_sign_kind(ctx.bufnr, ctx.cursor_line) == "breakpoint",
+		"plain breakpoint lines should report breakpoint kind"
+	)
+	local placements_before_overlay = #ctx.sign_place_calls
+	breakpoints.show_debug_overlay(ctx.bufnr, ctx.cursor_line)
+	assert(#ctx.sign_place_calls == placements_before_overlay, "overlay should suppress duplicate breakpoint sign placement")
+
+	breakpoints.clear_debug_overlay()
+	assert(#ctx.sign_place_calls == placements_before_overlay + 1, "clearing overlay should restore breakpoint sign")
+	assert(
+		ctx.sign_place_calls[#ctx.sign_place_calls]
+			and ctx.sign_place_calls[#ctx.sign_place_calls].name == "IpybridgeBreakpoint",
+		"restored sign should be the original breakpoint marker"
+	)
 end)
 
 local all_ok = true

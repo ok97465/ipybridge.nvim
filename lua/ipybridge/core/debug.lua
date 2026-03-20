@@ -10,6 +10,11 @@ function Debug.new(ctx)
 	local debug_sign = assert(ctx.debug_sign, "debug: debug_sign is required")
 	local debug_vars = assert(ctx.debug_vars, "debug: debug_vars is required")
 	local normalize_path = assert(ctx.normalize_path, "debug: normalize_path is required")
+	local lookup_breakpoint_kind = ctx.lookup_breakpoint_kind or function()
+		return nil
+	end
+	local show_debug_overlay = ctx.show_debug_overlay or function() end
+	local clear_debug_overlay = ctx.clear_debug_overlay or function() end
 	local warn_user = ctx.warn_user or function() end
 	local fn = ctx.fn or vim.fn
 	local is_open = ctx.is_open or function()
@@ -50,6 +55,7 @@ function Debug.new(ctx)
 		state._debug_active = false
 		state._debug_status_active = false
 		state._debug_window = nil
+		clear_debug_overlay()
 		debug_sign.clear({ restore_signcolumn = restore_signcolumn })
 		prompt_buffer = ""
 	end
@@ -201,6 +207,7 @@ function Debug.new(ctx)
 		end
 		line = clamp_cursor_line(bufnr, line)
 		local col = calc_column_from_source(info.source)
+		local breakpoint_kind = lookup_breakpoint_kind(bufnr, line)
 		local preferred = state._debug_window
 		if preferred and (not vim.api.nvim_win_is_valid(preferred) or is_ipybridge_terminal(preferred)) then
 			preferred = nil
@@ -245,7 +252,8 @@ function Debug.new(ctx)
 			pcall(vim.cmd, "normal! zv")
 			pcall(vim.cmd, "normal! zz")
 		end)
-		debug_sign.place(bufnr, line, target_win)
+		show_debug_overlay(bufnr, line)
+		debug_sign.place(bufnr, line, target_win, { breakpoint_kind = breakpoint_kind })
 		state._debug_window = target_win
 		local was_debug = state._debug_active
 		state._debug_active = true
