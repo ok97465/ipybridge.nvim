@@ -179,6 +179,7 @@ require("ipybridge").setup({
 - `require('ipybridge').debug_step_out()` — Issue `return`.
 - `require('ipybridge').debug_continue()` — Resume execution and hide debugger UI.
 - `require('ipybridge').quit_debug()` — Exit ipdb and restore the terminal to normal mode.
+- `require('ipybridge').goto_debug_location()` — Jump back to the current debugger stop location.
 - `require('ipybridge').toggle_breakpoint()` — Toggle a breakpoint on the current line.
 - `require('ipybridge').set_conditional_breakpoint()` — Prompt for a condition before adding a breakpoint.
 
@@ -222,6 +223,7 @@ require("ipybridge").setup({
 ## Debugger
 
 - `<leader>b` toggles a breakpoint.
+- `<leader>id` or `:IpybridgeDebugHere` jumps back to the current debugger stop line from any buffer.
 - The helper pumps the Qt event loop while the debugger waits, so Matplotlib (Qt backends) stays interactive without manual `plt.pause()` calls.
 - Default shortcuts:
   - `F6` → launch `%debugfile` for the active buffer
@@ -264,6 +266,7 @@ require("ipybridge").setup({
 ### IPython terminal
 - `<Tab>` → trigger debugger completion hints inside `ipdb`
 - `<C-c>` → send an interrupt to the kernel
+- `<leader>id` → jump to the current debugger stop line
 - `<leader>iv` → leave terminal-mode and jump back to the previous window
 - `<leader>ir` → restart kernel
 - `Shift+F6` → exit debugger (`!exit`)
@@ -274,6 +277,7 @@ require("ipybridge").setup({
 - `<leader>vx` → open variable explorer
 
 ### Global
+- `<leader>id` → jump to the current debugger stop line from any buffer
 - `<leader>iv` → back to editor (works anywhere; exits terminal and jumps back)
 - `<leader>vx` → open variable explorer from any buffer
 - `<leader>vr` → refresh variables from any buffer
@@ -283,6 +287,7 @@ require("ipybridge").setup({
 - `<leader>pc` → clear the plot history
 
 ### User Commands
+- `:IpybridgeDebugHere` → jump to the current debugger stop line
 - `:IpybridgeVars` → open variable explorer
 - `:IpybridgeVarsRefresh` → refresh variables
 - `:IpybridgePreview <name>` → open preview for a variable or path (supports dotted/indexed paths, e.g., `yy.b`, `yy.c`, `hh.h2`, `arr[0]`)
@@ -299,6 +304,8 @@ require("ipybridge").setup({
 ## Manual Mappings Example
 ```lua
 local ipybridge = require('ipybridge')
+vim.keymap.set('n', '<leader>id', ipybridge.goto_debug_location)
+
 vim.api.nvim_create_autocmd('FileType', {
   pattern = 'python',
   callback = function()
@@ -334,6 +341,7 @@ require('ipybridge').setup({
   terminal_keymaps = function(set)
     local ipy = require('ipybridge')
     set('<C-c>', ipy.interrupt, { desc = 'IPy: Keyboard interrupt' })
+    set('<leader>id', ipy.goto_debug_location, { desc = 'IPy: Jump to current debug line' })
     set('<leader>iv', ipy.goto_vi, { desc = 'IPy: Back to editor' })
   end,
 })

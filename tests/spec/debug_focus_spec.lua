@@ -39,6 +39,7 @@ local function with_debug_env(run)
 		term_buf = 91,
 		code_buf = 42,
 		current_win = 1,
+		notifications = {},
 		windows = {},
 		set_current_history = {},
 		scroll_calls = 0,
@@ -115,7 +116,9 @@ local function with_debug_env(run)
 			cb()
 		end,
 		cmd = function() end,
-		notify = function() end,
+		notify = function(message, level)
+			table.insert(env.notifications, { message = message, level = level })
+		end,
 		log = {
 			levels = {
 				WARN = "WARN",
@@ -226,6 +229,7 @@ it("restores terminal focus after debugger jumps from terminal window", function
 		expect(ctx.bufadd_called, "bufadd should be invoked for debug file")
 		expect(ctx.bufload_called, "bufload should be invoked for debug file")
 		expect(ctx.state._debug_window == ctx.code_win, "debug window should track code split")
+		expect(ctx.state._debug_location and ctx.state._debug_location.file == "/tmp/example.py", "debug location should be stored")
 		expect(ctx.state._debug_scope == "locals", "debug scope should prefer locals when stepping into a function")
 		expect(ctx.state._debug_active, "debug state should remain active")
 		expect(ctx.state._latest_vars.value.repr == "1", "latest vars should reflect current scope")
@@ -240,6 +244,120 @@ it("restores terminal focus after debugger jumps from terminal window", function
 		expect(ctx.scroll_calls == 1, "terminal should scroll after restore")
 		expect(ctx.insert_calls == 1, "terminal should re-enter insert mode")
 		expect(ctx.schedule_calls == 1, "restore handler should be scheduled once")
+	end)
+end)
+
+it("jumps back to the stored debug location from another window", function()
+	with_debug_env(function(ctx)
+		ctx.other_win = 3
+		ctx.windows[ctx.other_win] = { buf = 77, valid = true }
+		ctx.current_win = ctx.other_win
+		local sign_places = 0
+		local overlay_calls = {}
+		local debugger = ctx.Debug.new({
+			state = ctx.state,
+			cmp_bridge = {
+				ensure = function()
+					return true
+				end,
+				trigger = function()
+					return true
+				end,
+			},
+			debug_sign = {
+				place = function()
+					sign_places = sign_places + 1
+				end,
+				clear = function() end,
+			},
+			debug_vars = {
+				current_scope = function()
+					return {}
+				end,
+				push_to_explorer = function() end,
+			},
+			normalize_path = ctx.normalize_path,
+			show_debug_overlay = function(bufnr, line)
+				table.insert(overlay_calls, { bufnr = bufnr, line = line })
+			end,
+			warn_user = function(message)
+				table.insert(ctx.notifications, { message = message, level = "WARN" })
+			end,
+			fn = {
+				bufadd = function()
+					ctx.bufadd_called = true
+					return ctx.code_buf
+				end,
+				bufload = function()
+					ctx.bufload_called = true
+				end,
+			},
+			is_open = ctx.is_open,
+		})
+
+		ctx.state._debug_active = true
+		ctx.state._debug_location = {
+			file = "/tmp/example.py",
+			line = 24,
+			col = 3,
+		}
+
+		local ok = debugger.goto_current_location()
+
+		expect(ok == true, "stored debug location should be focusable")
+		expect(ctx.current_win == ctx.code_win, "focus should move to the code window")
+		expect(ctx.state._debug_window == ctx.code_win, "debug window should update after manual jump")
+		expect(ctx.state._debug_location and ctx.state._debug_location.line == 24, "stored location should remain current")
+		expect(sign_places == 1, "manual jump should redraw the debug sign")
+		expect(overlay_calls[1] and overlay_calls[1].line == 24, "manual jump should refresh the debug overlay")
+		expect(ctx.schedule_calls == 0, "manual jump should not restore terminal focus")
+		expect(#ctx.notifications == 0, "manual jump should not warn when location exists")
+	end)
+end)
+
+it("warns when no current debug location is available", function()
+	with_debug_env(function(ctx)
+		local debugger = ctx.Debug.new({
+			state = ctx.state,
+			cmp_bridge = {
+				ensure = function()
+					return true
+				end,
+				trigger = function()
+					return true
+				end,
+			},
+			debug_sign = {
+				place = function() end,
+				clear = function() end,
+			},
+			debug_vars = {
+				current_scope = function()
+					return {}
+				end,
+				push_to_explorer = function() end,
+			},
+			normalize_path = ctx.normalize_path,
+			warn_user = function(message)
+				table.insert(ctx.notifications, { message = message, level = "WARN" })
+			end,
+			fn = {
+				bufadd = function()
+					return ctx.code_buf
+				end,
+				bufload = function() end,
+			},
+			is_open = ctx.is_open,
+		})
+
+		local ok = debugger.goto_current_location()
+
+		expect(ok == false, "jump should fail without a stored location")
+		expect(#ctx.notifications == 1, "missing location should emit a warning")
+		expect(
+			ctx.notifications[1].message == "ipybridge: Debugger has no current location",
+			"warning message should explain the missing debug location"
+		)
 	end)
 end)
 
