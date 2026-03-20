@@ -108,15 +108,37 @@ it("places sign and widens signcolumn", function()
 	with_stubbed_vim(function(ctx)
 		local debug_sign = ctx.debug_sign
 		debug_sign.place(3, 42, 10)
-		expect(#ctx.fn_calls.sign_define == 1, "sign should define once on first use")
+		expect(#ctx.fn_calls.sign_define == 3, "all debug sign variants should be defined on first use")
 		expect(#ctx.fn_calls.sign_unplace == 1, "sign_unplace should fire before placement")
 		expect(#ctx.fn_calls.sign_place == 1, "sign_place not invoked")
 		local placed = ctx.fn_calls.sign_place[1]
 		expect(placed.group == "IpybridgeDebugLine", "group mismatch")
+		expect(placed.name == "IpybridgeDebugArrow", "default debug sign should be used")
 		expect(placed.opts.lnum == 42, "line mismatch")
 		expect(placed.opts.priority == 100, "priority unexpected")
 		expect(#ctx.api_calls.set_option_value >= 1, "signcolumn not adjusted")
 		expect(ctx.api_calls.set_option_value[#ctx.api_calls.set_option_value].value == "yes:3", "signcolumn should widen to yes:3")
+	end)
+end)
+
+it("uses a composite sign when a breakpoint shares the debug line", function()
+	with_stubbed_vim(function(ctx)
+		local debug_sign = ctx.debug_sign
+		debug_sign.place(3, 42, 10, { breakpoint_kind = "breakpoint" })
+		local placed = ctx.fn_calls.sign_place[1]
+		expect(placed and placed.name == "IpybridgeDebugArrowBreakpoint", "breakpoint overlap should use composite sign")
+	end)
+end)
+
+it("uses a conditional composite sign when a conditional breakpoint shares the debug line", function()
+	with_stubbed_vim(function(ctx)
+		local debug_sign = ctx.debug_sign
+		debug_sign.place(3, 42, 10, { breakpoint_kind = "conditional" })
+		local placed = ctx.fn_calls.sign_place[1]
+		expect(
+			placed and placed.name == "IpybridgeDebugArrowConditionalBreakpoint",
+			"conditional breakpoint overlap should use conditional composite sign"
+		)
 	end)
 end)
 

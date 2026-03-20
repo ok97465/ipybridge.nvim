@@ -155,6 +155,15 @@ local debug = Debug.new({
 	warn_user = warn_user,
 	fn = fn,
 	normalize_path = normalize_path,
+	lookup_breakpoint_kind = function(bufnr, line)
+		return breakpoints.get_line_sign_kind(bufnr, line)
+	end,
+	show_debug_overlay = function(bufnr, line)
+		breakpoints.show_debug_overlay(bufnr, line)
+	end,
+	clear_debug_overlay = function()
+		breakpoints.clear_debug_overlay()
+	end,
 	is_open = function()
 		return M.term_instance ~= nil and type(M.term_instance.job_id) == "number" and M.term_instance.job_id > 0
 	end,
