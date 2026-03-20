@@ -73,6 +73,7 @@ local M = {
 	_latest_vars = {},
 	_debug_locals_snapshot = nil,
 	_debug_globals_snapshot = nil,
+	_debug_location = nil,
 	_debug_scope = "globals",
 	_debug_window = nil,
 	_prev_editor_win = nil,
@@ -591,6 +592,12 @@ end
 ---Return focus from IPython split to previous window.
 M.goto_vi = function()
 	terminal_controller:goto_vi()
+end
+
+---Jump to the current debugger stop location in the editor.
+M.goto_debug_location = function()
+	debug.goto_current_location()
+	debug_cursor_tooltip.clear()
 end
 
 ---Run the current file in IPython via %run.

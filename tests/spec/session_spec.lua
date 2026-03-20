@@ -69,6 +69,7 @@ local function base_deps()
 			local my = package.loaded["ipybridge"]
 			if not my then
 				my = {
+					goto_debug_location = function() end,
 					goto_vi = function() end,
 					restart = function() end,
 					run_file = function() end,
@@ -89,6 +90,7 @@ local function base_deps()
 			end
 			map("<Tab>", opts.handle_tab, "IPy: Debug completion trigger")
 			map("<C-c>", opts.interrupt, "IPy: Keyboard interrupt")
+			map("<leader>id", my.goto_debug_location, "IPy: Jump to current debug line")
 			map("<leader>iv", my.goto_vi, "IPy: Back to editor")
 			map("<leader>ir", my.restart, "IPy: Restart kernel")
 			map("<F5>", my.run_file, "IPy: Run file (%run)")
@@ -297,6 +299,7 @@ it("setup_terminal_keymaps applies defaults and custom mappings", function()
 	_G.vim = vim_env
 	local cmp_calls = 0
 	local stub_module = {
+		goto_debug_location = function() end,
 		goto_vi = function() end,
 		restart = function() end,
 		run_file = function() end,
@@ -344,6 +347,12 @@ it("setup_terminal_keymaps applies defaults and custom mappings", function()
 		seen["<Tab>"].rhs == deps.handle_terminal_tab,
 		"default <Tab> should use terminal tab handler"
 	)
+	assert(seen["<leader>id"], "default <leader>id mapping missing")
+	assert(
+		seen["<leader>id"].rhs == stub_module.goto_debug_location,
+		"default <leader>id should use ipybridge goto_debug_location"
+	)
+	assert(seen["<leader>id"].opts.desc == "IPy: Jump to current debug line", "default <leader>id mapping should set description")
 	assert(seen["<leader>iv"], "default <leader>iv mapping missing")
 	assert(
 		seen["<leader>iv"].rhs == stub_module.goto_vi,
@@ -416,6 +425,7 @@ it("setup_terminal_keymaps skips defaults when disabled", function()
 		seen[map.lhs] = map
 	end
 	assert(seen["<C-x>"], "custom map should be applied when defaults disabled")
+	assert(not seen["<leader>id"], "default <leader>id should not be applied when disabled")
 	assert(not seen["<leader>iv"], "default <leader>iv should not be applied when disabled")
 	assert(not seen["<leader>ir"], "default <leader>ir should not be applied when disabled")
 	assert(not seen["<Tab>"], "default <Tab> should not be applied when disabled")

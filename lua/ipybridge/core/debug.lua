@@ -1,6 +1,6 @@
 -- Debug helper routines extracted from the main module to keep init.lua lean.
 -- Handles cmp integration, terminal prompt observation, debug status events,
--- and orchestrates communication with the terminal-facing state machine.
+-- current-location jumps, and communication with the terminal-facing state machine.
 
 local Debug = {}
 
@@ -54,6 +54,7 @@ function Debug.new(ctx)
 		end
 		state._debug_active = false
 		state._debug_status_active = false
+		state._debug_location = nil
 		state._debug_window = nil
 		clear_debug_overlay()
 		debug_sign.clear({ restore_signcolumn = restore_signcolumn })
@@ -132,6 +133,138 @@ function Debug.new(ctx)
 		return first - 1
 	end
 
+	local function prepare_location(info)
+		if type(info) ~= "table" then
+			return nil
+		end
+		local file = info.file or info.filename
+		local line = info.line
+		if not file or not line then
+			return nil
+		end
+		if type(line) ~= "number" then
+			line = tonumber(line)
+		end
+		if not line then
+			return nil
+		end
+		local abs = normalize_path(file)
+		if not abs then
+			return nil
+		end
+		local bufnr = fn.bufadd(abs)
+		if bufnr <= 0 then
+			return nil
+		end
+		fn.bufload(bufnr)
+		if vim.api.nvim_buf_is_valid(bufnr) then
+			pcall(vim.api.nvim_buf_set_option, bufnr, "buflisted", true)
+			pcall(vim.api.nvim_buf_set_option, bufnr, "bufhidden", "hide")
+		end
+		line = clamp_cursor_line(bufnr, line)
+		local col = info.col
+		if type(col) ~= "number" then
+			col = tonumber(col)
+		end
+		if type(col) ~= "number" then
+			col = calc_column_from_source(info.source)
+		end
+		if col < 0 then
+			col = 0
+		end
+		return {
+			file = abs,
+			bufnr = bufnr,
+			line = line,
+			col = col,
+		}
+	end
+
+	local function store_location(location)
+		if type(location) ~= "table" then
+			state._debug_location = nil
+			return
+		end
+		state._debug_location = {
+			file = location.file,
+			bufnr = location.bufnr,
+			line = location.line,
+			col = location.col,
+		}
+	end
+
+	local function is_ipybridge_terminal(win)
+		local term = state.term_instance
+		local term_win = term and term.win_id or nil
+		local term_buf = term and term.buf_id or nil
+		if not win or not vim.api.nvim_win_is_valid(win) then
+			return false
+		end
+		if term_win and win == term_win then
+			return true
+		end
+		if term_buf and vim.api.nvim_win_get_buf(win) == term_buf then
+			return true
+		end
+		return false
+	end
+
+	local function focus_location(location)
+		if type(location) ~= "table" then
+			return false
+		end
+		local preferred = state._debug_window
+		if preferred and (not vim.api.nvim_win_is_valid(preferred) or is_ipybridge_terminal(preferred)) then
+			preferred = nil
+		end
+		local target_win = preferred
+		local bufnr = location.bufnr
+		if not target_win then
+			for _, win in ipairs(vim.api.nvim_list_wins()) do
+				if vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_buf(win) == bufnr and not is_ipybridge_terminal(win) then
+					target_win = win
+					break
+				end
+			end
+			if not target_win then
+				local current_win = vim.api.nvim_get_current_win()
+				if current_win and vim.api.nvim_win_is_valid(current_win) and not is_ipybridge_terminal(current_win) then
+					target_win = current_win
+				else
+					for _, win in ipairs(vim.api.nvim_list_wins()) do
+						if not is_ipybridge_terminal(win) then
+							target_win = win
+							break
+						end
+					end
+					if not target_win then
+						vim.cmd("vsplit")
+						target_win = vim.api.nvim_get_current_win()
+					end
+				end
+			end
+		end
+		if not target_win or not vim.api.nvim_win_is_valid(target_win) then
+			return false
+		end
+		if vim.api.nvim_win_get_buf(target_win) ~= bufnr then
+			pcall(vim.api.nvim_win_set_buf, target_win, bufnr)
+		end
+		if vim.api.nvim_get_current_win() ~= target_win then
+			pcall(vim.api.nvim_set_current_win, target_win)
+		end
+		vim.api.nvim_win_call(target_win, function()
+			pcall(vim.api.nvim_win_set_cursor, target_win, { location.line, location.col })
+			pcall(vim.cmd, "normal! zv")
+			pcall(vim.cmd, "normal! zz")
+		end)
+		local breakpoint_kind = lookup_breakpoint_kind(bufnr, location.line)
+		show_debug_overlay(bufnr, location.line)
+		debug_sign.place(bufnr, location.line, target_win, { breakpoint_kind = breakpoint_kind })
+		state._debug_window = target_win
+		return true
+	end
+
 	local function on_status(info)
 		if type(info) ~= "table" then
 			return
@@ -159,21 +292,6 @@ function Debug.new(ctx)
 		if type(info) ~= "table" then
 			return
 		end
-		local term = state.term_instance
-		local term_win = term and term.win_id or nil
-		local term_buf = term and term.buf_id or nil
-		local function is_ipybridge_terminal(win)
-			if not win or not vim.api.nvim_win_is_valid(win) then
-				return false
-			end
-			if term_win and win == term_win then
-				return true
-			end
-			if term_buf and vim.api.nvim_win_get_buf(win) == term_buf then
-				return true
-			end
-			return false
-		end
 		local previous_win = vim.api.nvim_get_current_win()
 		local restore_terminal_focus = is_ipybridge_terminal(previous_win)
 		local generation = tonumber(state._debug_generation) or 0
@@ -181,80 +299,14 @@ function Debug.new(ctx)
 		if generation <= completed then
 			return
 		end
-		local file = info.file or info.filename
-		local line = info.line
-		if not file or not line then
+		local location = prepare_location(info)
+		if not location then
 			return
 		end
-		if type(line) ~= "number" then
-			line = tonumber(line)
-		end
-		if not line then
+		store_location(location)
+		if not focus_location(location) then
 			return
 		end
-		local abs = normalize_path(file)
-		if not abs then
-			return
-		end
-		local bufnr = fn.bufadd(abs)
-		if bufnr <= 0 then
-			return
-		end
-		fn.bufload(bufnr)
-		if vim.api.nvim_buf_is_valid(bufnr) then
-			pcall(vim.api.nvim_buf_set_option, bufnr, "buflisted", true)
-			pcall(vim.api.nvim_buf_set_option, bufnr, "bufhidden", "hide")
-		end
-		line = clamp_cursor_line(bufnr, line)
-		local col = calc_column_from_source(info.source)
-		local breakpoint_kind = lookup_breakpoint_kind(bufnr, line)
-		local preferred = state._debug_window
-		if preferred and (not vim.api.nvim_win_is_valid(preferred) or is_ipybridge_terminal(preferred)) then
-			preferred = nil
-		end
-		local target_win = preferred
-		if not target_win then
-			for _, win in ipairs(vim.api.nvim_list_wins()) do
-				if vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_buf(win) == bufnr and not is_ipybridge_terminal(win) then
-					target_win = win
-					break
-				end
-			end
-			if not target_win then
-				local current_win = vim.api.nvim_get_current_win()
-				if current_win and vim.api.nvim_win_is_valid(current_win) and not is_ipybridge_terminal(current_win) then
-					target_win = current_win
-				else
-					for _, win in ipairs(vim.api.nvim_list_wins()) do
-						if not is_ipybridge_terminal(win) then
-							target_win = win
-							break
-						end
-					end
-					if not target_win then
-						vim.cmd("vsplit")
-						target_win = vim.api.nvim_get_current_win()
-					end
-				end
-			end
-		end
-		if not target_win or not vim.api.nvim_win_is_valid(target_win) then
-			return
-		end
-		if vim.api.nvim_win_get_buf(target_win) ~= bufnr then
-			pcall(vim.api.nvim_win_set_buf, target_win, bufnr)
-		end
-		if vim.api.nvim_get_current_win() ~= target_win then
-			pcall(vim.api.nvim_set_current_win, target_win)
-		end
-		vim.api.nvim_win_call(target_win, function()
-			pcall(vim.api.nvim_win_set_cursor, target_win, { line, col })
-			pcall(vim.cmd, "normal! zv")
-			pcall(vim.cmd, "normal! zz")
-		end)
-		show_debug_overlay(bufnr, line)
-		debug_sign.place(bufnr, line, target_win, { breakpoint_kind = breakpoint_kind })
-		state._debug_window = target_win
 		local was_debug = state._debug_active
 		state._debug_active = true
 		state._debug_status_active = true
@@ -290,11 +342,22 @@ function Debug.new(ctx)
 		end
 	end
 
+	local function goto_current_location()
+		local location = prepare_location(state._debug_location)
+		if not location then
+			warn_user("ipybridge: Debugger has no current location")
+			return false
+		end
+		store_location(location)
+		return focus_location(location)
+	end
+
 	return {
 		clear_state = clear_state,
 		handle_terminal_tab = handle_terminal_tab,
 		observe_terminal_chunk = observe_terminal_chunk,
 		send_command = send_command,
+		goto_current_location = goto_current_location,
 		on_status = on_status,
 		on_location = on_location,
 		set_terminal_senders = function(term_fn)
