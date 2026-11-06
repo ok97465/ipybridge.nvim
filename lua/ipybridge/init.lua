@@ -209,7 +209,7 @@ M.config = {
 	viewer_max_rows = 30,
 	viewer_max_cols = 20,
 	var_repr_limit = 120,
-	python_cmd = "python3",
+	python_cmd = is_windows and "python" or "python3",
 	-- Matplotlib backend for the interactive console; applied via `%matplotlib`.
 	-- Recommended values include 'qt', 'inline', 'macosx', 'tk', or 'agg'.
 	matplotlib_backend = nil,
